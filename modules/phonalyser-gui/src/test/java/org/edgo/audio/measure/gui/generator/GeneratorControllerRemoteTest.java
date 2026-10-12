@@ -352,6 +352,94 @@ class GeneratorControllerRemoteTest {
                         + "fundamental phase alignment");
     }
 
+    /** A per-line request reaches the server as the per-line call - not as a
+     *  whole table, which would land every line at once - and, like every other
+     *  correction request, is no signal change: nothing is announced. */
+    @Test
+    void aHarmonicLinesRequestOverTheBusReachesTheToneWithoutAnAnnouncement() {
+        Preferences.instance().setGenSignalForm(GenSignalForm.SINE);
+        controller = new GeneratorController();
+        controller.start();
+        controller.applyCompensation(new double[] { 5e-5, 2e-5 }, new int[] { 2, 3 },
+                new double[] { 0.3, -0.2 });
+        // No stub reset here: a reset also parks the stub's tone in IDLE, and an
+        // announcement, were there one, is made only while the tone plays.
+        int before = server.commands().size();
+        double[] ampRatios = { 3e-5 };
+        int[]    harmonics = { 3 };
+        double[] phiInits  = { 0.1 };
+        int[] announced = { 0 };
+        Consumer<Object> onChanged = ignored -> announced[0]++;
+        MessageBus.instance().subscribe(Events.GENERATOR_SIGNAL_CHANGED, onChanged);
+        try {
+            MessageBus.instance().publish(Events.GENERATOR_CORRECTIONS, new GeneratorCorrectionsRequest(
+                    GeneratorCorrectionsRequest.Kind.HARMONIC_LINES, ampRatios, harmonics, null, null,
+                    phiInits));
+        } finally {
+            MessageBus.instance().unsubscribe(Events.GENERATOR_SIGNAL_CHANGED, onChanged);
+        }
+
+        ServerGeneratorStub.Command lines = null;
+        List<String> names = new ArrayList<>();
+        for (ServerGeneratorStub.Command c : commandsAfter(before)) {
+            names.add(c.name());
+            if (lines == null && "applyCompensationLines".equals(c.name())) lines = c;
+        }
+        assertNotNull(lines, "the named line travels through the per-line call: " + names);
+        assertFalse(names.contains("applyCompensation"),
+                "and not as a whole table, which would land every line at once: " + names);
+        assertArrayEquals(ampRatios, (double[]) lines.args().get(0));
+        assertArrayEquals(harmonics, (int[]) lines.args().get(1));
+        assertArrayEquals(phiInits, (double[]) lines.args().get(2));
+        assertEquals(0, announced[0],
+                "a per-line change is not a signal change: the measurement restarts the lines' "
+                        + "averaging itself, and an announcement would restart the analyser's "
+                        + "fundamental phase alignment");
+    }
+
+    /** The dual-tone twin: an INTERMOD_LINES request reaches the server as the
+     *  per-line dual-tone call - not as a whole table - and announces nothing. */
+    @Test
+    void anIntermodLinesRequestOverTheBusReachesTheToneWithoutAnAnnouncement() {
+        Preferences.instance().setGenSignalForm(GenSignalForm.SINE);
+        controller = new GeneratorController();
+        controller.start();
+        // No stub reset here: a reset also parks the stub's tone in IDLE, and an
+        // announcement, were there one, is made only while the tone plays.
+        int before = server.commands().size();
+        double[] ampRatios = { 4e-5 };
+        int[]    coefA     = { 2 };
+        int[]    coefB     = { -1 };
+        double[] phiInits  = { 0.1 };
+        int[] announced = { 0 };
+        Consumer<Object> onChanged = ignored -> announced[0]++;
+        MessageBus.instance().subscribe(Events.GENERATOR_SIGNAL_CHANGED, onChanged);
+        try {
+            MessageBus.instance().publish(Events.GENERATOR_CORRECTIONS, new GeneratorCorrectionsRequest(
+                    GeneratorCorrectionsRequest.Kind.INTERMOD_LINES, ampRatios, null, coefA, coefB,
+                    phiInits));
+        } finally {
+            MessageBus.instance().unsubscribe(Events.GENERATOR_SIGNAL_CHANGED, onChanged);
+        }
+
+        ServerGeneratorStub.Command lines = null;
+        List<String> names = new ArrayList<>();
+        for (ServerGeneratorStub.Command c : commandsAfter(before)) {
+            names.add(c.name());
+            if (lines == null && "applyDualToneCompensationLines".equals(c.name())) lines = c;
+        }
+        assertNotNull(lines, "the named product travels through the per-line dual-tone call: "
+                + names);
+        assertFalse(names.contains("applyDualToneCompensation"),
+                "and not as a whole table, which would land every line at once: " + names);
+        assertArrayEquals(ampRatios, (double[]) lines.args().get(0));
+        assertArrayEquals(coefA, (int[]) lines.args().get(1));
+        assertArrayEquals(coefB, (int[]) lines.args().get(2));
+        assertArrayEquals(phiInits, (double[]) lines.args().get(3));
+        assertEquals(0, announced[0],
+                "a per-line change is not a signal change, for a product as for a harmonic");
+    }
+
     /**
      * The pilot tones of the fundamental phase alignment - the extra lines the
      * analysis reads as its time base - stop at the lane when the DDS is a
@@ -953,6 +1041,34 @@ class GeneratorControllerRemoteTest {
         assertTrue(server.names().contains("applyCompensation"),
                 "the .dpd sits on the operator's machine and the bench cannot open it, so the "
                         + "TABLES have to travel - the wizard's commit is otherwise a no-op");
+    }
+
+    /** A new .dpd for the compensated form that is playing changes the tone,
+     *  so the analysers restart on it; a .dpd for a form that is not playing
+     *  changes nothing and is not announced. */
+    @Test
+    void aDpdFileForThePlayingCompensatedFormIsAnnounced() throws IOException {
+        Preferences prefs = Preferences.instance();
+        prefs.setGenSignalForm(GenSignalForm.SINE);
+        controller = new GeneratorController();
+        controller.start();
+        int[] announced = { 0 };
+        Consumer<Object> onChanged = ignored -> announced[0]++;
+        MessageBus.instance().subscribe(Events.GENERATOR_SIGNAL_CHANGED, onChanged);
+        try {
+            prefs.setGenDpd(GenSignalForm.SINE_COMP, writeHarmonicDpd().toString());
+            assertEquals(0, announced[0], "the plain sine is playing - its tone did not change");
+
+            prefs.setGenSignalForm(GenSignalForm.SINE_COMP);
+            announced[0] = 0;
+            Path retrained = tempDir.resolve("retrained.dpd");
+            Files.writeString(retrained, HARMONIC_DPD);
+            prefs.setGenDpd(GenSignalForm.SINE_COMP, retrained.toString());
+            assertEquals(1, announced[0],
+                    "the new tables are on the playing tone - the FFT average must restart");
+        } finally {
+            MessageBus.instance().unsubscribe(Events.GENERATOR_SIGNAL_CHANGED, onChanged);
+        }
     }
 
     @Test

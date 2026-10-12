@@ -799,13 +799,11 @@ public final class GeneratorPane extends AbstractPane {
         // Auto-reset the LED when playback ends naturally (EOF without
         // loop) or fails on the play thread.  The bus delivers
         // FILE_PLAY_STOPPED on the play thread; marshal to the UI thread
-        // before touching widgets.
+        // before touching widgets.  The visuals follow the controller state:
+        // the stop of a restarted session lands after the new one is lit.
         filePlayStoppedListener = ignored -> GuiUtil.marshal(() -> {
-            if (!playFromBtn.isDisposed()) {
-                playFromBtn.setImage(tinyPlayDimImg);
-                playFromBtn.setToolTipText(I18n.t("generator.loadFrom.play"));
-                stopOnAirBlink();
-            }
+            syncPlayButtonVisuals();
+            syncFilePlayVisuals();
             // A file session can fail LONG after the click - a bench that refused
             // the upload, a device that died mid-file.  This is the only moment
             // such a failure can be reported, and the claim is once, so the
@@ -1139,13 +1137,15 @@ public final class GeneratorPane extends AbstractPane {
         }
     }
 
-    /** Mirrors the file-playback engine state on the small play LED. */
+    /** Mirrors the file-playback engine state on the small play LED and the
+     *  snap checkbox - snap acts on the tone only, its option stays as set. */
     private void syncFilePlayVisuals() {
         if (playFromBtn == null || playFromBtn.isDisposed()) return;
         boolean playing = controller.isFilePlaying();
         playFromBtn.setImage(playing ? tinyPlayLitImg : tinyPlayDimImg);
         playFromBtn.setToolTipText(I18n.t(playing ? "generator.loadFrom.stop"
                                                   : "generator.loadFrom.play"));
+        fftSnapBtn.setEnabled(!playing);
         if (playing) startOnAirBlink();
     }
 
@@ -1661,6 +1661,12 @@ public final class GeneratorPane extends AbstractPane {
         prefs.setGenPlayFromPath(picked);
         File parent = new File(picked).getParentFile();
         if (parent != null) prefs.setGenPlayFromFolder(parent.getAbsolutePath());
+        // A file picked while one plays replaces it.
+        if (controller.isFilePlaying()) {
+            controller.stopFilePlayback();
+            controller.startFilePlayback(new File(picked), prefs.isGenPlayFromLoop());
+            showFileStart();
+        }
     }
 
     /**
@@ -1683,9 +1689,14 @@ public final class GeneratorPane extends AbstractPane {
                     I18n.t("generator.error.playFile.pickFirst"));
             return;
         }
+        controller.startFilePlayback(new File(path), prefs.isGenPlayFromLoop());
+        showFileStart();
+    }
+
+    /** Mirrors a file start on both buttons and reports a start that failed. */
+    private void showFileStart() {
         // startFilePlayback stops the DDS tone itself (shared output
         // device) - re-sync both buttons from the controller state.
-        controller.startFilePlayback(new File(path), prefs.isGenPlayFromLoop());
         syncPlayButtonVisuals();
         syncFilePlayVisuals();
         if (!controller.isFilePlaying()) {

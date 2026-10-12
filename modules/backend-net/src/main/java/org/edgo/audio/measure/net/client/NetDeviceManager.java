@@ -1179,22 +1179,49 @@ public final class NetDeviceManager implements AudioDeviceManager, NetFaultListe
 
     @Override
     public void applyCompensation(double[] ampRatios, int[] hNums, double[] phiInits) {
-        ObjectNode tables = block();
-        tables.set(NetFields.AMP_RATIOS, array(ampRatios));
-        tables.set(NetFields.H_NUMS, array(hNums));
-        tables.set(NetFields.PHI_INITS, array(phiInits));
-        config(NetFields.COMPENSATION, tables);
+        config(NetFields.COMPENSATION, harmonicBlock(ampRatios, hNums, phiInits));
     }
 
     @Override
     public void applyDualToneCompensation(double[] ampRatios, int[] aCoef, int[] bCoef,
+            double[] phiInits) {
+        config(NetFields.DUAL_COMPENSATION, productBlock(ampRatios, aCoef, bCoef, phiInits));
+    }
+
+    /** The per-line block: the server changes the named harmonics alone, in
+     *  the table it stores and - through the generator's own fade - in the
+     *  generator that is running. */
+    @Override
+    public void applyCompensationLines(double[] ampRatios, int[] hNums, double[] phiInits) {
+        config(NetFields.COMPENSATION_LINES, harmonicBlock(ampRatios, hNums, phiInits));
+    }
+
+    @Override
+    public void applyDualToneCompensationLines(double[] ampRatios, int[] aCoef, int[] bCoef,
+            double[] phiInits) {
+        config(NetFields.DUAL_COMPENSATION_LINES, productBlock(ampRatios, aCoef, bCoef, phiInits));
+    }
+
+    /** A harmonic table's sub-object - the whole table's and the per-line
+     *  block's alike. */
+    private ObjectNode harmonicBlock(double[] ampRatios, int[] hNums, double[] phiInits) {
+        ObjectNode tables = block();
+        tables.set(NetFields.AMP_RATIOS, array(ampRatios));
+        tables.set(NetFields.H_NUMS, array(hNums));
+        tables.set(NetFields.PHI_INITS, array(phiInits));
+        return tables;
+    }
+
+    /** A dual-tone table's sub-object - the whole table's and the per-line
+     *  block's alike. */
+    private ObjectNode productBlock(double[] ampRatios, int[] aCoef, int[] bCoef,
             double[] phiInits) {
         ObjectNode tables = block();
         tables.set(NetFields.AMP_RATIOS, array(ampRatios));
         tables.set(NetFields.A_COEF, array(aCoef));
         tables.set(NetFields.B_COEF, array(bCoef));
         tables.set(NetFields.PHI_INITS, array(phiInits));
-        config(NetFields.DUAL_COMPENSATION, tables);
+        return tables;
     }
 
     @Override

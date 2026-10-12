@@ -202,17 +202,21 @@ public final class Events {
     public static final String GENERATOR_OUTPUT = "generator.output";
 
     /** Notification - a distortion measurement wants the generator's live
-     *  correction tables changed: dropped, or replaced by the single-tone
-     *  harmonic set or the dual-tone intermodulation set it just computed.
+     *  correction tables changed: dropped, replaced by the single-tone
+     *  harmonic set or the dual-tone intermodulation set it just computed, or
+     *  changed in the named lines only - a per-line request
+     *  ({@code HARMONIC_LINES}, {@code INTERMOD_LINES}) changes only the lines
+     *  it names, each faded in by the generator from what it renders to its
+     *  new ratio and phase, and leaves every other line as it is.
      *  Payload: {@link GeneratorCorrectionsRequest}.  Subscriber: the
-     *  generator controller, which applies the set to the running tone the
-     *  way its own hot-swap does (and remembers it for a probe pause's
-     *  resume).  Nothing is announced for it: the measurement resets the
-     *  analyser's statistics itself, and a {@link #GENERATOR_SIGNAL_CHANGED}
-     *  here would restart the analyser's fundamental alignment with a sweep
-     *  of its own.  The measurement never holds the controller: this event is
-     *  the whole seam, as the frequency trims are for the frequency lock.
-     *  Published on the UI thread. */
+     *  generator controller, which applies the request to the running tone the
+     *  way its own hot-swap does.  Nothing is announced for any kind of
+     *  request, per-line ones included: the measurement resets the analyser's
+     *  statistics itself, and a {@link #GENERATOR_SIGNAL_CHANGED} here would
+     *  restart the analyser's fundamental alignment with a sweep of its own.
+     *  The measurement never holds the controller: this event is the whole
+     *  seam, as the frequency trims are for the frequency lock.  Published on
+     *  the UI thread. */
     public static final String GENERATOR_CORRECTIONS = "generator.corrections";
 
     /** Notification - the fundamental magnitude(s) moved by more than the

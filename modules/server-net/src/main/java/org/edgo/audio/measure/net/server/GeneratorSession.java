@@ -43,6 +43,7 @@ import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.enums.OutputChannels;
 import org.edgo.audio.measure.generator.FilePlaybackGenerator;
 import org.edgo.audio.measure.generator.SignalGenerator;
+import org.edgo.audio.measure.generator.SignalGenerator.CompensationSet;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.wav.PcmFileLoader;
@@ -235,13 +236,13 @@ public final class GeneratorSession {
      *  {@code gen.trimReset} has to be able to say "no correction at all". */
     private Double trimHz;
     private Double trim2Hz;
-    private double[] compAmpRatios;
-    private int[] compHNums;
-    private double[] compPhiInits;
-    private double[] dualCompAmpRatios;
-    private int[] dualCompA;
-    private int[] dualCompB;
-    private double[] dualCompPhiInits;
+    /** The commanded single-tone compensation table, or null while none was
+     *  sent - what a rebuild of the generator loads.  A per-line block merges
+     *  into it by the generator's own rule ({@link CompensationSet#withLines}),
+     *  so it holds entry for entry what the running generator holds. */
+    private CompensationSet harmonicTable;
+    /** The commanded dual-tone compensation table, kept the same way. */
+    private CompensationSet productTable;
 
     /* -------------------------------- runtime -------------------------------- */
 
@@ -565,12 +566,30 @@ public final class GeneratorSession {
         configureDual(sub(message, NetFields.DUAL));
         NetMessage sweep = sub(message, NetFields.SWEEP);
         configureSweep(sweep);
-        configureCompensation(sub(message, NetFields.COMPENSATION));
-        configureDualCompensation(sub(message, NetFields.DUAL_COMPENSATION));
+        // Every table block is checked before any of them is applied.
+        CompensationSet harmonics = harmonicSet(sub(message, NetFields.COMPENSATION),
+                NetFields.COMPENSATION);
+        CompensationSet products = productSet(sub(message, NetFields.DUAL_COMPENSATION),
+                NetFields.DUAL_COMPENSATION);
+        CompensationSet harmonicLines = harmonicSet(sub(message, NetFields.COMPENSATION_LINES),
+                NetFields.COMPENSATION_LINES);
+        CompensationSet productLines = productSet(sub(message, NetFields.DUAL_COMPENSATION_LINES),
+                NetFields.DUAL_COMPENSATION_LINES);
+        if (harmonics != null) {
+            harmonicTable = harmonics;
+        }
+        if (products != null) {
+            productTable = products;
+        }
         if (Boolean.TRUE.equals(message.optBoolean(NetFields.CLEAR_COMPENSATION))) {
             clearCompensation();
         }
-        applyLive(previous, sweep);
+        // Only the table of the form that is running reaches the generator, so
+        // only ITS arrival is a reason to load a table whole.
+        boolean formTableArrived = form == GenSignalForm.SINE_COMP ? harmonics != null
+                : form == GenSignalForm.DUAL_TONE_COMP && products != null;
+        applyLive(previous, sweep, formTableArrived);
+        applyCompensationLines(harmonicLines, productLines);
         pushState();
     }
 
@@ -627,29 +646,34 @@ public final class GeneratorSession {
         }
     }
 
-    private void configureCompensation(NetMessage comp) {
+    /** A single-tone table block - the whole {@code compensation} one or the
+     *  per-line {@code compensationLines} one, which {@code field} names in a
+     *  refusal - as a set, harmonic {@code h} as the entry {@code (h, 0)}; null
+     *  when the update carried no such block. */
+    private CompensationSet harmonicSet(NetMessage comp, String field) {
         if (comp == null) {
-            return;
+            return null;
         }
         double[] ratios = doubles(comp, NetFields.AMP_RATIOS);
         int[] harmonics = ints(comp, NetFields.H_NUMS);
         double[] phases = doubles(comp, NetFields.PHI_INITS);
         if (ratios == null || harmonics == null || phases == null) {
             throw new NetException(ErrorCode.BAD_REQUEST,
-                    "compensation needs ampRatios, hNums and phiInits together");
+                    field + " needs ampRatios, hNums and phiInits together");
         }
         if (ratios.length != harmonics.length || ratios.length != phases.length) {
             throw new NetException(ErrorCode.BAD_REQUEST,
-                    "compensation arrays must be the same length");
+                    field + " arrays must be the same length");
         }
-        compAmpRatios = ratios;
-        compHNums = harmonics;
-        compPhiInits = phases;
+        return new CompensationSet(harmonics, new int[harmonics.length], ratios, phases);
     }
 
-    private void configureDualCompensation(NetMessage comp) {
+    /** A dual-tone table block - the whole {@code dualCompensation} one or the
+     *  per-line {@code dualCompensationLines} one, which {@code field} names in
+     *  a refusal - as a set; null when the update carried no such block. */
+    private CompensationSet productSet(NetMessage comp, String field) {
         if (comp == null) {
-            return;
+            return null;
         }
         double[] ratios = doubles(comp, NetFields.AMP_RATIOS);
         int[] aCoef = ints(comp, NetFields.A_COEF);
@@ -657,30 +681,76 @@ public final class GeneratorSession {
         double[] phases = doubles(comp, NetFields.PHI_INITS);
         if (ratios == null || aCoef == null || bCoef == null || phases == null) {
             throw new NetException(ErrorCode.BAD_REQUEST,
-                    "dualCompensation needs ampRatios, aCoef, bCoef and phiInits together");
+                    field + " needs ampRatios, aCoef, bCoef and phiInits together");
         }
         if (ratios.length != aCoef.length || ratios.length != bCoef.length
                 || ratios.length != phases.length) {
             throw new NetException(ErrorCode.BAD_REQUEST,
-                    "dualCompensation arrays must be the same length");
+                    field + " arrays must be the same length");
         }
-        dualCompAmpRatios = ratios;
-        dualCompA = aCoef;
-        dualCompB = bCoef;
-        dualCompPhiInits = phases;
+        return new CompensationSet(aCoef, bCoef, ratios, phases);
+    }
+
+    /**
+     * The per-line blocks of one update.  Each is merged into its stored table
+     * - the named lines changed, every other entry as it was - and handed to
+     * the running generator, which fades each named line from what it renders
+     * to its new ratio and phase: a step in a line is a glitch on the output
+     * and a frame the client's analysis rejects as a discontinuity.
+     *
+     * <p>On the plain tone of the block's family - SINE for harmonics,
+     * DUAL_TONE for products - the block switches the form to the compensated
+     * one, as the generator's own per-line apply does, and with no restart:
+     * the switch is made here, after {@link #applyLive}, because the two forms
+     * of a family run on the same DDS state and only a compensation changed.
+     * A table stored before the switch comes in whole, as a form switch
+     * brings it, and the named lines fade on top.  On any other form a block
+     * is stored only, exactly as a whole table is.
+     */
+    private void applyCompensationLines(CompensationSet harmonicLines,
+            CompensationSet productLines) {
+        SignalGenerator gen = generator;
+        if (harmonicLines != null) {
+            CompensationSet held = harmonicTable;
+            harmonicTable = (held == null ? CompensationSet.EMPTY : held)
+                    .withLines(harmonicLines.ampRatios(), harmonicLines.a(), harmonicLines.b(),
+                            harmonicLines.phiInits());
+            if (form == GenSignalForm.SINE) {
+                form = GenSignalForm.SINE_COMP;
+                if (gen != null && held != null) {
+                    gen.applyCompensation(held.ampRatios(), held.a(), held.phiInits());
+                }
+            }
+            if (gen != null && form == GenSignalForm.SINE_COMP) {
+                gen.applyCompensationLines(harmonicLines.ampRatios(), harmonicLines.a(),
+                        harmonicLines.phiInits());
+            }
+        }
+        if (productLines != null) {
+            CompensationSet held = productTable;
+            productTable = (held == null ? CompensationSet.EMPTY : held)
+                    .withLines(productLines.ampRatios(), productLines.a(), productLines.b(),
+                            productLines.phiInits());
+            if (form == GenSignalForm.DUAL_TONE) {
+                form = GenSignalForm.DUAL_TONE_COMP;
+                if (gen != null && held != null) {
+                    gen.applyDualToneCompensation(held.ampRatios(), held.a(), held.b(),
+                            held.phiInits());
+                }
+            }
+            if (gen != null && form == GenSignalForm.DUAL_TONE_COMP) {
+                gen.applyDualToneCompensationLines(productLines.ampRatios(), productLines.a(),
+                        productLines.b(), productLines.phiInits());
+            }
+        }
     }
 
     /** Spec 4.5's {@code clearCompensation}: the tables go, and a compensated
      *  form falls back to its plain tone - the same pair the generator's own
      *  {@code clearCompensation} makes. */
     private void clearCompensation() {
-        compAmpRatios = null;
-        compHNums = null;
-        compPhiInits = null;
-        dualCompAmpRatios = null;
-        dualCompA = null;
-        dualCompB = null;
-        dualCompPhiInits = null;
+        harmonicTable = null;
+        productTable = null;
         if (form == GenSignalForm.SINE_COMP) {
             form = GenSignalForm.SINE;
         } else if (form == GenSignalForm.DUAL_TONE_COMP) {
@@ -925,11 +995,12 @@ public final class GeneratorSession {
      * {@code gen.config} with {@code ok}.
      */
     private void applyCompensationTo(SignalGenerator gen) {
-        if (form == GenSignalForm.SINE_COMP && compAmpRatios != null) {
-            gen.applyCompensation(compAmpRatios, compHNums, compPhiInits);
-        } else if (form == GenSignalForm.DUAL_TONE_COMP && dualCompAmpRatios != null) {
-            gen.applyDualToneCompensation(dualCompAmpRatios, dualCompA, dualCompB,
-                    dualCompPhiInits);
+        if (form == GenSignalForm.SINE_COMP && harmonicTable != null) {
+            gen.applyCompensation(harmonicTable.ampRatios(), harmonicTable.a(),
+                    harmonicTable.phiInits());
+        } else if (form == GenSignalForm.DUAL_TONE_COMP && productTable != null) {
+            gen.applyDualToneCompensation(productTable.ampRatios(), productTable.a(),
+                    productTable.b(), productTable.phiInits());
         }
     }
 
@@ -962,8 +1033,15 @@ public final class GeneratorSession {
      * its level mid-sweep with {@code gen.config{amplitudeVrmsLeft}} would otherwise
      * have the sweep silently begin again underneath the record it is
      * assembling - and with no {@code sweepStart} marker to notice it by.
+     *
+     * <p>The stored compensation table of the running form goes to the
+     * generator only when {@code formTableArrived} - this update carried a
+     * whole table of that form's family - or the form changed.  Re-applying an
+     * unchanged table on every update, or on the arrival of the OTHER family's
+     * table, would land it whole, at once, on top of a per-line fade still
+     * running, and turn that fade into the very step it exists to avoid.
      */
-    private void applyLive(GenSignalForm previous, NetMessage sweep) {
+    private void applyLive(GenSignalForm previous, NetMessage sweep, boolean formTableArrived) {
         if (generator == null) {
             return;                     // nothing runs; the next start builds it
         }
@@ -986,7 +1064,9 @@ public final class GeneratorSession {
             gen.setDualToneFrequency2(emit2Hz());
             gen.setDualToneAmplitudes(amp1Pct, amp2Pct);
         }
-        applyCompensationTo(gen);
+        if (formTableArrived || previous != form) {
+            applyCompensationTo(gen);
+        }
         if (isSweep(form) && sweep != null) {
             applySweepLive(gen, sweep);
         }

@@ -892,6 +892,23 @@ public final class GeneratorLane {
         if (g != null) g.applyDualToneCompensation(ampRatios, coefA, coefB, phiInits);
     }
 
+    /** Hot-applies the named harmonics alone to the running generator - which
+     *  fades each from what it renders to its new ratio and phase and leaves
+     *  every other line as it is - the per-line counterpart of
+     *  {@link #applyCompensation}.  No-op when nothing is playing. */
+    public void applyCompensationLines(double[] ampRatios, int[] hNums, double[] phiInits) {
+        GeneratorControls g = live();
+        if (g != null) g.applyCompensationLines(ampRatios, hNums, phiInits);
+    }
+
+    /** The dual-tone counterpart of {@link #applyCompensationLines}: the named
+     *  intermodulation products alone.  No-op when nothing is playing. */
+    public void applyDualToneCompensationLines(double[] ampRatios, int[] coefA, int[] coefB,
+            double[] phiInits) {
+        GeneratorControls g = live();
+        if (g != null) g.applyDualToneCompensationLines(ampRatios, coefA, coefB, phiInits);
+    }
+
     /** Clears wizard predistortion and returns the running generator to
      *  plain sine. */
     public void clearCompensation() {
@@ -1170,18 +1187,21 @@ public final class GeneratorLane {
      *  waveform under the compensated label and the distortion measured on it
      *  would be recorded as predistorted - the same reading a start with an
      *  empty slot refuses to produce.  Both compensated forms are ended alike:
-     *  the dual-tone slot is no more optional than the sine's. */
-    public void dpdChanged(GenSignalForm slotForm) {
+     *  the dual-tone slot is no more optional than the sine's.
+     *
+     *  @return whether the running tone changed - the controller publishes
+     *          its signal-changed event only then */
+    public boolean dpdChanged(GenSignalForm slotForm) {
         Preferences prefs = Preferences.instance();
         if (!isRunning() || prefs.getGenSignalForm() != slotForm) {
-            return;
+            return false;
         }
         String dpd = prefs.getGenDpd(slotForm);
         if (dpd != null && !dpd.isEmpty()) {
             loadCorrectionsFromFile(dpd);
-        } else {
-            stop();
+            return true;
         }
+        return stop();
     }
 
     /** Whether moving from {@code from} to {@code to} needs a full stop+start

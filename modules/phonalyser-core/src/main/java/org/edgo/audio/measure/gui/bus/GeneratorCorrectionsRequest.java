@@ -28,7 +28,14 @@ package org.edgo.audio.measure.gui.bus;
  * {@code harmonics}, {@code phiInits}; the product coefficients {@code null}).
  * {@link Kind#INTERMOD} carries the dual-tone set ({@code ampRatios},
  * {@code coefA}, {@code coefB}, {@code phiInits}; {@code harmonics}
- * {@code null}).
+ * {@code null}).  Those two replace the whole table.
+ *
+ * <p>{@link Kind#HARMONIC_LINES} and {@link Kind#INTERMOD_LINES} carry one or
+ * more entries in the same arrays as {@link Kind#HARMONIC} and
+ * {@link Kind#INTERMOD}, and change only the lines they name: the generator
+ * fades each named line from what it renders to its new ratio and phase, adds
+ * a line it does not hold, fades out one named with ratio zero, and leaves
+ * every other line as it is.
  *
  * @param kind      what to do with the tables
  * @param ampRatios per-product amplitude ratios against the fundamental
@@ -40,6 +47,11 @@ package org.edgo.audio.measure.gui.bus;
 public record GeneratorCorrectionsRequest(Kind kind, double[] ampRatios, int[] harmonics,
                                           int[] coefA, int[] coefB, double[] phiInits) {
 
-    /** The three things a request can ask of the correction tables. */
-    public enum Kind { CLEAR, HARMONIC, INTERMOD }
+    /** What a request can ask of the correction tables. */
+    public enum Kind {
+        CLEAR, HARMONIC, INTERMOD, HARMONIC_LINES, INTERMOD_LINES;
+
+        private Kind() {
+        }
+    }
 }

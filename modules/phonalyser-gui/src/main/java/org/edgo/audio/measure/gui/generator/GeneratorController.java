@@ -174,8 +174,16 @@ public final class GeneratorController {
         // Loading / clearing a .dpd must take effect now: the lane takes the new
         // file onto the running generator when the changed slot is the ACTIVE
         // compensated form.  Each slot answers only for its own form.
-        onPref(prefs.genDpdProperty(),     v -> lane.dpdChanged(GenSignalForm.SINE_COMP));
-        onPref(prefs.genDpdDualProperty(), v -> lane.dpdChanged(GenSignalForm.DUAL_TONE_COMP));
+        onPref(prefs.genDpdProperty(), v -> {
+            if (lane.dpdChanged(GenSignalForm.SINE_COMP)) {
+                publishSignalChanged();
+            }
+        });
+        onPref(prefs.genDpdDualProperty(), v -> {
+            if (lane.dpdChanged(GenSignalForm.DUAL_TONE_COMP)) {
+                publishSignalChanged();
+            }
+        });
         // Each lane's amplitude is stored as the operator entered it - number and
         // unit as ONE value - so these fire once per edit and what reaches the
         // lane is always the RESOLVED voltage, never the raw number.  Each lane
@@ -672,13 +680,22 @@ public final class GeneratorController {
         lane.applyDualToneCompensation(ampRatios, coefA, coefB, phiInits);
     }
 
+    public void applyCompensationLines(double[] ampRatios, int[] hNums, double[] phiInits) {
+        lane.applyCompensationLines(ampRatios, hNums, phiInits);
+    }
+
+    public void applyDualToneCompensationLines(double[] ampRatios, int[] coefA, int[] coefB,
+            double[] phiInits) {
+        lane.applyDualToneCompensationLines(ampRatios, coefA, coefB, phiInits);
+    }
+
     public void clearCompensation() {
         lane.clearCompensation();
     }
 
-    /** {@link Events#GENERATOR_CORRECTIONS} handler: the request's set goes onto
-     *  the running tone through the same three entry points a direct caller
-     *  would use.  On a tone that carries no tables a drop changes nothing. */
+    /** {@link Events#GENERATOR_CORRECTIONS} handler: the request goes onto the
+     *  running tone through the same entry points a direct caller would use.
+     *  On a tone that carries no tables a drop changes nothing. */
     private void applyCorrectionsRequest(GeneratorCorrectionsRequest request) {
         if (request == null) return;
         switch (request.kind()) {
@@ -687,6 +704,10 @@ public final class GeneratorController {
                     request.phiInits());
             case INTERMOD -> applyDualToneCompensation(request.ampRatios(), request.coefA(),
                     request.coefB(), request.phiInits());
+            case HARMONIC_LINES -> applyCompensationLines(request.ampRatios(),
+                    request.harmonics(), request.phiInits());
+            case INTERMOD_LINES -> applyDualToneCompensationLines(request.ampRatios(),
+                    request.coefA(), request.coefB(), request.phiInits());
         }
     }
 
@@ -741,6 +762,7 @@ public final class GeneratorController {
         RemoteGenerator remote = AudioBackend.instance().remoteGenerator();
         if (remote != null) {
             startRemoteFilePlayback(remote, file);
+            publishSignalChanged();
             return;
         }
         AtomicBoolean sessionStop = new AtomicBoolean(false);
@@ -751,6 +773,7 @@ public final class GeneratorController {
         playThread = t;
         filePlayRunning = true;
         t.start();
+        publishSignalChanged();
     }
 
     /**
@@ -1092,8 +1115,8 @@ public final class GeneratorController {
             // scale is below 2 Vrms gets k > 1 and full-scale content clips -
             // the honest cost of asking a small DAC for convention level.
             source.setLaneGains(
-                    EXPORT_FS_VOLTAGE_AMPL / dac.peakVolts(Channel.L),
-                    EXPORT_FS_VOLTAGE_AMPL / dac.peakVolts(Channel.R));
+                    Constants.SQRT2 / dac.peakVolts(Channel.L),
+                    Constants.SQRT2 / dac.peakVolts(Channel.R));
             log.info("File playback started: {} ({} Hz, {} bit{}) on {}",
                     file.getName(), source.getFileSampleRate(), source.getFileBitDepth(),
                     filePlayLoop ? ", looping" : "", device.name());

@@ -341,6 +341,14 @@ public class NetFields {
     public static final String A_COEF = "aCoef";
     /** {@link #DUAL_COMPENSATION}: the b-coefficients. */
     public static final String B_COEF = "bCoef";
+    /** Per-line harmonic-compensation sub-object: the named harmonics alone
+     *  change, each faded in by the generator; carries {@link #AMP_RATIOS},
+     *  {@link #H_NUMS} and {@link #PHI_INITS} as {@link #COMPENSATION} does. */
+    public static final String COMPENSATION_LINES = "compensationLines";
+    /** Per-line dual-tone compensation sub-object: the named products alone
+     *  change; carries {@link #AMP_RATIOS}, {@link #A_COEF}, {@link #B_COEF}
+     *  and {@link #PHI_INITS} as {@link #DUAL_COMPENSATION} does. */
+    public static final String DUAL_COMPENSATION_LINES = "dualCompensationLines";
     /** Drops every compensation table when true. */
     public static final String CLEAR_COMPENSATION = "clearCompensation";
     /** {@code gen.fftGrid}: the analyzer's FFT length. */

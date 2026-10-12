@@ -24,14 +24,17 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
+import java.util.function.Consumer;
 
 import javax.sound.sampled.AudioFileFormat;
 import javax.sound.sampled.AudioInputStream;
 import javax.sound.sampled.AudioSystem;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
@@ -40,6 +43,7 @@ import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.enums.OutputChannels;
+import org.edgo.audio.measure.generator.SignalGenerator;
 import org.edgo.audio.measure.net.proto.BinaryFrame;
 import org.edgo.audio.measure.net.proto.ErrorCode;
 import org.edgo.audio.measure.net.proto.FrameType;
@@ -53,6 +57,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -587,6 +592,279 @@ class GeneratorSessionTest {
                 generator.state(FIRST_GEN_ID).path(NetFields.FORM).asText());
     }
 
+    /**
+     * A per-line block on a session in SINE_COMP changes the named harmonic
+     * alone, on the running tone and in the stored table - see
+     * {@link #assertPerLineBlockFades}.
+     */
+    @Test
+    void aPerLineBlockFadesTheNamedHarmonicAndMergesIntoTheStoredTable() {
+        double[] merged = LINE_AMPS.clone();
+        merged[LINE_CHANGED] = LINE_NEW_AMP;
+        double[] mergedPhis = LINE_PHIS.clone();
+        mergedPhis[LINE_CHANGED] = LINE_NEW_PHI;
+        NetMessage tone = config()
+                .put(NetFields.FORM, GenSignalForm.SINE_COMP.name())
+                .put(NetFields.FREQUENCY, TONE_HZ)
+                .put(NetFields.AMPLITUDE_VRMS_LEFT, AMPLITUDE_VRMS)
+                .put(NetFields.AMPLITUDE_VRMS_RIGHT, AMPLITUDE_VRMS)
+                .put(NetFields.COMPENSATION, harmonicTable(LINE_AMPS, LINE_HARMONICS, LINE_PHIS));
+        int[] named = { LINE_HARMONICS[LINE_CHANGED] };
+
+        assertPerLineBlockFades(tone, GenSignalForm.SINE_COMP, NetFields.COMPENSATION_LINES,
+                harmonicTable(new double[]{ LINE_NEW_AMP }, named, new double[]{ LINE_NEW_PHI }),
+                NetFields.DUAL_COMPENSATION,
+                productTable(LINE_AMPS, LINE_PRODUCT_A, LINE_PRODUCT_B, LINE_PHIS),
+                g -> g.applyCompensation(LINE_AMPS, LINE_HARMONICS, LINE_PHIS),
+                g -> g.applyCompensation(merged, LINE_HARMONICS, mergedPhis),
+                g -> g.applyCompensationLines(new double[]{ LINE_NEW_AMP }, named,
+                        new double[]{ LINE_NEW_PHI }));
+    }
+
+    /** The dual-tone twin: a per-line block on a session in DUAL_TONE_COMP
+     *  changes the named intermodulation product alone. */
+    @Test
+    void aPerLineBlockFadesTheNamedProductAndMergesIntoTheStoredTable() {
+        double[] merged = LINE_AMPS.clone();
+        merged[LINE_CHANGED] = LINE_NEW_AMP;
+        double[] mergedPhis = LINE_PHIS.clone();
+        mergedPhis[LINE_CHANGED] = LINE_NEW_PHI;
+        NetMessage tone = config()
+                .put(NetFields.FORM, GenSignalForm.DUAL_TONE_COMP.name())
+                .put(NetFields.FREQUENCY, TONE_HZ)
+                .put(NetFields.AMPLITUDE_VRMS_LEFT, AMPLITUDE_VRMS)
+                .put(NetFields.AMPLITUDE_VRMS_RIGHT, AMPLITUDE_VRMS)
+                .put(NetFields.DUAL, dual())
+                .put(NetFields.DUAL_COMPENSATION,
+                        productTable(LINE_AMPS, LINE_PRODUCT_A, LINE_PRODUCT_B, LINE_PHIS));
+        int[] namedA = { LINE_PRODUCT_A[LINE_CHANGED] };
+        int[] namedB = { LINE_PRODUCT_B[LINE_CHANGED] };
+
+        assertPerLineBlockFades(tone, GenSignalForm.DUAL_TONE_COMP,
+                NetFields.DUAL_COMPENSATION_LINES,
+                productTable(new double[]{ LINE_NEW_AMP }, namedA, namedB,
+                        new double[]{ LINE_NEW_PHI }),
+                NetFields.COMPENSATION, harmonicTable(LINE_AMPS, LINE_HARMONICS, LINE_PHIS),
+                g -> g.applyDualToneCompensation(LINE_AMPS, LINE_PRODUCT_A, LINE_PRODUCT_B,
+                        LINE_PHIS),
+                g -> g.applyDualToneCompensation(merged, LINE_PRODUCT_A, LINE_PRODUCT_B,
+                        mergedPhis),
+                g -> g.applyDualToneCompensationLines(new double[]{ LINE_NEW_AMP }, namedA,
+                        namedB, new double[]{ LINE_NEW_PHI }));
+    }
+
+    /** A per-line block on a session emitting the plain sine switches it to
+     *  SINE_COMP without a restart, and the tone renders the named line - see
+     *  {@link #assertPlainFormBlockSwitches}. */
+    @Test
+    void aPerLineBlockOnThePlainSineSwitchesToTheCompensatedFormWithoutARestart() {
+        NetMessage tone = config()
+                .put(NetFields.FORM, GenSignalForm.SINE.name())
+                .put(NetFields.FREQUENCY, TONE_HZ)
+                .put(NetFields.AMPLITUDE_VRMS_LEFT, AMPLITUDE_VRMS)
+                .put(NetFields.AMPLITUDE_VRMS_RIGHT, AMPLITUDE_VRMS);
+        int[] named = { LINE_HARMONICS[LINE_CHANGED] };
+
+        assertPlainFormBlockSwitches(tone, GenSignalForm.SINE, GenSignalForm.SINE_COMP,
+                NetFields.COMPENSATION_LINES,
+                harmonicTable(new double[]{ LINE_NEW_AMP }, named, new double[]{ LINE_NEW_PHI }),
+                g -> g.applyCompensationLines(new double[]{ LINE_NEW_AMP }, named,
+                        new double[]{ LINE_NEW_PHI }));
+    }
+
+    /** The dual-tone twin: a per-line block on a plain DUAL_TONE session
+     *  switches it to DUAL_TONE_COMP - no restart, although a form change
+     *  between the two would otherwise rebuild the generator. */
+    @Test
+    void aPerLineBlockOnThePlainDualToneSwitchesToTheCompensatedFormWithoutARestart() {
+        NetMessage tone = config()
+                .put(NetFields.FORM, GenSignalForm.DUAL_TONE.name())
+                .put(NetFields.FREQUENCY, TONE_HZ)
+                .put(NetFields.AMPLITUDE_VRMS_LEFT, AMPLITUDE_VRMS)
+                .put(NetFields.AMPLITUDE_VRMS_RIGHT, AMPLITUDE_VRMS)
+                .put(NetFields.DUAL, dual());
+        int[] namedA = { LINE_PRODUCT_A[LINE_CHANGED] };
+        int[] namedB = { LINE_PRODUCT_B[LINE_CHANGED] };
+
+        assertPlainFormBlockSwitches(tone, GenSignalForm.DUAL_TONE, GenSignalForm.DUAL_TONE_COMP,
+                NetFields.DUAL_COMPENSATION_LINES,
+                productTable(new double[]{ LINE_NEW_AMP }, namedA, namedB,
+                        new double[]{ LINE_NEW_PHI }),
+                g -> g.applyDualToneCompensationLines(new double[]{ LINE_NEW_AMP }, namedA,
+                        namedB, new double[]{ LINE_NEW_PHI }));
+    }
+
+    /**
+     * A plain sine with a whole table stored - sent while the form was plain,
+     * so stored only - takes that table whole with the switch, as a form switch
+     * brings it, and the named line fades on top of it: bit for bit a local
+     * plain sine given the held table whole and then the per-line apply, at
+     * the same sample.
+     */
+    @Test
+    void aPerLineBlockOnThePlainSineBringsTheStoredTableAndFadesTheLineOnTop() {
+        NetMessage tone = config()
+                .put(NetFields.FORM, GenSignalForm.SINE.name())
+                .put(NetFields.FREQUENCY, TONE_HZ)
+                .put(NetFields.AMPLITUDE_VRMS_LEFT, AMPLITUDE_VRMS)
+                .put(NetFields.AMPLITUDE_VRMS_RIGHT, AMPLITUDE_VRMS)
+                .put(NetFields.COMPENSATION, harmonicTable(LINE_AMPS, LINE_HARMONICS, LINE_PHIS));
+        int[] named = { LINE_HARMONICS[LINE_CHANGED] };
+
+        assertPlainFormBlockSwitches(tone, GenSignalForm.SINE, GenSignalForm.SINE_COMP,
+                NetFields.COMPENSATION_LINES,
+                harmonicTable(new double[]{ LINE_NEW_AMP }, named, new double[]{ LINE_NEW_PHI }),
+                g -> {
+                    g.applyCompensation(LINE_AMPS, LINE_HARMONICS, LINE_PHIS);
+                    g.applyCompensationLines(new double[]{ LINE_NEW_AMP }, named,
+                            new double[]{ LINE_NEW_PHI });
+                });
+    }
+
+    /** The dual-tone twin: a plain DUAL_TONE session with a stored product
+     *  table takes it whole with the switch, the named product fading on top. */
+    @Test
+    void aPerLineBlockOnThePlainDualToneBringsTheStoredTableAndFadesTheLineOnTop() {
+        NetMessage tone = config()
+                .put(NetFields.FORM, GenSignalForm.DUAL_TONE.name())
+                .put(NetFields.FREQUENCY, TONE_HZ)
+                .put(NetFields.AMPLITUDE_VRMS_LEFT, AMPLITUDE_VRMS)
+                .put(NetFields.AMPLITUDE_VRMS_RIGHT, AMPLITUDE_VRMS)
+                .put(NetFields.DUAL, dual())
+                .put(NetFields.DUAL_COMPENSATION,
+                        productTable(LINE_AMPS, LINE_PRODUCT_A, LINE_PRODUCT_B, LINE_PHIS));
+        int[] namedA = { LINE_PRODUCT_A[LINE_CHANGED] };
+        int[] namedB = { LINE_PRODUCT_B[LINE_CHANGED] };
+
+        assertPlainFormBlockSwitches(tone, GenSignalForm.DUAL_TONE, GenSignalForm.DUAL_TONE_COMP,
+                NetFields.DUAL_COMPENSATION_LINES,
+                productTable(new double[]{ LINE_NEW_AMP }, namedA, namedB,
+                        new double[]{ LINE_NEW_PHI }),
+                g -> {
+                    g.applyDualToneCompensation(LINE_AMPS, LINE_PRODUCT_A, LINE_PRODUCT_B,
+                            LINE_PHIS);
+                    g.applyDualToneCompensationLines(new double[]{ LINE_NEW_AMP }, namedA,
+                            namedB, new double[]{ LINE_NEW_PHI });
+                });
+    }
+
+    /**
+     * A per-line block on a session in the plain form of its family: the
+     * session's form becomes the compensated one, as the generator's own
+     * per-line apply switches it; the emission that was running goes on - the
+     * lane is not started again; and the running tone renders the table - it
+     * is no longer the plain tone, and it is bit for bit a local generator of
+     * the plain form given, at the same sample, what {@code applyLines} gives
+     * it: the per-line apply, after the held table whole when one was stored.
+     */
+    private void assertPlainFormBlockSwitches(NetMessage tone, GenSignalForm plain,
+            GenSignalForm compensated, String linesField, ObjectNode lines,
+            Consumer<SignalGenerator> applyLines) {
+        open();
+        generator.config(FIRST_GEN_ID, tone);
+        generator.start(FIRST_GEN_ID);
+        int plays = playback().getPlayCount();
+        SignalGenerator local     = localTone(plain);
+        SignalGenerator plainTone = localTone(plain);
+        renderLocal(local, StubPlayback.PREFILL_SAMPLES);
+        renderLocal(plainTone, StubPlayback.PREFILL_SAMPLES + LINE_RUN_SAMPLES);
+        assertArrayEquals(renderLocal(local, LINE_RUN_SAMPLES), playback().render(LINE_RUN_SAMPLES),
+                EXACT, "the local generator renders exactly what the session's renders");
+
+        generator.config(FIRST_GEN_ID, config().put(linesField, lines));
+        applyLines.accept(local);
+        double[] session = playback().render(LINE_RUN_SAMPLES);
+
+        assertEquals(compensated.name(), generator.state(FIRST_GEN_ID).path(NetFields.FORM).asText(),
+                "the block switches the session to the compensated form, as the generator's "
+                        + "own per-line apply does");
+        assertEquals(plays, playback().getPlayCount(),
+                "within one family the switch is no restart: the emission that was running "
+                        + "goes on");
+        assertFalse(Arrays.equals(renderLocal(plainTone, LINE_RUN_SAMPLES), session),
+                "the tone renders the table - it is no longer the plain tone");
+        assertArrayEquals(renderLocal(local, LINE_RUN_SAMPLES), session, EXACT,
+                "the named line fades in exactly as on a local generator given the same "
+                        + "per-line apply");
+    }
+
+    /**
+     * The per-line contract on the server, against generators built in this
+     * test exactly as the session builds its own:
+     * <ol>
+     * <li>the running tone takes the block through the generator's own fade -
+     * bit for bit the output of a local generator given the same table and
+     * the same per-line apply at the same sample, which fades the named line
+     * alone and leaves every other line bit for bit - and an update half-way
+     * through that fade that carries no table of the running form's family,
+     * only an unrelated field and a whole table of the OTHER family, does not
+     * land the running form's table on it whole;</li>
+     * <li>the named line does fade: during the fade the tone is not the merged
+     * table's, from its end on it is, bit for bit;</li>
+     * <li>the stored table holds the merge: a restart rebuilds, bit for bit,
+     * the table the fade ended on.</li>
+     * </ol>
+     *
+     * @param tone        the update that sets the session up before its start
+     * @param linesField  the per-line block's field
+     * @param lines       the per-line block
+     * @param otherField  the whole-table field of the other family
+     * @param otherTable  a whole table of the other family, sent mid-fade
+     * @param oldTable    the session's first table, applied to a local generator
+     * @param mergedTable the table with the block merged, the same way
+     * @param applyLines  the block as a local per-line apply
+     */
+    private void assertPerLineBlockFades(NetMessage tone, GenSignalForm form, String linesField,
+            ObjectNode lines, String otherField, ObjectNode otherTable,
+            Consumer<SignalGenerator> oldTable, Consumer<SignalGenerator> mergedTable,
+            Consumer<SignalGenerator> applyLines) {
+        open();
+        generator.config(FIRST_GEN_ID, tone);
+        generator.start(FIRST_GEN_ID);
+        SignalGenerator local   = localTone(form);
+        SignalGenerator stepped = localTone(form);
+        oldTable.accept(local);
+        oldTable.accept(stepped);
+        renderLocal(local, StubPlayback.PREFILL_SAMPLES);
+        renderLocal(stepped, StubPlayback.PREFILL_SAMPLES + LINE_RUN_SAMPLES);
+        assertArrayEquals(renderLocal(local, LINE_RUN_SAMPLES), playback().render(LINE_RUN_SAMPLES),
+                EXACT, "the local generator renders exactly what the session's renders");
+
+        generator.config(FIRST_GEN_ID, config().put(linesField, lines));
+        applyLines.accept(local);
+        mergedTable.accept(stepped);
+        int half = LINE_FADE_SAMPLES / 2;
+        double[] first = playback().render(half);
+        generator.config(FIRST_GEN_ID, config().put(NetFields.RECTANGLE_DUTY, RECTANGLE_DUTY)
+                .put(otherField, otherTable));
+        double[] rest = playback().render(LINE_RUN_SAMPLES - half);
+        double[] session = new double[LINE_RUN_SAMPLES];
+        System.arraycopy(first, 0, session, 0, half);
+        System.arraycopy(rest, 0, session, half, rest.length);
+        double[] step = renderLocal(stepped, LINE_RUN_SAMPLES);
+
+        assertArrayEquals(renderLocal(local, LINE_RUN_SAMPLES), session, EXACT,
+                "the running tone takes the block through the generator's own fade, and an "
+                        + "update carrying no table of the running form mid-fade does not "
+                        + "land that table whole on it");
+        assertFalse(Arrays.equals(Arrays.copyOf(step, LINE_FADE_SAMPLES),
+                        Arrays.copyOf(session, LINE_FADE_SAMPLES)),
+                "the named line fades in - it does not land at once");
+        assertArrayEquals(Arrays.copyOfRange(step, LINE_FADE_SAMPLES, LINE_RUN_SAMPLES),
+                Arrays.copyOfRange(session, LINE_FADE_SAMPLES, LINE_RUN_SAMPLES), EXACT,
+                "after the fade the tone is the merged table's: the named line at its target, "
+                        + "every other line bit for bit as it was");
+
+        generator.stop(FIRST_GEN_ID);
+        generator.start(FIRST_GEN_ID);
+        SignalGenerator rebuilt = localTone(form);
+        mergedTable.accept(rebuilt);
+        renderLocal(rebuilt, StubPlayback.PREFILL_SAMPLES);
+        assertArrayEquals(renderLocal(rebuilt, LINE_RUN_SAMPLES), playback().render(LINE_RUN_SAMPLES),
+                EXACT, "the stored table holds the merge: a restart rebuilds the table the "
+                        + "fade ended on");
+    }
+
     // -------------------------------------------------------------------------
     // The bin snap and the trims, measured off the emitted waveform
     // -------------------------------------------------------------------------
@@ -1079,6 +1357,24 @@ class GeneratorSessionTest {
     private static final double STRONG_HARMONIC_RATIO = 0.5;
     private static final double MIN_PEAK_GROWTH = 1.3;
     private static final int SECOND_HARMONIC = 2;
+    /** The table the per-line tests start from - three lines at their own
+     *  ratios and phases - and the entry a per-line block changes, to twice
+     *  its ratio at a phase across the +-pi seam. */
+    private static final int[] LINE_HARMONICS = { 2, 3, 4 };
+    private static final int[] LINE_PRODUCT_A = { 2, 1, -1 };
+    private static final int[] LINE_PRODUCT_B = { -1, 1, 2 };
+    private static final double[] LINE_AMPS = { 0.01, 0.01, 0.005 };
+    private static final double[] LINE_PHIS = { 0.3, 3.0, -1.0 };
+    private static final int LINE_CHANGED = 1;
+    private static final double LINE_NEW_AMP = 0.02;
+    private static final double LINE_NEW_PHI = -3.0;
+    /** The fade of a per-line block on the tests' tone: ten periods of 997 Hz
+     *  at 48 kHz are 481.4 samples, rounded up. */
+    private static final int LINE_FADE_SAMPLES = 482;
+    /** Samples compared before and after a per-line block - over four fades. */
+    private static final int LINE_RUN_SAMPLES = 2_000;
+    /** The full scale of a device this server has no card for (spec 4.5). */
+    private static final double UNIT_FULL_SCALE = 1.0;
 
     private JsonNode open() {
         return generator.open(output, StubDeviceManager.OUTPUT, RATE_HZ, BITS, DITHER_BITS,
@@ -1138,6 +1434,61 @@ class GeneratorSessionTest {
         node.putArray(NetFields.H_NUMS).add(SECOND_HARMONIC);
         node.putArray(NetFields.PHI_INITS).add(EXACT);
         return node;
+    }
+
+    /** A single-tone table block - whole or per-line, the arrays as given. */
+    private ObjectNode harmonicTable(double[] amps, int[] hNums, double[] phis) {
+        ObjectNode node = JsonNodeFactory.instance.objectNode();
+        ArrayNode ratios = node.putArray(NetFields.AMP_RATIOS);
+        ArrayNode harmonics = node.putArray(NetFields.H_NUMS);
+        ArrayNode phases = node.putArray(NetFields.PHI_INITS);
+        for (int i = 0; i < amps.length; i++) {
+            ratios.add(amps[i]);
+            harmonics.add(hNums[i]);
+            phases.add(phis[i]);
+        }
+        return node;
+    }
+
+    /** A dual-tone table block - whole or per-line, the arrays as given. */
+    private ObjectNode productTable(double[] amps, int[] aCoef, int[] bCoef, double[] phis) {
+        ObjectNode node = JsonNodeFactory.instance.objectNode();
+        ArrayNode ratios = node.putArray(NetFields.AMP_RATIOS);
+        ArrayNode as = node.putArray(NetFields.A_COEF);
+        ArrayNode bs = node.putArray(NetFields.B_COEF);
+        ArrayNode phases = node.putArray(NetFields.PHI_INITS);
+        for (int i = 0; i < amps.length; i++) {
+            ratios.add(amps[i]);
+            as.add(aCoef[i]);
+            bs.add(bCoef[i]);
+            phases.add(phis[i]);
+        }
+        return node;
+    }
+
+    /** A generator built here exactly as the session builds the per-line
+     *  tests' tone: the same form, frequencies, split, rate and amplitudes,
+     *  at the full scale of a device without a card. */
+    private SignalGenerator localTone(GenSignalForm form) {
+        SignalGenerator gen = new SignalGenerator(form, TONE_HZ, RATE_HZ, AMPLITUDE_VRMS,
+                AMPLITUDE_VRMS, UNIT_FULL_SCALE, UNIT_FULL_SCALE);
+        if (form.isDualTone()) {
+            gen.setDualToneFrequency2(SECOND_TONE_HZ);
+            gen.setDualToneAmplitudes(FIRST_SPLIT_PCT, SECOND_SPLIT_PCT);
+        }
+        return gen;
+    }
+
+    /** {@code count} left-lane samples of a local generator, the way the
+     *  stub's render loop pulls them from the session's. */
+    private double[] renderLocal(SignalGenerator gen, int count) {
+        double[] frame = new double[2];
+        double[] rendered = new double[count];
+        for (int i = 0; i < count; i++) {
+            gen.nextFrame(frame);
+            rendered[i] = frame[0];
+        }
+        return rendered;
     }
 
     /** A one-shot log sweep with no lead-in and no fades, so a sample pulled

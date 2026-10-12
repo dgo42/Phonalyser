@@ -19,13 +19,16 @@
 package org.edgo.audio.measure.generator;
 
 import java.util.Arrays;
+import java.util.function.Consumer;
 
 import org.edgo.audio.measure.common.Constants;
 import org.edgo.audio.measure.enums.GenSignalForm;
+import org.edgo.audio.measure.generator.SignalGenerator.CompensationTable;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -374,6 +377,516 @@ class SignalGeneratorTest {
                 componentPeak(plain, sampleRate, f2Hz),
                 componentPeak(engaged, sampleRate, f2Hz) * 1e-9,
                 "the second tone must survive the switch untouched - no rebuild");
+    }
+
+    // -------------------------------------------------------------------------
+    // Predistortion: a per-line apply fades only the named lines
+    // -------------------------------------------------------------------------
+
+    /** One setting a fade test runs at: the rate, the fundamental (F1 for a
+     *  dual tone) and the fade the contract asks for there - ten periods of
+     *  the fundamental, rounded up to whole samples. */
+    private record Rig(int rate, double f1Hz, int fadeSamples) {
+    }
+
+    /** 100 Hz at 48 kHz: 480 samples a period, a fade of 4800. */
+    private static final Rig    RIG          = new Rig(48_000, 100.0, 4_800);
+    /** 997 Hz at 44.1 kHz: ten periods are 442.3 samples, a fade of 443 - so
+     *  neither a fixed length nor a rounding down passes. */
+    private static final Rig    OTHER_RIG    = new Rig(44_100, 997.0, 443);
+    /** {@link #RIG}'s tones with a product BELOW F1 changing: ten periods of
+     *  its own 90 Hz are 5333.3 samples, a fade of 5334 - longer than the 4800
+     *  of ten F1 periods, so that is the one it takes. */
+    private static final Rig    SLOW_PRODUCT_RIG = new Rig(48_000, 100.0, 5_334);
+    /** The index of that product, (2, -1) at 2 F1 - F2. */
+    private static final int    SLOW_PRODUCT     = 0;
+    /** The second tone of the dual-tone fade test. */
+    private static final double FADE_F2_HZ   = 110.0;
+    /** Samples rendered before the apply - not a whole period, so the apply
+     *  lands at an arbitrary phase of every line. */
+    private static final int    FADE_LEAD    = 1_000;
+    /** Samples rendered past the fade, compared bit for bit with the target. */
+    private static final int    FADE_TAIL    = 960;
+    private static final double FADE_VRMS    = 1.0;
+    /** The table the fade tests start from: three lines at their own ratios
+     *  and phases; the middle one is the line that is changed. */
+    private static final double[] OLD_AMPS = { 0.01, 0.01, 0.005 };
+    private static final double[] OLD_PHIS = { 0.3, 3.0, -1.0 };
+    private static final int      CHANGED  = 1;
+    /** The changed line's new target: twice the ratio, at a phase across the
+     *  +-pi seam from the old one - the shorter way round is +0.28 rad, the
+     *  long way -6 rad. */
+    private static final double NEW_AMP = 0.02;
+    private static final double NEW_PHI = -3.0;
+    /** The single-tone table's harmonics. */
+    private static final int[] FADE_HARMONICS = { 2, 3, 4 };
+    /** The dual-tone table's products (a, b) at a F1 + b F2: 90, 210 and 120 Hz. */
+    private static final int[] PRODUCT_A = { 2, 1, -1 };
+    private static final int[] PRODUCT_B = { -1, 1, 2 };
+    /** The harmonic the absent-line test adds, with its ratio and phase. */
+    private static final int    ADDED_HARMONIC = 5;
+    private static final double ADDED_AMP      = 0.01;
+    private static final double ADDED_PHI      = 1.0;
+    /** The other line a second apply names half-way through the first fade. */
+    private static final int    OTHER_LINE     = 0;
+    private static final double OTHER_AMP      = 0.015;
+    private static final double OTHER_PHI      = -0.5;
+    /** The changed line's second target, named half-way through its fade. */
+    private static final double RETARGET_AMP   = 0.005;
+    private static final double RETARGET_PHI   = 2.0;
+    /** A second whole table, every entry other than the first table's. */
+    private static final double[] WHOLE_AMPS   = { 0.02, 0.01, 0.003 };
+    /** How far a rendered line may sit from its analytic fade, as a fraction
+     *  of its scale - rounding, not a budget. */
+    private static final double FADE_TOL = 1e-12;
+
+    /**
+     * A per-line apply changes the named entry and nothing else: every other
+     * entry of the published table is bit for bit what it was, at the same
+     * index, and naming a line the table holds adds no entry.
+     */
+    @Test
+    void compensationLines_leaveTheUnnamedEntriesBitIdentical() {
+        SignalGenerator gen = harmonicGenerator(RIG, FADE_HARMONICS, OLD_AMPS, OLD_PHIS);
+        render(gen, FADE_LEAD);
+        CompensationTable before = gen.getComp();
+        changeTheMiddleHarmonic(gen);
+
+        assertOnlyTheChangedEntryMoved(before, gen.getComp());
+    }
+
+    /**
+     * The named harmonic fades over ten fundamental periods - magnitude and
+     * phase each linearly, the phase the shorter way across the +-pi seam -
+     * with no step, and lands exactly on its target: from the end of the fade
+     * on, the output is bit for bit that of a generator holding the new table
+     * whole.
+     */
+    @Test
+    void compensationLines_fadeTheNamedHarmonicLinearlyToItsTarget() {
+        assertTheMiddleHarmonicFades(RIG);
+    }
+
+    /** The same at another fundamental and rate: the fade is ten periods of
+     *  THIS fundamental, rounded up to whole samples, and nothing else. */
+    @Test
+    void compensationLines_fadeOverTenPeriodsOfTheFundamentalAtAnyRate() {
+        assertTheMiddleHarmonicFades(OTHER_RIG);
+    }
+
+    /** The dual-tone twin: one product, named by its coefficients on F1 and
+     *  F2, fades the same way on its F1-referenced scale and lands on its
+     *  target, and the other products' entries stay bit for bit. */
+    @Test
+    void dualToneCompensationLines_fadeTheNamedProductAndLeaveTheOthers() {
+        SignalGenerator faded   = productGenerator(OLD_AMPS, OLD_PHIS);
+        SignalGenerator without = productGenerator(withChanged(OLD_AMPS, 0.0), OLD_PHIS);
+        SignalGenerator target  = productGenerator(withChanged(OLD_AMPS, NEW_AMP),
+                withChanged(OLD_PHIS, NEW_PHI));
+        renderAlike(FADE_LEAD, faded, without, target);
+        CompensationTable before = faded.getDtComp();
+        double productHz = PRODUCT_A[CHANGED] * RIG.f1Hz() + PRODUCT_B[CHANGED] * FADE_F2_HZ;
+
+        assertLineFades(RIG, faded, without, target,
+                g -> g.applyDualToneCompensationLines(new double[]{ NEW_AMP },
+                        new int[]{ PRODUCT_A[CHANGED] }, new int[]{ PRODUCT_B[CHANGED] },
+                        new double[]{ NEW_PHI }),
+                FADE_LEAD, productHz, productScale(),
+                OLD_AMPS[CHANGED], OLD_PHIS[CHANGED], NEW_AMP, NEW_PHI);
+        assertOnlyTheChangedEntryMoved(before, faded.getDtComp());
+    }
+
+    /** A product below F1 fades over ten periods of its OWN frequency: those
+     *  take longer than ten periods of F1, and the longer of the two is the
+     *  fade. */
+    @Test
+    void dualToneCompensationLines_aProductBelowF1FadesOverTenOfItsOwnPeriods() {
+        SignalGenerator faded   = productGenerator(OLD_AMPS, OLD_PHIS);
+        SignalGenerator without = productGenerator(withEntry(OLD_AMPS, SLOW_PRODUCT, 0.0),
+                OLD_PHIS);
+        SignalGenerator target  = productGenerator(withEntry(OLD_AMPS, SLOW_PRODUCT, NEW_AMP),
+                withEntry(OLD_PHIS, SLOW_PRODUCT, NEW_PHI));
+        renderAlike(FADE_LEAD, faded, without, target);
+        double productHz = PRODUCT_A[SLOW_PRODUCT] * RIG.f1Hz()
+                + PRODUCT_B[SLOW_PRODUCT] * FADE_F2_HZ;
+
+        assertLineFades(SLOW_PRODUCT_RIG, faded, without, target,
+                g -> g.applyDualToneCompensationLines(new double[]{ NEW_AMP },
+                        new int[]{ PRODUCT_A[SLOW_PRODUCT] }, new int[]{ PRODUCT_B[SLOW_PRODUCT] },
+                        new double[]{ NEW_PHI }),
+                FADE_LEAD, productHz, productScale(),
+                OLD_AMPS[SLOW_PRODUCT], OLD_PHIS[SLOW_PRODUCT], NEW_AMP, NEW_PHI);
+    }
+
+    /**
+     * A line the table lacks fades in from zero at its new phase - here on a
+     * generator emitting the plain sine, which the apply switches to the
+     * compensated form - and, named again with amplitude zero, fades out at its
+     * own phase, after which the output is the plain sine bit for bit.
+     */
+    @Test
+    void compensationLines_fadeAnAbsentHarmonicInFromZeroAndOutAgain() {
+        SignalGenerator faded   = plainSine(RIG);
+        SignalGenerator without = plainSine(RIG);
+        SignalGenerator fadedIn = harmonicGenerator(RIG, new int[]{ ADDED_HARMONIC },
+                new double[]{ ADDED_AMP }, new double[]{ ADDED_PHI });
+        renderAlike(FADE_LEAD, faded, without, fadedIn);
+        double lineHz = ADDED_HARMONIC * RIG.f1Hz();
+
+        assertLineFades(RIG, faded, without, fadedIn,
+                g -> g.applyCompensationLines(new double[]{ ADDED_AMP },
+                        new int[]{ ADDED_HARMONIC }, new double[]{ ADDED_PHI }),
+                FADE_LEAD, lineHz, harmonicScale(), 0.0, ADDED_PHI, ADDED_AMP, ADDED_PHI);
+
+        // The fade-out names a phase of 0: an entry named with amplitude zero
+        // keeps the phase it has, so it must fade out at ADDED_PHI.
+        int afterFadeIn = FADE_LEAD + 1 + RIG.fadeSamples() + FADE_TAIL;
+        SignalGenerator fadedOut = plainSine(RIG);
+        render(fadedOut, afterFadeIn);
+        assertLineFades(RIG, faded, without, fadedOut,
+                g -> g.applyCompensationLines(new double[]{ 0.0 },
+                        new int[]{ ADDED_HARMONIC }, new double[]{ 0.0 }),
+                afterFadeIn, lineHz, harmonicScale(), ADDED_AMP, ADDED_PHI, 0.0, ADDED_PHI);
+    }
+
+    /** After a clear the table is gone: a per-line apply then fades the line
+     *  it names in from zero, alone - none of the cleared lines comes back. */
+    @Test
+    void compensationLines_afterAClearFadeTheNamedLineInAlone() {
+        SignalGenerator faded   = harmonicGenerator(RIG, FADE_HARMONICS, OLD_AMPS, OLD_PHIS);
+        SignalGenerator without = plainSine(RIG);
+        SignalGenerator target  = harmonicGenerator(RIG, new int[]{ ADDED_HARMONIC },
+                new double[]{ ADDED_AMP }, new double[]{ ADDED_PHI });
+        renderAlike(FADE_LEAD, faded, without, target);
+        faded.clearCompensation();
+
+        assertLineFades(RIG, faded, without, target,
+                g -> g.applyCompensationLines(new double[]{ ADDED_AMP },
+                        new int[]{ ADDED_HARMONIC }, new double[]{ ADDED_PHI }),
+                FADE_LEAD, ADDED_HARMONIC * RIG.f1Hz(), harmonicScale(),
+                0.0, ADDED_PHI, ADDED_AMP, ADDED_PHI);
+    }
+
+    /**
+     * A second per-line apply half-way through a running fade that names
+     * ANOTHER line: the first line carries on with its fade exactly as if
+     * nothing had happened - one unbroken linear ramp - while the other line
+     * starts a fade of its own.
+     */
+    @Test
+    void compensationLines_aSecondApplyMidFadeLeavesTheRunningFadeUnbroken() {
+        int fade = RIG.fadeSamples();
+        int half = fade / 2;
+        double[] otherAmps = withChanged(OLD_AMPS, NEW_AMP);
+        otherAmps[OTHER_LINE] = OTHER_AMP;
+        double[] otherPhis = withChanged(OLD_PHIS, NEW_PHI);
+        otherPhis[OTHER_LINE] = OTHER_PHI;
+        Consumer<SignalGenerator> second = g -> g.applyCompensationLines(
+                new double[]{ OTHER_AMP }, new int[]{ FADE_HARMONICS[OTHER_LINE] },
+                new double[]{ OTHER_PHI });
+        SignalGenerator faded   = harmonicGenerator(RIG, FADE_HARMONICS, OLD_AMPS, OLD_PHIS);
+        SignalGenerator without = harmonicGenerator(RIG, FADE_HARMONICS, withChanged(OLD_AMPS, 0.0),
+                OLD_PHIS);
+        SignalGenerator target  = harmonicGenerator(RIG, FADE_HARMONICS, otherAmps, otherPhis);
+        renderAlike(FADE_LEAD, faded, without, target);
+
+        double[] f0 = render(faded, 1);
+        double[] w0 = render(without, 1);
+        changeTheMiddleHarmonic(faded);
+        double[] f1 = render(faded, half);
+        double[] w1 = render(without, half);
+        // The other line changes in both, so its fade cancels in the difference.
+        second.accept(faded);
+        second.accept(without);
+        double[] f2 = render(faded, fade + FADE_TAIL);
+        double[] w2 = render(without, fade + FADE_TAIL);
+        render(target, 1 + half);
+        double[] t2 = render(target, fade + FADE_TAIL);
+
+        double[] line = diff(concat(f0, f1, f2), concat(w0, w1, w2));
+        double[] amps = new double[line.length];
+        double[] phis = new double[line.length];
+        fillFade(RIG, amps, phis, 0, 1, OLD_AMPS[CHANGED], OLD_PHIS[CHANGED], NEW_AMP, NEW_PHI);
+        assertLineIs(RIG, line, FADE_LEAD, FADE_HARMONICS[CHANGED] * RIG.f1Hz(), harmonicScale(),
+                amps, phis);
+        assertArrayEquals(tail(t2, fade), tail(f2, fade), 0.0,
+                "once the second fade is done both lines stand at the new table's values, bit for bit");
+    }
+
+    /**
+     * A second per-line apply half-way through a running fade that names the
+     * SAME line again: the line turns at the seam, with no step, onto a new
+     * linear fade - from the magnitude and phase it had reached, not from its
+     * old or its first target - to its second target.
+     */
+    @Test
+    void compensationLines_aLineRetargetedMidFadeTurnsFromWhereItIs() {
+        int fade = RIG.fadeSamples();
+        int half = fade / 2;
+        SignalGenerator faded   = harmonicGenerator(RIG, FADE_HARMONICS, OLD_AMPS, OLD_PHIS);
+        SignalGenerator without = harmonicGenerator(RIG, FADE_HARMONICS, withChanged(OLD_AMPS, 0.0),
+                OLD_PHIS);
+        SignalGenerator target  = harmonicGenerator(RIG, FADE_HARMONICS,
+                withChanged(OLD_AMPS, RETARGET_AMP), withChanged(OLD_PHIS, RETARGET_PHI));
+        renderAlike(FADE_LEAD, faded, without, target);
+
+        double[] f0 = render(faded, 1);
+        double[] w0 = render(without, 1);
+        changeTheMiddleHarmonic(faded);
+        double[] f1 = render(faded, half);
+        double[] w1 = render(without, half);
+        faded.applyCompensationLines(new double[]{ RETARGET_AMP },
+                new int[]{ FADE_HARMONICS[CHANGED] }, new double[]{ RETARGET_PHI });
+        double[] f2 = render(faded, fade + FADE_TAIL);
+        double[] w2 = render(without, fade + FADE_TAIL);
+        render(target, 1 + half);
+        double[] t2 = render(target, fade + FADE_TAIL);
+
+        double[] line = diff(concat(f0, f1, f2), concat(w0, w1, w2));
+        double[] amps = new double[line.length];
+        double[] phis = new double[line.length];
+        fillFade(RIG, amps, phis, 0, 1, OLD_AMPS[CHANGED], OLD_PHIS[CHANGED], NEW_AMP, NEW_PHI);
+        int seam = 1 + half;
+        fillFade(RIG, amps, phis, seam, seam, amps[seam], phis[seam], RETARGET_AMP, RETARGET_PHI);
+        assertLineIs(RIG, line, FADE_LEAD, FADE_HARMONICS[CHANGED] * RIG.f1Hz(), harmonicScale(),
+                amps, phis);
+        assertArrayEquals(tail(t2, fade), tail(f2, fade), 0.0,
+                "once the second fade is done the line stands at its second target, bit for bit");
+    }
+
+    /**
+     * A whole-table apply and a per-line apply with no sample between them: the
+     * per-line fade starts from the whole table's values, exactly as if a
+     * sample had fallen between the two - the unnamed lines take the whole
+     * table's values at once, as a whole apply does, and none fades in from
+     * zero.  Bit for bit the output of a generator that held the whole table
+     * all along and took the same per-line apply at the same sample.
+     */
+    @Test
+    void compensationLines_rightAfterAWholeApplyFadeFromThatTable() {
+        Consumer<SignalGenerator> lines = this::changeTheMiddleHarmonic;
+        SignalGenerator faded     = harmonicGenerator(RIG, FADE_HARMONICS, OLD_AMPS, OLD_PHIS);
+        SignalGenerator reference = harmonicGenerator(RIG, FADE_HARMONICS, WHOLE_AMPS, OLD_PHIS);
+        renderAlike(FADE_LEAD, faded, reference);
+
+        faded.applyCompensation(WHOLE_AMPS, FADE_HARMONICS, OLD_PHIS);
+        lines.accept(faded);
+        lines.accept(reference);
+
+        assertArrayEquals(render(reference, RIG.fadeSamples() + FADE_TAIL),
+                render(faded, RIG.fadeSamples() + FADE_TAIL), 0.0,
+                "the per-line fade must take over from the whole table it was derived from");
+    }
+
+    /** The middle harmonic of the table fades to its new target on {@code rig}
+     *  - see {@link #compensationLines_fadeTheNamedHarmonicLinearlyToItsTarget}. */
+    private void assertTheMiddleHarmonicFades(Rig rig) {
+        SignalGenerator faded   = harmonicGenerator(rig, FADE_HARMONICS, OLD_AMPS, OLD_PHIS);
+        SignalGenerator without = harmonicGenerator(rig, FADE_HARMONICS,
+                withChanged(OLD_AMPS, 0.0), OLD_PHIS);
+        SignalGenerator target  = harmonicGenerator(rig, FADE_HARMONICS,
+                withChanged(OLD_AMPS, NEW_AMP), withChanged(OLD_PHIS, NEW_PHI));
+        renderAlike(FADE_LEAD, faded, without, target);
+
+        assertLineFades(rig, faded, without, target, this::changeTheMiddleHarmonic,
+                FADE_LEAD, FADE_HARMONICS[CHANGED] * rig.f1Hz(), harmonicScale(),
+                OLD_AMPS[CHANGED], OLD_PHIS[CHANGED], NEW_AMP, NEW_PHI);
+    }
+
+    /** The per-line apply most tests make: the middle harmonic to its new target. */
+    private void changeTheMiddleHarmonic(SignalGenerator gen) {
+        gen.applyCompensationLines(new double[]{ NEW_AMP },
+                new int[]{ FADE_HARMONICS[CHANGED] }, new double[]{ NEW_PHI });
+    }
+
+    /**
+     * Renders one sample of each generator, applies {@code apply} to
+     * {@code faded}, renders the fade and a tail of each, and asserts the fade
+     * on the line's own contribution - {@code faded} minus {@code without},
+     * which holds every other line alike - through {@link #assertLineIs}: one
+     * linear fade from the old to the new values over the rig's fade length.
+     * From the end of the fade on, {@code faded} must be {@code target} bit
+     * for bit.
+     *
+     * @param n0 the absolute index of the sample rendered before the apply
+     */
+    private void assertLineFades(Rig rig, SignalGenerator faded, SignalGenerator without,
+            SignalGenerator target, Consumer<SignalGenerator> apply, int n0, double lineHz,
+            double scale, double fromAmp, double fromPhi, double toAmp, double toPhi) {
+        int fade = rig.fadeSamples();
+        double[] f0 = render(faded, 1);
+        double[] w0 = render(without, 1);
+        render(target, 1);
+        apply.accept(faded);
+        double[] f1 = render(faded,   fade + FADE_TAIL);
+        double[] w1 = render(without, fade + FADE_TAIL);
+        double[] t1 = render(target,  fade + FADE_TAIL);
+
+        double[] line = diff(concat(f0, f1), concat(w0, w1));
+        double[] amps = new double[line.length];
+        double[] phis = new double[line.length];
+        fillFade(rig, amps, phis, 0, 1, fromAmp, fromPhi, toAmp, toPhi);
+        assertLineIs(rig, line, n0, lineHz, scale, amps, phis);
+        assertArrayEquals(tail(t1, fade), tail(f1, fade), 0.0,
+                "from the end of the fade on the output must be the new table's, bit for bit");
+    }
+
+    /**
+     * Writes into {@code amps} / {@code phis}, from index {@code start} on, a
+     * line's magnitude and phase under one fade: index {@code applyAt} is the
+     * first sample rendered after the apply, which still renders the from
+     * values; the fade reaches its target the rig's fade length later and
+     * holds it there, the phase taking the shorter way round.
+     */
+    private void fillFade(Rig rig, double[] amps, double[] phis, int start, int applyAt,
+            double fromAmp, double fromPhi, double toAmp, double toPhi) {
+        double dPhi = Math.IEEEremainder(toPhi - fromPhi, 2.0 * Math.PI);   // the shorter way
+        for (int m = start; m < amps.length; m++) {
+            double frac = Math.min(1.0, Math.max(0, m - applyAt) / (double) rig.fadeSamples());
+            amps[m] = fromAmp + (toAmp - fromAmp) * frac;
+            phis[m] = fromPhi + dPhi * frac;
+        }
+    }
+
+    /**
+     * Asserts a line's own contribution sample by sample: {@code line[m]} must
+     * be {@code -scale amps[m] cos(2 pi lineHz (n0 + m) / fs + phis[m])}, and
+     * no sample may step from the one before by more than the line's own slope
+     * at its largest magnitude plus that sample's change of magnitude and
+     * phase.  The line is read alone because a step of a 1 % line is smaller
+     * than one sample's slope of the fundamental it rides on.
+     *
+     * @param n0 the absolute sample index of {@code line[0]}
+     */
+    private void assertLineIs(Rig rig, double[] line, int n0, double lineHz, double scale,
+            double[] amps, double[] phis) {
+        double maxAmp = 0.0;
+        for (double amp : amps) {
+            maxAmp = Math.max(maxAmp, amp);
+        }
+        double slope = 2.0 * Math.PI * lineHz / rig.rate();
+        for (int m = 0; m < line.length; m++) {
+            double expected = -scale * amps[m]
+                    * Math.cos(2.0 * Math.PI * lineHz * (n0 + m) / rig.rate() + phis[m]);
+            assertEquals(expected, line[m], scale * FADE_TOL,
+                    "sample " + m + " of the fade leaves the linear ramp of magnitude and phase");
+            if (m > 0) {
+                double dPhi    = Math.abs(Math.IEEEremainder(phis[m] - phis[m - 1], 2.0 * Math.PI));
+                double maxStep = scale * (Math.abs(amps[m] - amps[m - 1])
+                        + maxAmp * (slope + dPhi) + FADE_TOL);
+                double step    = Math.abs(line[m] - line[m - 1]);
+                assertTrue(step <= maxStep, "sample " + m + " of the fade steps by " + step
+                        + ", more than the line's own slope and ramp " + maxStep);
+            }
+        }
+    }
+
+    /** {@code x - y}, sample by sample. */
+    private double[] diff(double[] x, double[] y) {
+        double[] d = new double[x.length];
+        for (int i = 0; i < x.length; i++) {
+            d[i] = x[i] - y[i];
+        }
+        return d;
+    }
+
+    /** The blocks one after the other. */
+    private double[] concat(double[]... blocks) {
+        int n = 0;
+        for (double[] block : blocks) {
+            n += block.length;
+        }
+        double[] all = new double[n];
+        int at = 0;
+        for (double[] block : blocks) {
+            System.arraycopy(block, 0, all, at, block.length);
+            at += block.length;
+        }
+        return all;
+    }
+
+    /** {@code block} from index {@code from} on. */
+    private double[] tail(double[] block, int from) {
+        return Arrays.copyOfRange(block, from, block.length);
+    }
+
+    /** {@code after} holds {@code before}'s lines at the same indices, every
+     *  one but {@link #CHANGED} bit for bit, and that one at its new target. */
+    private void assertOnlyTheChangedEntryMoved(CompensationTable before, CompensationTable after) {
+        assertEquals(before.amp.length, after.amp.length, "naming a held line adds no entry");
+        for (int i = 0; i < before.amp.length; i++) {
+            assertEquals(before.a[i], after.a[i], "entry " + i + " names another line");
+            assertEquals(before.b[i], after.b[i], "entry " + i + " names another line");
+            if (i == CHANGED) continue;
+            assertEquals(Double.doubleToRawLongBits(before.amp[i]),
+                    Double.doubleToRawLongBits(after.amp[i]),
+                    "the unnamed entry " + i + " changed its ratio");
+            assertEquals(before.phaseOff64[i], after.phaseOff64[i],
+                    "the unnamed entry " + i + " changed its phase");
+        }
+        assertEquals(NEW_AMP, after.amp[CHANGED], 0.0, "the named entry takes its new ratio");
+        assertNotEquals(before.phaseOff64[CHANGED], after.phaseOff64[CHANGED],
+                "the named entry takes its new phase");
+    }
+
+    /** The plain sine at the rig's fundamental and rate. */
+    private SignalGenerator plainSine(Rig rig) {
+        return new SignalGenerator(GenSignalForm.SINE, rig.f1Hz(), rig.rate(),
+                FADE_VRMS, FADE_VRMS, DAC_FS_VRMS, DAC_FS_VRMS);
+    }
+
+    /** The rig's sine holding the harmonics {@code hNums} as a whole table. */
+    private SignalGenerator harmonicGenerator(Rig rig, int[] hNums, double[] amps, double[] phis) {
+        SignalGenerator gen = plainSine(rig);
+        gen.applyCompensation(amps, hNums, phis);
+        return gen;
+    }
+
+    /** The fade tests' two tones at an even split, holding the products
+     *  {@link #PRODUCT_A} / {@link #PRODUCT_B} as a whole table. */
+    private SignalGenerator productGenerator(double[] amps, double[] phis) {
+        double splitPct = DUAL_SPLITS_PCT[0];
+        SignalGenerator gen = new SignalGenerator(GenSignalForm.DUAL_TONE, RIG.f1Hz(), RIG.rate(),
+                FADE_VRMS, FADE_VRMS, DAC_FS_VRMS, DAC_FS_VRMS);
+        gen.setDualToneFrequency2(FADE_F2_HZ);
+        gen.setDualToneAmplitudes(splitPct, 100.0 - splitPct);
+        gen.setAmplitudesVrms(FADE_VRMS, FADE_VRMS);
+        gen.applyDualToneCompensation(amps, PRODUCT_A, PRODUCT_B, phis);
+        return gen;
+    }
+
+    /** A harmonic's peak per unit ratio: the sine's own peak, which the ratio
+     *  is taken against. */
+    private double harmonicScale() {
+        return FADE_VRMS * Constants.SQRT2 / DAC_FS_VRMS;
+    }
+
+    /** A product's peak per unit ratio: the F1 tone's peak - the lane level,
+     *  normalised to the two weights' RMS, times F1's weight. */
+    private double productScale() {
+        double w1 = DUAL_SPLITS_PCT[0] / 100.0;
+        double w2 = 1.0 - w1;
+        return FADE_VRMS / (DAC_FS_VRMS * Math.sqrt((w1 * w1 + w2 * w2) / 2.0)) * w1;
+    }
+
+    /** {@code values} with the {@link #CHANGED} entry replaced by {@code value}. */
+    private double[] withChanged(double[] values, double value) {
+        return withEntry(values, CHANGED, value);
+    }
+
+    /** {@code values} with entry {@code index} replaced by {@code value}. */
+    private double[] withEntry(double[] values, int index, double value) {
+        double[] v = values.clone();
+        v[index] = value;
+        return v;
+    }
+
+    /** Renders {@code samples} of each generator, so they stand at one sample
+     *  position. */
+    private void renderAlike(int samples, SignalGenerator... gens) {
+        for (SignalGenerator g : gens) {
+            render(g, samples);
+        }
     }
 
     // -------------------------------------------------------------------------
