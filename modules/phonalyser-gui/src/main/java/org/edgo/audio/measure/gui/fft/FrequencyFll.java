@@ -97,12 +97,6 @@ public final class FrequencyFll implements FrequencyAligner {
      *  longer, so that a long window with little overlap still gets more
      *  than one reading. */
     private static final double PERSIST_SEC     = 2.0;
-    /** The output path, seconds: from the trim event through the driver's
-     *  output buffer, the DAC, the bench and the ADC back into the capture.
-     *  Added past the publish-time capture head, with one window on top,
-     *  when computing by when a whole window of the corrected signal has
-     *  been captured. */
-    private static final double OUTPUT_PATH_SEC = 0.010;
     /** EWMA weight on the previous drift estimate when a deadbeat folds a
      *  fresh slope measurement in - smooths the estimator noise riding on
      *  each band exit. */
@@ -216,12 +210,13 @@ public final class FrequencyFll implements FrequencyAligner {
     }
 
     /** Records by when a whole window of the correction just issued has been
-     *  captured: the capture head at publish, the output path, and one
-     *  window.  Every reading from a window that ends before it is held. */
+     *  captured: the capture head at publish, the output path's drain
+     *  ({@link #OUTPUT_DRAIN_SKIP_SEC}), and one window.  Every reading from
+     *  a window that ends before it is held. */
     private void markCorrectionInFlight(long latestSamplePos, int sampleRate, int fftSize) {
         if (sampleRate > 0) {
             correctionVisibleFrom = latestSamplePos
-                    + (long) Math.ceil(OUTPUT_PATH_SEC * sampleRate) + fftSize;
+                    + (long) Math.ceil(OUTPUT_DRAIN_SKIP_SEC * sampleRate) + fftSize;
         }
     }
 

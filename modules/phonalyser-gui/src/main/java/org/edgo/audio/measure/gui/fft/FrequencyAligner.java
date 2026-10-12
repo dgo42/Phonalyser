@@ -32,6 +32,15 @@ import org.edgo.audio.measure.enums.AlignGenerator;
  */
 public interface FrequencyAligner {
 
+    /** The output path's drain, in seconds: from a change of the generated
+     *  signal through the driver's output buffer (about 480 ms on the
+     *  JavaSound render path), the DAC, the bench and the ADC back into the
+     *  capture, the old signal keeps flowing in for this long.  Shared by
+     *  the aligner, which waits it out after a trim before it believes a
+     *  reading, and the analyser worker, which discards it after a signal
+     *  change before it builds a window. */
+    double OUTPUT_DRAIN_SKIP_SEC = 0.7;
+
     /** Feeds one FFT measurement in and updates the correction.
      *  {@code absStartSamples}/{@code sampleRate} give the window's absolute
      *  position; {@code fftSize} is the analysis window length; {@code latestSamplePos}

@@ -47,10 +47,14 @@ class FrequencyFllTest {
     private static final int    SR       = 384000;
     private static final int    N        = 1 << 13;
     /** Frames of N after a correction until a measured window lies entirely
-     *  past the output path and one window (matches FrequencyFll.OUTPUT_PATH_SEC,
-     *  10 ms = 3840 samples, plus N): the second frame after the correction is
-     *  the first the loop reads. */
-    private static final int    WAIT_FRAMES = 2;
+     *  past the output path's drain and one window: the correction issued at
+     *  a capture head of N becomes visible at 2 N plus the drain, and the
+     *  first frame whose window ends there is this many frames on. */
+    private static final int    WAIT_FRAMES =
+            1 + (int) Math.ceil(FrequencyAligner.OUTPUT_DRAIN_SKIP_SEC * SR / N);
+    /** The frame a bad reading lands on while the loop is tracking: well
+     *  past the wait of the first correction. */
+    private static final int    BAD_FRAME   = WAIT_FRAMES + 16;
     /** The tracking bound and the step it is followed by, in Hz at the target
      *  (matches FrequencyFll.TRACK_BOUND_PPM and TRACK_STEP_PPM, 0.1 ppm). */
     private static final double BOUND_HZ = 0.1 * Constants.PPM * TARGET;
@@ -101,7 +105,7 @@ class FrequencyFllTest {
         // A constant 50 ppm drift, correction arriving within the loop's wait.
         // The loop must correct ONCE and then hold (no stacking), and the
         // measurement must land within the lock band.
-        int frames = 60;
+        int frames = 2 * WAIT_FRAMES;
         Run r = drive(frames, WAIT_FRAMES, constantDrift(frames, 0.05));   // 50 ppm
         assertEquals(1, r.corrections, "must correct once then hold (no dead-time over-regulation)");
         assertTrue(Math.abs(r.finalErrorHz) <= TOL_HZ,
@@ -111,17 +115,21 @@ class FrequencyFllTest {
     @Test
     void theWaitIsAWholeWindowPastTheOutputPath() {
         // After a correction the loop reads nothing until a measured window
-        // ends past the correction's capture position plus the output path
-        // plus one window: the frame right after the correction still holds
-        // the old tone and is held whatever it reads; the second frame is
-        // read again.
+        // ends past the correction's capture position plus the output path's
+        // drain plus one window: every frame before that still holds the old
+        // tone and is held whatever it reads; the first frame past the wait
+        // is read again.
         FrequencyFll fll = new FrequencyFll();
         fll.update(TARGET, TARGET + 0.05, 0, N, SR, N);                    // 50 ppm: corrected
         double corrected = fll.getCorrection();
-        fll.update(TARGET, TARGET + 0.05, N, 2L * N, SR, N);               // old tone still: held
-        assertEquals(corrected, fll.getCorrection(), "the frame after the correction is held");
-        fll.update(TARGET, TARGET, 2L * N, 3L * N, SR, N);                 // on grid: read, tracking from here
-        fll.update(TARGET, TARGET + 0.05 * Constants.PPM * TARGET, 3L * N, 4L * N, SR, N);
+        for (int frame = 1; frame < WAIT_FRAMES; frame++) {
+            long absStart = (long) frame * N;
+            fll.update(TARGET, TARGET + 0.05, absStart, absStart + N, SR, N);   // old tone still: held
+            assertEquals(corrected, fll.getCorrection(), "frame " + frame + " inside the wait is held");
+        }
+        long readAt = (long) WAIT_FRAMES * N;
+        fll.update(TARGET, TARGET, readAt, readAt + N, SR, N);             // on grid: read, tracking from here
+        fll.update(TARGET, TARGET + 0.05 * Constants.PPM * TARGET, readAt + N, readAt + 2L * N, SR, N);
         assertNotEquals(corrected, fll.getCorrection(),
                 "a reading inside the bound is acted on once the wait is over");
     }
@@ -133,11 +141,13 @@ class FrequencyFllTest {
         // stands untouched for the whole persistence - and only then is the
         // move followed, 0.1 ppm per read frame, until the loop is locked
         // again: one correction for the initial drift, five for the move.
-        int frames = 200;
+        // Every step waits out the drain and a window before the next read,
+        // so the frames cover the persistence and five waits.
+        int frames = BAD_FRAME + PERSIST_FRAMES + 6 * WAIT_FRAMES;
         double[] drift = constantDrift(frames, 0.05);
-        for (int i = 40; i < frames; i++) drift[i] = 0.05 + 0.5 * Constants.PPM * TARGET;
+        for (int i = BAD_FRAME; i < frames; i++) drift[i] = 0.05 + 0.5 * Constants.PPM * TARGET;
         Run r = drive(frames, WAIT_FRAMES, drift);
-        int firstStep = 40 + PERSIST_FRAMES;
+        int firstStep = BAD_FRAME + PERSIST_FRAMES;
         assertEquals(r.corr[0], r.corr[firstStep - 1], "ignored until the readings have persisted");
         assertNotEquals(r.corr[0], r.corr[firstStep], "followed once they have");
         for (int i = 1; i < frames; i++) {
@@ -154,12 +164,12 @@ class FrequencyFllTest {
         // Locked and tracking, one frame reads 4.5 ppm off - a broken frame,
         // not a crystal - and the next frames read on grid again.  The
         // correction does not move.
-        int frames = 60;
+        int frames = BAD_FRAME + 2 * WAIT_FRAMES;
         double[] drift = constantDrift(frames, 0.05);
-        drift[20] += 4.5 * Constants.PPM * TARGET;
+        drift[BAD_FRAME] += 4.5 * Constants.PPM * TARGET;
         Run r = drive(frames, WAIT_FRAMES, drift);
         assertEquals(1, r.corrections, "a single bad reading must not move the correction");
-        assertEquals(r.corr[19], r.corr[21], "the correction stands across the bad frame");
+        assertEquals(r.corr[BAD_FRAME - 1], r.corr[BAD_FRAME + 1], "the correction stands across the bad frame");
         assertTrue(Math.abs(r.finalErrorHz) <= TOL_HZ,
                 "must stay locked: " + r.finalErrorHz / TARGET * 1e6 + " ppm");
     }
@@ -172,8 +182,9 @@ class FrequencyFllTest {
         // after the previous one does.
         FrequencyFll fll = new FrequencyFll();
         long fourSec = 4L * SR;
+        long readAt  = (long) WAIT_FRAMES * N;
         fll.update(TARGET, TARGET + 0.05, 0, N, SR, N);                    // 50 ppm: corrected
-        fll.update(TARGET, TARGET, 2L * N, 3L * N, SR, N);                 // on grid: tracking
+        fll.update(TARGET, TARGET, readAt, readAt + N, SR, N);             // on grid past the wait: tracking
         fll.update(TARGET, TARGET + 0.05 * Constants.PPM * TARGET,         // 0.05 ppm over 4 s: a rate
                 fourSec, fourSec + N, SR, N);
         double before = fll.getCorrection();
@@ -188,7 +199,7 @@ class FrequencyFllTest {
     void subBandJitterIsHeldNotChased() {
         // Measurement jitter INSIDE the lock band must not provoke corrections -
         // the loop holds instead of chasing noise.
-        int frames = 80;
+        int frames = 3 * WAIT_FRAMES;
         double[] drift = constantDrift(frames, 0.05);
         for (int i = 0; i < frames; i++) {
             drift[i] += (i % 2 == 0 ? 1 : -1) * 0.4 * TOL_HZ;        // ±0.4 band, alternating
