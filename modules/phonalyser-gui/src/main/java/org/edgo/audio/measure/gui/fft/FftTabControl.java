@@ -175,6 +175,10 @@ public final class FftTabControl extends AbstractTabControl {
      *  analyser lifecycle); constructor-injected by {@link FftPane}. */
     private final FftController controller;
 
+    /** The offscreen screenshot copy's control: it neither publishes nor
+     *  subscribes on the bus. */
+    private final boolean offScreen;
+
     // Tab-header tile rendering: the shared TileTabFolder (held by
     // AbstractTabControl as toolbarTabs) owns the renderer, spacer images,
     // collapse, hover tooltips and tile painting; this control only feeds it
@@ -220,13 +224,14 @@ public final class FftTabControl extends AbstractTabControl {
     private final int[]    offeredFftLengths;
     private final String[] offeredFftLengthLabels;
 
-    public FftTabControl(Composite parent, FftView view, boolean liveCapture,
+    public FftTabControl(Composite parent, FftView view, boolean offScreen,
                          CorrectionStore correctionStore,
                          FftController controller) {
         super(parent, SWT.NONE);
         this.view = view;
         this.correctionStore = correctionStore;
         this.controller = controller;
+        this.offScreen = offScreen;
         int lengthCap = Runtime.getRuntime().maxMemory() < SMALL_HEAP_BYTES
                 ? SMALL_HEAP_MAX_FFT_LENGTH : Integer.MAX_VALUE;
         int offered = 0;
@@ -265,7 +270,7 @@ public final class FftTabControl extends AbstractTabControl {
         buildPresetsTab(tabs);
         buildUtilityTab(tabs);
         buildCalibrationTab(tabs);
-        if (liveCapture) {
+        if (!offScreen) {
             buildSaveToTab(tabs);
             buildLoadFromTab(tabs);
         }
@@ -274,6 +279,18 @@ public final class FftTabControl extends AbstractTabControl {
         // paint, hover and collapse listeners now that the tabs exist.
         tabs.init();
 
+        if (!offScreen) subscribeLive();
+
+        wireHelpAnchors();
+
+        // Push the initially-loaded active rows into the store last - the view
+        // (built before this control) already holds the same store instance, so
+        // the change events this fires find it ready.
+        syncFftStoreFromRows();
+    }
+
+    /** The live control's bus subscriptions, each unsubscribed on dispose. */
+    private void subscribeLive() {
         // Snap-to-FFT-bin lives on the generator pane and is the missing
         // prerequisite for "Align generator"; refresh the combo's enabled
         // state whenever the generator signal changes.  The bus is UI-only -
@@ -302,13 +319,6 @@ public final class FftTabControl extends AbstractTabControl {
             MessageBus.instance().unsubscribe(Events.AUDIO_FORMAT_CHANGED, audioFormatListener);
             MessageBus.instance().unsubscribe(Events.CALIBRATION_FILE_SAVED, calFileSavedListener);
         });
-
-        wireHelpAnchors();
-
-        // Push the initially-loaded active rows into the store last - the view
-        // (built before this control) already holds the same store instance, so
-        // the change events this fires find it ready.
-        syncFftStoreFromRows();
     }
 
     // -------------------------------------------------------------------------
@@ -404,8 +414,10 @@ public final class FftTabControl extends AbstractTabControl {
         // fftLength - broadcast the change so the generator pane can re-snap its
         // running tone onto a fresh bin.  The new length is already in
         // Preferences; subscribers read it from there.
-        Bindings.onChange(toolbarTabs, prefs.fftLengthProperty(),
-                v -> MessageBus.instance().publish(Events.FFT_LENGTH_CHANGED));
+        if (!offScreen) {
+            Bindings.onChange(toolbarTabs, prefs.fftLengthProperty(),
+                    v -> MessageBus.instance().publish(Events.FFT_LENGTH_CHANGED));
+        }
 
         addLabel(g, I18n.t("fft.settings.window"));
         windowCombo = new Combo(g, SWT.READ_ONLY);

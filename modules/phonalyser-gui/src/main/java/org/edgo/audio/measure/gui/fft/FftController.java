@@ -62,8 +62,8 @@ public final class FftController {
     /** Analysis engine (capture + FFT + averaging on a daemon thread). */
     private final FftAnalyzerWorker worker;
     /** Calibration entries appended to saved spectra as provenance.  Owned by
-     *  the controller; its mutations publish {@link Events#FFT_CALIBRATION_CHANGED}
-     *  (silent on the offscreen screenshot variant). */
+     *  the controller; its mutations publish {@link Events#FFT_CALIBRATION_CHANGED},
+     *  except on the offscreen screenshot copy, whose store is silent. */
     @Getter
     private final CorrectionStore correctionStore;
 
@@ -73,9 +73,12 @@ public final class FftController {
      *  THD mode). */
     public record LoadedSpectrum(FftResult result) {}
 
-    public FftController(FftAnalyzerWorker worker) {
+    /** @param offScreen the offscreen screenshot copy's controller: its store
+     *                   announces no change, so loading its rows reaches no
+     *                   live view */
+    public FftController(FftAnalyzerWorker worker, boolean offScreen) {
         this.worker          = worker;
-        this.correctionStore = new CorrectionStore("FFT", Events.FFT_CALIBRATION_CHANGED);
+        this.correctionStore = new CorrectionStore("FFT", offScreen ? null : Events.FFT_CALIBRATION_CHANGED);
     }
 
     // -------------------------------------------------------------------------

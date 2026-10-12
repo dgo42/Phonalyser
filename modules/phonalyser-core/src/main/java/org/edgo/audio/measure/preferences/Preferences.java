@@ -398,9 +398,6 @@ public final class Preferences {
     private final Property<String> genDpdDual = bound(null);
     /** Folder remembered for the generator's "browse for .dpd" dialog. */
     private final Property<String> genDpdFolder = bound(null);
-    /** DAC predistortion wizard: FFT averages per round.  Persisted so the
-     *  user's choice survives reopening the wizard and restarting the app. */
-    private final Property<Integer> predistortionAverages    = bound(64);
     /** DAC predistortion wizard: target distortion to stop at (%); 0 = run to stall. */
     private final Property<Double>  predistortionTargetPct   = bound(0.000001);
     /** Rectangle / pulse duty cycle as a fraction in [0.001, 0.999].  Default 50 %. */
@@ -1918,8 +1915,6 @@ public final class Preferences {
     public void setGenDpdFolder(String v) { genDpdFolder.set(v); }
     public Property<String> genDpdFolderProperty() { return genDpdFolder; }
 
-    public int    getPredistortionAverages()           { return predistortionAverages.get(); }
-    public void   setPredistortionAverages(int v)       { predistortionAverages.set(v); }
     public double getPredistortionTargetPct()          { return predistortionTargetPct.get(); }
     public void   setPredistortionTargetPct(double v)   { predistortionTargetPct.set(v); }
 
@@ -2279,7 +2274,6 @@ public final class Preferences {
         if (genDpd.get()     != null) root.put("genDpd",     genDpd.get());
         if (genDpdDual.get() != null) root.put("genDpdDual", genDpdDual.get());
         if (genDpdFolder.get() != null) root.put("genDpdFolder", genDpdFolder.get());
-        root.put("predistortionAverages",    predistortionAverages.get());
         root.put("predistortionTargetPct",   predistortionTargetPct.get());
         root.put("genRectangleDuty",      genRectangleDuty.get());
         root.put("genTriangleDuty",       genTriangleDuty.get());
@@ -2665,7 +2659,6 @@ public final class Preferences {
         if (root.get("genDpd")                        instanceof String s) genDpd.set(s);
         if (root.get("genDpdDual")                    instanceof String s) genDpdDual.set(s);
         if (root.get("genDpdFolder")                 instanceof String s) genDpdFolder.set(s);
-        if (root.get("predistortionAverages")        instanceof Number n) predistortionAverages.set(n.intValue());
         if (root.get("predistortionTargetPct")       instanceof Number n) predistortionTargetPct.set(n.doubleValue());
         if (root.get("genRectangleDuty")             instanceof Number n) genRectangleDuty.set(n.doubleValue());
         if (root.get("genTriangleDuty")              instanceof Number n) genTriangleDuty.set(n.doubleValue());

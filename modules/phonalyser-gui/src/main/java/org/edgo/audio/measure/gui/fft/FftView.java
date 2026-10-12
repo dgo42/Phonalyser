@@ -487,8 +487,16 @@ public final class FftView extends AbstractFreqDomainView {
     private int calInvF2Bin;
     private ToneLobe[] calInvSpans;
 
+    /** The offscreen screenshot copy's view - silent and deaf on the bus, see
+     *  the constructor. */
+    private final boolean offScreen;
+
+    /** @param offScreen the offscreen screenshot copy's view: it neither
+     *                   publishes nor subscribes on the bus and does not react
+     *                   to preference changes - it only draws the snapshot it
+     *                   is given */
     public FftView(Composite parent, CorrectionStore correctionStore,
-                   FftController controller) {
+                   FftController controller, boolean offScreen) {
         // Pass prefs-driven BACKGROUND + SPECTRUM through the override
         // map so the base allocates the right colour once; everything
         // else uses the light-theme defaults from AbstractMeasurementView.
@@ -503,6 +511,7 @@ public final class FftView extends AbstractFreqDomainView {
                 ColorRole.RIGHT_BTN_CHAN, Preferences.instance().getOscRightChannelColor()));
         this.correctionStore = correctionStore;
         this.controller      = controller;
+        this.offScreen       = offScreen;
         // Chapter-level help anchor: Ctrl+F1 anywhere on the spectrum
         // canvas opens fft.html.  The header buttons / THD table /
         // crosshair aren't separate widgets (everything is custom-
@@ -510,86 +519,8 @@ public final class FftView extends AbstractFreqDomainView {
         // bottom-out at the chapter and the user navigates within.
         setData("helpAnchor", "fft.html");
         Display d = getDisplay();
-        // Paint-on-result: subscribe to FFT_RESULT_AVAILABLE (published
-        // by the worker on the UI thread after each analysis) and force
-        // the paint to fire synchronously rather than letting SWT
-        // coalesce multiple per-tick redraws into one delayed paint.
-        // At typical analysis cadences (1-5 ticks per second) the
-        // per-tick paint cost is well under the hop interval, so
-        // blocking the UI thread for this paint is negligible.
-        MessageBus bus = MessageBus.instance();
-        bus.subscribe(Events.FFT_RESULT_AVAILABLE, onResultReady);
-        bus.subscribe(Events.FFT_CAPTURE_RESYNC, onCaptureResync);
-        // The bus is UI-only - every publisher of this event is on the display
-        // thread - so a plain subscription is correct; unsubscribed on dispose.
-        bus.subscribe(Events.GENERATOR_SIGNAL_CHANGED, onGenChangeForFll);
-        addDisposeListener(e ->
-                bus.unsubscribe(Events.GENERATOR_SIGNAL_CHANGED, onGenChangeForFll));
-        bus.subscribe(Events.FFT_ALIGN_MAG_DRIFT, onAlignMagDrift);
-        bus.subscribe(Events.FFT_CALIBRATION_CHANGED, onCalibrationChanged);
-        bus.subscribe(Events.AUDIO_FORMAT_CHANGED, onAudioFormatChanged);
-        // Window-function changes reset the running statistics - the control
-        // writes the pref, the view reacts to the pref, neither calls the other.
-        // Every settings/THD parameter whose side-effect targets the view is
-        // wired the same way: the control binds the pref (two-way), the view
-        // subscribes to the pref here, and neither calls the other.
+        if (!offScreen) subscribeLive();
         Preferences viewPrefs = Preferences.instance();
-        Bindings.onChange(this, viewPrefs.fftWindowProperty(),           w -> resetStatistics());
-        // Switching channel restarts the accumulation so it re-captures the new
-        // channel from 0 - the L/R ToolButtons write the pref, the view reacts here.
-        Bindings.onChange(this, viewPrefs.fftChannelProperty(),          v -> resetStatistics());
-        // Distortion-table toggle: the external button follows the table's
-        // visibility, then refresh the extracted shell + repaint.
-        Bindings.onChange(this, viewPrefs.fftDistortionTableVisibleProperty(), v -> {
-            syncDataButtons();
-            syncExternalShell();
-            redraw();
-        });
-        // FFT length re-snaps the generator's tone (pane publishes the bus
-        // event) AND invalidates the accumulator - the view restarts averaging.
-        Bindings.onChange(this, viewPrefs.fftLengthProperty(),           v -> resetStatistics());
-        // Coherent ↔ incoherent changes the accumulator semantics - restart.
-        Bindings.onChange(this, viewPrefs.fftCoherentAveragingProperty(), v -> resetStatistics());
-        // Multi-tone detect threshold reshapes which peaks count as tones, i.e.
-        // how the coherent average is de-rotated - the accumulated frames used the
-        // old grid, so restart averaging when it changes.
-        Bindings.onChange(this, viewPrefs.fftStrongToneRelDbProperty(),   v -> resetStatistics());
-        // ADC re-calibration rescales every measured voltage; DAC re-calibration
-        // changes the generated (loopback) signal level - either invalidates the
-        // accumulated spectrum, so restart averaging on a calibration change of
-        // the device in force.
-        Bindings.onEvent(this, Events.ADC_CALIBRATION_CHANGED, (DeviceRef device) -> {
-            if (AudioBackend.instance().isActiveDevice(device, true)) resetStatistics();
-        });
-        Bindings.onEvent(this, Events.DAC_CALIBRATION_CHANGED, (DeviceRef device) -> {
-            if (AudioBackend.instance().isActiveDevice(device, false)) resetStatistics();
-        });
-        // Selecting an active alignment mode (PID / FLL) resets its loop so each
-        // session converges fresh; NONE deliberately resets nothing (the
-        // generator stays at the stabilized frequency, the converged correction
-        // is retained).  Only a real change reaches here (equals-guarded).
-        Bindings.onChange(this, viewPrefs.fftAlignGeneratorProperty(),
-                mode -> { if (mode != AlignGenerator.NONE) controller.resetFrequencyLock(); });
-        // Log-axis remap, distortion-range corners (THD tile) - pure repaints,
-        // no statistics reset.
-        Bindings.onChange(this, viewPrefs.fftLogFreqAxisProperty(),      v -> redraw());
-        // THD settings (HP/LP distortion band, manual fundamental, max harmonics):
-        // repaint, and for a displayed STATIC spectrum re-apply them + recompute
-        // (the live worker already re-reads them every tick).
-        Bindings.onChange(this, viewPrefs.fftDistMinEnabledProperty(),    v -> onThdSettingChanged());
-        Bindings.onChange(this, viewPrefs.fftDistMinHzProperty(),         v -> onThdSettingChanged());
-        Bindings.onChange(this, viewPrefs.fftDistMaxEnabledProperty(),    v -> onThdSettingChanged());
-        Bindings.onChange(this, viewPrefs.fftDistMaxHzProperty(),         v -> onThdSettingChanged());
-        Bindings.onChange(this, viewPrefs.fftManualFundEnabledProperty(), v -> onThdSettingChanged());
-        Bindings.onChange(this, viewPrefs.fftManualFundVrmsProperty(),    v -> onThdSettingChanged());
-        Bindings.onChange(this, viewPrefs.fftThdMaxHarmonicProperty(),    v -> onThdSettingChanged());
-        Bindings.onChange(this, viewPrefs.fftMagUnitProperty(), v -> {
-            if (magUnitCombo == null || magUnitCombo.isDisposed()) return;
-            magUnitCombo.select(v.ordinal());
-        });
-
-        // Calc-up-to-harmonic drives the external THD window's row count.
-        Bindings.onChange(this, viewPrefs.fftCalcMaxHarmonicProperty(),  v -> { resizeExternalShellToContent(); onThdSettingChanged(); });
         // Pick up FFT-only prefs (harmonic dot, freq-resp response,
         // before-cal dot, cal overlay) that aren't part of the base
         // palette - kept as view-local fields below.
@@ -813,6 +744,91 @@ public final class FftView extends AbstractFreqDomainView {
             update();
         }
         return isRunning();
+    }
+
+    /** The live view's bus subscriptions and preference reactions - the
+     *  offscreen screenshot copy wires none of them. */
+    private void subscribeLive() {
+        // Paint-on-result: subscribe to FFT_RESULT_AVAILABLE (published
+        // by the worker on the UI thread after each analysis) and force
+        // the paint to fire synchronously rather than letting SWT
+        // coalesce multiple per-tick redraws into one delayed paint.
+        // At typical analysis cadences (1-5 ticks per second) the
+        // per-tick paint cost is well under the hop interval, so
+        // blocking the UI thread for this paint is negligible.
+        MessageBus bus = MessageBus.instance();
+        bus.subscribe(Events.FFT_RESULT_AVAILABLE, onResultReady);
+        bus.subscribe(Events.FFT_CAPTURE_RESYNC, onCaptureResync);
+        // The bus is UI-only - every publisher of this event is on the display
+        // thread - so a plain subscription is correct; unsubscribed on dispose.
+        bus.subscribe(Events.GENERATOR_SIGNAL_CHANGED, onGenChangeForFll);
+        addDisposeListener(e ->
+                bus.unsubscribe(Events.GENERATOR_SIGNAL_CHANGED, onGenChangeForFll));
+        bus.subscribe(Events.FFT_ALIGN_MAG_DRIFT, onAlignMagDrift);
+        bus.subscribe(Events.FFT_CALIBRATION_CHANGED, onCalibrationChanged);
+        bus.subscribe(Events.AUDIO_FORMAT_CHANGED, onAudioFormatChanged);
+        // Window-function changes reset the running statistics - the control
+        // writes the pref, the view reacts to the pref, neither calls the other.
+        // Every settings/THD parameter whose side-effect targets the view is
+        // wired the same way: the control binds the pref (two-way), the view
+        // subscribes to the pref here, and neither calls the other.
+        Preferences viewPrefs = Preferences.instance();
+        Bindings.onChange(this, viewPrefs.fftWindowProperty(),           w -> resetStatistics());
+        // Switching channel restarts the accumulation so it re-captures the new
+        // channel from 0 - the L/R ToolButtons write the pref, the view reacts here.
+        Bindings.onChange(this, viewPrefs.fftChannelProperty(),          v -> resetStatistics());
+        // Distortion-table toggle: the external button follows the table's
+        // visibility, then refresh the extracted shell + repaint.
+        Bindings.onChange(this, viewPrefs.fftDistortionTableVisibleProperty(), v -> {
+            syncDataButtons();
+            syncExternalShell();
+            redraw();
+        });
+        // FFT length re-snaps the generator's tone (pane publishes the bus
+        // event) AND invalidates the accumulator - the view restarts averaging.
+        Bindings.onChange(this, viewPrefs.fftLengthProperty(),           v -> resetStatistics());
+        // Coherent ↔ incoherent changes the accumulator semantics - restart.
+        Bindings.onChange(this, viewPrefs.fftCoherentAveragingProperty(), v -> resetStatistics());
+        // Multi-tone detect threshold reshapes which peaks count as tones, i.e.
+        // how the coherent average is de-rotated - the accumulated frames used the
+        // old grid, so restart averaging when it changes.
+        Bindings.onChange(this, viewPrefs.fftStrongToneRelDbProperty(),   v -> resetStatistics());
+        // ADC re-calibration rescales every measured voltage; DAC re-calibration
+        // changes the generated (loopback) signal level - either invalidates the
+        // accumulated spectrum, so restart averaging on a calibration change of
+        // the device in force.
+        Bindings.onEvent(this, Events.ADC_CALIBRATION_CHANGED, (DeviceRef device) -> {
+            if (AudioBackend.instance().isActiveDevice(device, true)) resetStatistics();
+        });
+        Bindings.onEvent(this, Events.DAC_CALIBRATION_CHANGED, (DeviceRef device) -> {
+            if (AudioBackend.instance().isActiveDevice(device, false)) resetStatistics();
+        });
+        // Selecting an active alignment mode (PID / FLL) resets its loop so each
+        // session converges fresh; NONE deliberately resets nothing (the
+        // generator stays at the stabilized frequency, the converged correction
+        // is retained).  Only a real change reaches here (equals-guarded).
+        Bindings.onChange(this, viewPrefs.fftAlignGeneratorProperty(),
+                mode -> { if (mode != AlignGenerator.NONE) controller.resetFrequencyLock(); });
+        // Log-axis remap, distortion-range corners (THD tile) - pure repaints,
+        // no statistics reset.
+        Bindings.onChange(this, viewPrefs.fftLogFreqAxisProperty(),      v -> redraw());
+        // THD settings (HP/LP distortion band, manual fundamental, max harmonics):
+        // repaint, and for a displayed STATIC spectrum re-apply them + recompute
+        // (the live worker already re-reads them every tick).
+        Bindings.onChange(this, viewPrefs.fftDistMinEnabledProperty(),    v -> onThdSettingChanged());
+        Bindings.onChange(this, viewPrefs.fftDistMinHzProperty(),         v -> onThdSettingChanged());
+        Bindings.onChange(this, viewPrefs.fftDistMaxEnabledProperty(),    v -> onThdSettingChanged());
+        Bindings.onChange(this, viewPrefs.fftDistMaxHzProperty(),         v -> onThdSettingChanged());
+        Bindings.onChange(this, viewPrefs.fftManualFundEnabledProperty(), v -> onThdSettingChanged());
+        Bindings.onChange(this, viewPrefs.fftManualFundVrmsProperty(),    v -> onThdSettingChanged());
+        Bindings.onChange(this, viewPrefs.fftThdMaxHarmonicProperty(),    v -> onThdSettingChanged());
+        Bindings.onChange(this, viewPrefs.fftMagUnitProperty(), v -> {
+            if (magUnitCombo == null || magUnitCombo.isDisposed()) return;
+            magUnitCombo.select(v.ordinal());
+        });
+
+        // Calc-up-to-harmonic drives the external THD window's row count.
+        Bindings.onChange(this, viewPrefs.fftCalcMaxHarmonicProperty(),  v -> { resizeExternalShellToContent(); onThdSettingChanged(); });
     }
 
     private void disposeResources() {
@@ -1060,8 +1076,16 @@ public final class FftView extends AbstractFreqDomainView {
                 floors[i] = Double.NaN;
                 continue;
             }
+            bins[i] = bin;
+            // The coherent average's own local band top for the line, the one
+            // the DPD engine reads too; the band beside the line in this
+            // spectrum only where no average keeps one.
+            double localTopDbFs = r.localBandTopDbFs(bin);
+            if (Double.isFinite(localTopDbFs)) {
+                floors[i] = localTopDbFs;
+                continue;
+            }
             double floorLin = LOBE.lineFloor(mag, bin, half, r.freqResolution, r.windowNenbwBins);
-            bins[i]   = bin;
             floors[i] = floorLin > 0.0 ? 20.0 * Math.log10(floorLin) : Double.NaN;
         }
         r.lineFloorBins = bins;
@@ -1220,6 +1244,7 @@ public final class FftView extends AbstractFreqDomainView {
      *  {@code Preferences}.  Called after every view-internal pan /
      *  zoom and from {@link #autoSetup()} / {@link #maximize()}. */
     private void fireRangeChanged() {
+        if (offScreen) return;
         MessageBus.instance().publish(Events.FFT_RANGE_CHANGED);
     }
 

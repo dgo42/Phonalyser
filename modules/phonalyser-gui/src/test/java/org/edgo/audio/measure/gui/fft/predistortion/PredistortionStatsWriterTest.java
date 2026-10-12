@@ -116,7 +116,7 @@ class PredistortionStatsWriterTest {
         ProductPhasors raw = new ProductPhasors(
                 new int[]{ 2, 1 }, new int[]{ 0, 1 },
                 new double[]{ 1.0e-3, 0.0 }, new double[]{ 0.0, 5.0e-4 },
-                new double[]{ 2000.0, 2100.0 });
+                new double[]{ 2000.0, 2100.0 }, new double[]{ Double.NaN, Double.NaN });
         writer.productRound(4, r, raw, new double[]{ 0.0, -0.5 });   // F2: 0.5 at -90 degrees
         writer.close();
 

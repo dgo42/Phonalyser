@@ -85,6 +85,10 @@ public final class FftPane extends AbstractPane {
     /** The generator controller the predistortion wizard drives - stored so
      *  {@link #openPredistortionForCapture()} can construct the wizard. */
     private final GeneratorController genController;
+    /** The live analyser worker the predistortion wizard registers its
+     *  engine on; {@code null} on the offscreen clone, which never opens the
+     *  wizard. */
+    private final FftAnalyzerWorker worker;
     private FlatScrollbar   freqScrollbar;
     private FlatScrollbar   magScrollbar;
 
@@ -144,17 +148,19 @@ public final class FftPane extends AbstractPane {
      * the Record LED lights up and the view simply picks up the worker's
      * next published result.
      */
-    public FftPane(Composite parent, GeneratorController genController, FftController controller) {
-        this(parent, true, genController, controller);
+    public FftPane(Composite parent, GeneratorController genController, FftController controller,
+                   FftAnalyzerWorker worker) {
+        this(parent, false, genController, controller, worker);
     }
 
     /**
      * Offscreen screenshot variant: builds its own idle controller (worker
      * never started, no audio device opened) and renders from that controller's
-     * store.
+     * store.  Silent: neither it nor anything it owns publishes or subscribes
+     * on the bus, so the copy never reaches the live pane.
      */
     public FftPane(Composite parent) {
-        this(parent, false, null, null);
+        this(parent, true, null, null, null);
     }
 
     /** Builds + shows the DAC-predistortion wizard non-modally for a help
@@ -166,7 +172,7 @@ public final class FftPane extends AbstractPane {
         if (genController == null) return null;
         PredistortionWizardDialog d = new PredistortionWizardDialog(
                 getGroup().getShell(), controller, view,
-                controller.getCorrectionStore());
+                controller.getCorrectionStore(), worker);
         d.buildAndShow();
         return d;
     }
@@ -179,8 +185,8 @@ public final class FftPane extends AbstractPane {
         return toolbarTabs == null ? null : toolbarTabs.openAdcCalibrationForCapture();
     }
 
-    private FftPane(Composite parent, boolean liveCapture, GeneratorController genController,
-                    FftController controller) {
+    private FftPane(Composite parent, boolean offScreen, GeneratorController genController,
+                    FftController controller, FftAnalyzerWorker worker) {
         super(parent);
         // FFT-length changes, capture acquire / release, and the
         // generator-running query all flow through the MessageBus - no
@@ -209,15 +215,16 @@ public final class FftPane extends AbstractPane {
 
         // The live pane receives the app-lifetime controller (built in
         // UIEngines), which owns the correction store.  The offscreen
-        // screenshot clone (liveCapture=false) builds its own idle controller
-        // (worker never started) and takes that controller's store.
-        if (!liveCapture) {
-            controller = new FftController(new FftAnalyzerWorker(d));
+        // screenshot clone (offScreen) builds its own idle controller (worker
+        // never started) and takes that controller's silent store.
+        if (offScreen) {
+            controller = new FftController(new FftAnalyzerWorker(d), true);
         }
         this.controller = controller;
         this.genController = genController;
+        this.worker = worker;
         CorrectionStore correctionStore = controller.getCorrectionStore();
-        view = new FftView(plotRow, correctionStore, controller);
+        view = new FftView(plotRow, correctionStore, controller, offScreen);
         magScrollbar = new FlatScrollbar(plotRow, SWT.VERTICAL);
         magScrollbar.setMinimum(0);
         magScrollbar.setMaximum(SCROLL_RANGE);
@@ -271,7 +278,7 @@ public final class FftPane extends AbstractPane {
         // the record button always stays accessible.
         Composite toolbarRow = new Composite(group, SWT.NONE);
         toolbarRow.setLayoutData(new GridData(SWT.FILL, SWT.BEGINNING, true, false));
-        GridLayout trGl = new GridLayout(liveCapture ? 3 : 2, false);
+        GridLayout trGl = new GridLayout(offScreen ? 2 : 3, false);
         trGl.marginWidth = 0; trGl.marginHeight = 0; trGl.horizontalSpacing = 4;
         toolbarRow.setLayout(trGl);
 
@@ -280,7 +287,7 @@ public final class FftPane extends AbstractPane {
         // the chart, scrollbars and Record button.  Cross-pane concerns (stop
         // recording on file load, open the screenshot dialog) are routed back
         // here over the MessageBus.
-        toolbarTabs = new FftTabControl(toolbarRow, view, liveCapture, correctionStore,
+        toolbarTabs = new FftTabControl(toolbarRow, view, offScreen, correctionStore,
                 controller);
         toolbarTabs.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
         // Collapsing the tab body (strip double-click / Enter, or the
@@ -291,13 +298,14 @@ public final class FftPane extends AbstractPane {
         // Predistortion-wizard button (live pane only) - left of Record,
         // mirroring the Frequency-Response pane's wizard button.  Drives the
         // running generator + FFT through the closed-loop predistortion run.
-        if (liveCapture && genController != null) {
+        if (!offScreen && genController != null) {
             FftController wizardController = controller;   // effectively final for the lambda
             Button wizardButton = createActionButton(toolbarRow, SWT.PUSH);
             wizardButton.setImage(IconUtils.icon(d, Icon.WAND));
             wizardButton.setToolTipText(I18n.t("predistortion.button.wizard.tooltip"));
             wizardButton.addListener(SWT.Selection, e ->
-                    new PredistortionWizardDialog(group.getShell(), wizardController, view, correctionStore).open());
+                    new PredistortionWizardDialog(group.getShell(), wizardController, view, correctionStore,
+                            worker).open());
             wizardButton.setData("helpAnchor", "fft.html#fft-predistortion");
         }
 
@@ -329,15 +337,17 @@ public final class FftPane extends AbstractPane {
         freqRespStoppedListener     = ignored -> onFreqRespMeasurementStopped();
         phaseAlignRefusedListener   = this::onPhaseAlignRefused;
         phaseAlignPilotLostListener = this::onPhaseAlignPilotLost;
-        MessageBus bus = MessageBus.instance();
-        bus.subscribe(Events.FFT_RANGE_CHANGED,             rangeChangedListener);
-        bus.subscribe(Events.FFT_RECORDING_AUTO_STOPPED,    autoStoppedListener);
-        bus.subscribe(Events.FFT_RECORDING_STOP_REQUESTED,  recordStopRequestedListener);
-        bus.subscribe(Events.FFT_SCREENSHOT_REQUESTED,      screenshotRequestedListener);
-        bus.subscribe(Events.FREQRESP_MEASUREMENT_STARTED,  freqRespStartedListener);
-        bus.subscribe(Events.FREQRESP_MEASUREMENT_STOPPED,  freqRespStoppedListener);
-        bus.subscribe(Events.FFT_PHASE_ALIGN_REFUSED,       phaseAlignRefusedListener);
-        bus.subscribe(Events.FFT_PHASE_ALIGN_PILOT_LOST,    phaseAlignPilotLostListener);
+        if (!offScreen) {
+            MessageBus bus = MessageBus.instance();
+            bus.subscribe(Events.FFT_RANGE_CHANGED,             rangeChangedListener);
+            bus.subscribe(Events.FFT_RECORDING_AUTO_STOPPED,    autoStoppedListener);
+            bus.subscribe(Events.FFT_RECORDING_STOP_REQUESTED,  recordStopRequestedListener);
+            bus.subscribe(Events.FFT_SCREENSHOT_REQUESTED,      screenshotRequestedListener);
+            bus.subscribe(Events.FREQRESP_MEASUREMENT_STARTED,  freqRespStartedListener);
+            bus.subscribe(Events.FREQRESP_MEASUREMENT_STOPPED,  freqRespStoppedListener);
+            bus.subscribe(Events.FFT_PHASE_ALIGN_REFUSED,       phaseAlignRefusedListener);
+            bus.subscribe(Events.FFT_PHASE_ALIGN_PILOT_LOST,    phaseAlignPilotLostListener);
+        }
 
         recordButton.addListener(SWT.Selection, e -> {
             if (recordButton.getSelection()) {

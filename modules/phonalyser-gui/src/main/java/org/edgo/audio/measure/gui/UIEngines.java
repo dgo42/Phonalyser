@@ -47,6 +47,9 @@ public final class UIEngines {
     @Getter private final GeneratorController generatorController;
     @Getter private final ScopeController     scopeController;
     @Getter private final FftController       fftController;
+    /** The FFT analyser's worker - the predistortion wizard registers its
+     *  engine on it and hands it to the engine for the lines' restarts. */
+    @Getter private final FftAnalyzerWorker   fftWorker;
     /** The app-lifetime device-list snapshot the Preferences dialog is served
      *  from - primed once in the background at start-up.  Lives here with the
      *  engines because it shares their lifetime and their consumers. */
@@ -68,7 +71,8 @@ public final class UIEngines {
         // around at the asking end.
         generatorController = new GeneratorController();
         scopeController     = new ScopeController();
-        fftController       = new FftController(new FftAnalyzerWorker(display));
+        fftWorker           = new FftAnalyzerWorker(display);
+        fftController       = new FftController(fftWorker, false);
         deviceCatalog       = new DeviceCatalog(AudioBackend.instance());
     }
 
