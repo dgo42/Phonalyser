@@ -549,17 +549,6 @@ public final class ServerGeneratorStub implements AudioDeviceManager, RemoteGene
     }
 
     @Override
-    public void applyCompensationLines(double[] ampRatios, int[] hNums, double[] phiInits) {
-        record("applyCompensationLines", ampRatios, hNums, phiInits);
-    }
-
-    @Override
-    public void applyDualToneCompensationLines(double[] ampRatios, int[] aCoef, int[] bCoef,
-            double[] phiInits) {
-        record("applyDualToneCompensationLines", ampRatios, aCoef, bCoef, phiInits);
-    }
-
-    @Override
     public void clearCompensation() {
         record("clearCompensation");
     }
