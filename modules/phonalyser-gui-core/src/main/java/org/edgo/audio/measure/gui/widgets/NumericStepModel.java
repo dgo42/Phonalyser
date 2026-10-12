@@ -77,6 +77,8 @@ public final class NumericStepModel {
     private static final int VALUE_SIG_DIGITS = 12;
     /** The PERCENT policy's wheel ratio: one notch targets ±10 %. */
     private static final double PERCENT_STEP_FACTOR = 1.1;
+    /** A down arrow step that would reach zero is cut by one decade. */
+    private static final double DECADE = 10.0;
     /** PERCENT-policy wheel step while a log unit (dBV) is displayed: one
      *  notch walks the 10-dB grid (0 -> −10 -> −20 ...) - stepping the linear
      *  value by 10 % would produce 0.83-dB crumbs. */
@@ -431,7 +433,8 @@ public final class NumericStepModel {
     }
 
     /** ±1 in the unit currently displayed: ±1 kHz at 192 kHz, ±1 mV at
-     *  200 mV, ±1 dB when dBV or dBFS is sticky. */
+     *  200 mV, ±1 dB when dBV or dBFS is sticky.  A down step never reaches
+     *  zero, which many fields refuse: 1 V -> 0.9 V. */
     private double plusOneDisplayedUnit(int dir) {
         Unit u = currentUnit();
         if (u.log()) {
@@ -440,7 +443,11 @@ public final class NumericStepModel {
         if (u.fsRelative()) {
             return canonicalFromDbfs(dbfsFromCanonical(value) + dir);
         }
-        return value + dir * u.factor();
+        double step = u.factor();
+        while (dir < 0 && value > 0 && value - step <= 0) {
+            step /= DECADE;
+        }
+        return value + dir * step;
     }
 
     /** Up: add 10 % and floor the result onto its decade's 10 %-grid -

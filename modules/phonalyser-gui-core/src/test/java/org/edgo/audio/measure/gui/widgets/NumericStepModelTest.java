@@ -111,6 +111,35 @@ class NumericStepModelTest {
     }
 
     @Test
+    void percentArrow_downNeverReachesZero() {
+        NumericStepModel v = new NumericStepModel(UnitFamily.AMPLITUDE, 1e-9, 10, 5);
+        v.setValue(1.0);
+        v.arrow(-1);
+        assertEquals(0.9, v.getValue(), EPS, "1 V -> 0.9 V, not 0 clamped to 1 nV");
+        v.arrow(-1);
+        assertEquals(0.8, v.getValue(), EPS, "0.9 V still displays in V");
+        v.setValue(0.001);
+        v.arrow(-1);
+        assertEquals(0.0009, v.getValue(), EPS, "1 mV -> 900 uV");
+        v.setValue(1.5);
+        v.arrow(-1);
+        assertEquals(0.5, v.getValue(), EPS, "a whole unit stays when it leaves a value");
+        v.setValue(1.0);
+        v.arrow(+1);
+        assertEquals(2.0, v.getValue(), EPS, "up is unchanged");
+
+        NumericStepModel f = new NumericStepModel(UnitFamily.FREQUENCY, 0.01, 384_000, 9);
+        f.setValue(1000);
+        f.arrow(-1);
+        assertEquals(900, f.getValue(), EPS, "1 kHz -> 900 Hz");
+
+        NumericStepModel p = new NumericStepModel(UnitFamily.PERCENT, 1e-7, 100, 8);
+        p.setValue(0.1);
+        p.arrow(-1);
+        assertEquals(0.09, p.getValue(), EPS, "cut by decades until it stays above zero");
+    }
+
+    @Test
     void percentWheel_stickyDbv_walksTheTenDecibelGrid() {
         // In log display the wheel steps dB, not linear volts: 0 -> −10 -> −20;
         // an off-grid −3.5 snaps to −10 down and 0 up.
