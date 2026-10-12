@@ -21,7 +21,6 @@ package org.edgo.audio.measure.generator;
 import java.io.BufferedReader;
 import java.io.FileReader;
 import java.io.IOException;
-import java.util.Arrays;
 import java.util.Locale;
 import java.util.SplittableRandom;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -32,7 +31,6 @@ import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.fft.HarmonicsCsv;
 
-import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.Value;
 import lombok.extern.log4j.Log4j2;
@@ -281,317 +279,86 @@ public class SignalGenerator implements GeneratorControls {
     private final AtomicBoolean logSweepRestart = new AtomicBoolean(false);
 
     // -------------------------------------------------------------------------
-    // Compensation state (SINE_COMP and DUAL_TONE_COMP)
+    // Harmonic compensation state (SINE_COMP only)
     // -------------------------------------------------------------------------
 
-    /** The periods over which a per-line apply fades each line it changes:
-     *  periods of the fundamental (F1 for a dual tone) or of the line's own
-     *  frequency, whichever take the longer.  A step in a line's amplitude or
-     *  phase is a discontinuity in the output: a glitch on the DAC, and a
-     *  frame the analyser's discontinuity gates reject. */
-    public static final int LINE_FADE_PERIODS = 10;
+    /** Immutable, atomically-published harmonic-correction set for
+     *  {@link GenSignalForm#SINE_COMP}.  {@link #ddsSineCompensated}
+     *  reads the {@code volatile} {@link #comp} reference once per sample,
+     *  so the predistortion wizard can hot-swap corrections on the running
+     *  generator (via {@link #applyCompensation}) with no audio restart -
+     *  the audio thread never observes a half-built correction set. */
+    private static final class Compensation {
+        /** Per-harmonic amplitude ratio relative to the fundamental (amplitude_pct / 100). */
+        private final double[] amp;
+        /** Harmonic number (2, 3, 4, ...) - integer multiple of the master accumulator. */
+        private final int[]    hNum;
+        /** Each harmonic's initial phase as a 64-bit DDS phase offset -
+         *  precomputed here (not lazily on the audio thread) so the
+         *  compensated kernel runs purely on the sine/cos table instead of
+         *  one {@code Math.cos} per harmonic per sample.  Quantization
+         *  ≤ 2π/2⁶² rad - far below the harmonics' own error. */
+        private final long[]   phaseOff64;
 
-    /**
-     * A compensation table as its caller states it: per entry the line it
-     * cancels - the product at {@code a f1 + b f2}, a single tone's harmonic
-     * {@code h} being the entry {@code (h, 0)} - with its amplitude ratio and its
-     * initial phase in radians, the four arrays parallel.  It owns the one rule
-     * a per-line apply changes a table by, {@link #withLines}, so the
-     * generator's own table and a stored copy of it - a server rebuilds its
-     * generator from what it was commanded - hold the same entries at the same
-     * indices.  The arrays are copied in and copied out again, so a set stays
-     * as it was built whatever its holder does with what it reads - the
-     * generator's table reads its arrays once, when it is built, and the
-     * kernel reads the table's own copies.  {@code equals} is the record's,
-     * array identity, and nothing compares two sets.
-     */
-    public record CompensationSet(int[] a, int[] b, double[] ampRatios, double[] phiInits) {
-
-        /** No entries at all - what a per-line apply on no table starts from. */
-        public static final CompensationSet EMPTY =
-                new CompensationSet(new int[0], new int[0], new double[0], new double[0]);
-
-        public CompensationSet {
-            a         = a.clone();
-            b         = b.clone();
-            ampRatios = ampRatios.clone();
-            phiInits  = phiInits.clone();
-        }
-
-        /** A copy of each line's multiple of F1 (the harmonic number). */
-        @Override
-        public int[] a() {
-            return a.clone();
-        }
-
-        /** A copy of each line's multiple of F2 (zero for a single tone). */
-        @Override
-        public int[] b() {
-            return b.clone();
-        }
-
-        /** A copy of each line's amplitude ratio. */
-        @Override
-        public double[] ampRatios() {
-            return ampRatios.clone();
-        }
-
-        /** A copy of each line's initial phase, radians. */
-        @Override
-        public double[] phiInits() {
-            return phiInits.clone();
-        }
-
-        /** This set with the named lines changed: a line it holds takes its new
-         *  ratio and phase at the same index - keeping its phase when named with
-         *  ratio zero, which a fade then takes out at that phase - and a line it
-         *  lacks is appended, unless it is named with ratio zero.  Every other
-         *  entry stays as it is, at its index. */
-        public CompensationSet withLines(double[] lineAmps, int[] lineA, int[] lineB,
-                double[] linePhis) {
-            int held = a.length;
-            int cap  = held + lineAmps.length;
-            int[]    na   = Arrays.copyOf(a, cap);
-            int[]    nb   = Arrays.copyOf(b, cap);
-            double[] nAmp = Arrays.copyOf(ampRatios, cap);
-            double[] nPhi = Arrays.copyOf(phiInits, cap);
-            int n = held;
-            for (int j = 0; j < lineAmps.length; j++) {
-                int i = indexOf(na, nb, n, lineA[j], lineB[j]);
-                if (i < 0) {
-                    if (lineAmps[j] == 0.0) continue;
-                    i = n++;
-                    na[i] = lineA[j];
-                    nb[i] = lineB[j];
-                }
-                nAmp[i] = lineAmps[j];
-                if (lineAmps[j] != 0.0) nPhi[i] = linePhis[j];
-            }
-            return new CompensationSet(Arrays.copyOf(na, n), Arrays.copyOf(nb, n),
-                    Arrays.copyOf(nAmp, n), Arrays.copyOf(nPhi, n));
-        }
-
-        /** The entries that name the given lines, in their order - what the set
-         *  holds for them, which for a line faded out is its kept phase; a line
-         *  the set does not hold is left out. */
-        private CompensationSet only(int[] lineA, int[] lineB) {
-            int[]    na   = new int[lineA.length];
-            int[]    nb   = new int[lineA.length];
-            double[] nAmp = new double[lineA.length];
-            double[] nPhi = new double[lineA.length];
-            int n = 0;
-            for (int j = 0; j < lineA.length; j++) {
-                int i = indexOf(a, b, a.length, lineA[j], lineB[j]);
-                if (i < 0) continue;
-                na[n]   = a[i];
-                nb[n]   = b[i];
-                nAmp[n] = ampRatios[i];
-                nPhi[n] = phiInits[i];
-                n++;
-            }
-            return new CompensationSet(Arrays.copyOf(na, n), Arrays.copyOf(nb, n),
-                    Arrays.copyOf(nAmp, n), Arrays.copyOf(nPhi, n));
-        }
-
-        /** The index of the line {@code (la, lb)} among the first {@code n}
-         *  entries of {@code as} / {@code bs}, or -1. */
-        private int indexOf(int[] as, int[] bs, int n, int la, int lb) {
+        private Compensation(double[] ampRatios, int[] hNums, double[] phiInits) {
+            int n = ampRatios.length;
+            this.amp        = ampRatios.clone();
+            this.hNum       = hNums.clone();
+            this.phaseOff64 = new long[n];
             for (int i = 0; i < n; i++) {
-                if (as[i] == la && bs[i] == lb) return i;
-            }
-            return -1;
-        }
-    }
-
-    /**
-     * The correction table the compensated kernels read: per entry the line it
-     * cancels - the product at {@code a f1 + b f2}, whose instantaneous phase is
-     * {@code a theta1 + b theta2}, so a single tone's harmonic {@code h} is the
-     * entry {@code (h, 0)} - with its target amplitude ratio and initial phase.
-     * Published by ONE volatile write ({@link #comp}, {@link #dtComp}) and read
-     * once per sample, so the running generator takes a new table with no audio
-     * restart and the audio thread never sees a half-built one.
-     *
-     * <p>A whole-table apply puts every entry at its target from the first
-     * sample.  A per-line apply derives a successor from the table's
-     * {@link CompensationSet} by {@link CompensationSet#withLines}, which keeps
-     * every entry at its index, gives the named lines their new targets and
-     * appends the lines the table lacks; before its first sample the audio thread
-     * {@link #activate takes over} from the table it rendered last, so an
-     * entry whose target did not change carries on exactly as it was being
-     * rendered, and a changed one fades - magnitude and phase each linearly, per
-     * sample, the phase the shorter way round the circle - from the value being
-     * rendered to its target.  The ramp works on the 64-bit DDS phase offset
-     * itself: the signed difference of two offsets IS the shorter way round.
-     *
-     * <p>Package-private, as are {@link #getComp} and {@link #getDtComp}, for
-     * the test alone: it reads the published entries bit for bit.
-     */
-    static final class CompensationTable {
-        /** The entries as stated - what the next per-line apply derives its
-         *  successor from. */
-        private final CompensationSet set;
-        /** Multiple of the first accumulator: the harmonic number of a single
-         *  tone, the F1 coefficient of a dual-tone product (may be negative). */
-        final int[]    a;
-        /** Multiple of the second accumulator: the F2 coefficient of a
-         *  dual-tone product (may be negative); zero for a single tone, whose
-         *  kernel reads {@link #a} alone. */
-        final int[]    b;
-        /** Target amplitude ratio - to the fundamental, or to the F1 tone. */
-        final double[] amp;
-        /** Target initial phase as a 64-bit DDS phase offset - precomputed here
-         *  (not on the audio thread) so the kernels run purely on the sine/cos
-         *  table.  Quantisation 2^-62 turns - far below the lines' own error. */
-        final long[]   phaseOff64;
-        /** The whole-table apply - or the first per-line apply on no table -
-         *  this table descends from through per-line applies.  Two tables of
-         *  one lineage hold every line they share at the same index. */
-        private final CompensationTable lineage;
-        /** Per entry, the fade length in samples a change of that entry's line
-         *  takes; {@code null} for a whole table, whose entries take their
-         *  targets at once. */
-        private final int[] fadeSamples;
-
-        // The fade state below is the audio thread's alone: written first by
-        // activate() and from then on only by the kernel.
-
-        /** Each entry's amplitude ratio at the start of its fade. */
-        private final double[] fromAmp;
-        /** Each entry's phase offset at the start of its fade. */
-        private final long[]   fromOff64;
-        /** Samples left in each entry's fade; zero once it renders its target. */
-        private final int[]    remaining;
-        /** One over each entry's fade length - an entry carried over keeps the
-         *  length its fade started with. */
-        private final double[] rampInv;
-        /** How many entries are still fading. */
-        private int ramping;
-
-        /** A whole single-tone table: harmonic {@code hNums[i]} is the entry
-         *  {@code (hNums[i], 0)}. */
-        private CompensationTable(double[] ampRatios, int[] hNums, double[] phiInits) {
-            this(ampRatios, hNums, new int[hNums.length], phiInits);
-        }
-
-        /** A whole table: every entry renders its target from the first sample. */
-        private CompensationTable(double[] ampRatios, int[] aCoef, int[] bCoef, double[] phiInits) {
-            this(new CompensationSet(aCoef, bCoef, ampRatios, phiInits), null, null);
-        }
-
-        /** The table of {@code set}.  With {@code fadeSamples} null it is a
-         *  whole table and starts a lineage of its own; otherwise it is the
-         *  per-line successor of {@code base}, each changed line fading over its
-         *  entry's {@code fadeSamples} - a {@code null} base is no table, and
-         *  the successor then starts a lineage. */
-        private CompensationTable(CompensationSet set, CompensationTable base, int[] fadeSamples) {
-            double[] phis = set.phiInits();
-            int n = phis.length;
-            this.set         = set;
-            this.a           = set.a();
-            this.b           = set.b();
-            this.amp         = set.ampRatios();
-            this.phaseOff64  = new long[n];
-            for (int i = 0; i < n; i++) {
-                phaseOff64[i] = toPhaseOff64(phis[i]);
-            }
-            this.lineage     = base == null ? this : base.lineage;
-            this.fadeSamples = fadeSamples;
-            this.fromAmp     = new double[n];
-            this.fromOff64   = new long[n];
-            this.remaining   = new int[n];
-            this.rampInv     = new double[n];
-        }
-
-        /** An initial phase in radians as a 64-bit DDS phase offset. */
-        private long toPhaseOff64(double phi) {
-            double turns     = phi / (2.0 * Math.PI);
-            double fracTurns = turns - Math.floor(turns);          // [0, 1)
-            // x 2^63 stays in the signed-long range; <<1 doubles to 2^64
-            // with the natural wrap (quantisation 2^-62 turns - irrelevant).
-            return ((long) (fracTurns * 0x1.0p63)) << 1;
-        }
-
-        /**
-         * Takes over from {@code prev}, the table the kernel rendered last - on
-         * the audio thread, once, before this table's first sample.  Within one
-         * lineage an entry whose target {@code prev} also had carries on with
-         * {@code prev}'s fade state as it stands, a changed one fades from the
-         * value {@code prev} would have rendered next, an appended one from
-         * zero at its target phase.  When the table rendered last is of another
-         * lineage - a whole-table apply and a per-line apply landed with no
-         * sample between them - the lineage's whole table stands in for it, at
-         * the targets it would have rendered from its first sample.  A lineage
-         * begun by a per-line apply on no table fades every entry in from zero.
-         * A whole table has nothing to take over: its entries render their
-         * targets at once.
-         */
-        private void activate(CompensationTable prev) {
-            if (fadeSamples == null) return;
-            CompensationTable from = prev != null && prev.lineage == lineage ? prev
-                    : lineage.fadeSamples == null ? lineage : null;
-            // A successor only appends, so the predecessor is never the longer.
-            int carried = from == null ? 0 : Math.min(from.amp.length, amp.length);
-            ramping = 0;
-            for (int i = 0; i < amp.length; i++) {
-                if (i < carried && from.amp[i] == amp[i] && from.phaseOff64[i] == phaseOff64[i]) {
-                    fromAmp[i]   = from.fromAmp[i];
-                    fromOff64[i] = from.fromOff64[i];
-                    remaining[i] = from.remaining[i];
-                    rampInv[i]   = from.rampInv[i];
-                } else {
-                    fromAmp[i]   = i < carried ? from.ampAt(i) : 0.0;
-                    fromOff64[i] = i < carried ? from.offAt(i) : phaseOff64[i];
-                    remaining[i] = fadeSamples[i];
-                    rampInv[i]   = 1.0 / fadeSamples[i];
-                }
-                if (remaining[i] > 0) ramping++;
-            }
-        }
-
-        /** Entry {@code i}'s amplitude ratio on the coming sample - its target
-         *  once its fade is done, the same value the whole table renders. */
-        private double ampAt(int i) {
-            int r = remaining[i];
-            return r == 0 ? amp[i] : amp[i] + (fromAmp[i] - amp[i]) * (r * rampInv[i]);
-        }
-
-        /** Entry {@code i}'s phase offset on the coming sample.  The signed
-         *  64-bit difference to the target is the shorter way round the
-         *  circle, so a fade never turns a line by more than half a turn. */
-        private long offAt(int i) {
-            int r = remaining[i];
-            return r == 0 ? phaseOff64[i]
-                    : phaseOff64[i] + (long) ((fromOff64[i] - phaseOff64[i]) * (r * rampInv[i]));
-        }
-
-        /** Moves every running fade on by the sample just rendered. */
-        private void advance() {
-            if (ramping == 0) return;
-            for (int i = 0; i < remaining.length; i++) {
-                if (remaining[i] > 0 && --remaining[i] == 0) ramping--;
+                double turns     = phiInits[i] / (2.0 * Math.PI);
+                double fracTurns = turns - Math.floor(turns);          // [0, 1)
+                // ·2^63 stays in the signed-long range; <<1 doubles to 2^64
+                // with the natural wrap (quantisation 2^-62 turns - irrelevant).
+                this.phaseOff64[i] = ((long) (fracTurns * 0x1.0p63)) << 1;
             }
         }
     }
 
     /** Active harmonic compensation, or {@code null} for an uncorrected
-     *  sine.  Published atomically - see {@link CompensationTable}. */
-    @Getter(AccessLevel.PACKAGE)
-    private volatile CompensationTable comp;
-    /** The table {@link #ddsSineCompensated} rendered last - audio-thread
-     *  state, the predecessor a newly published table takes over from. */
-    private CompensationTable compRendered;
+     *  sine.  Published atomically - see {@link Compensation}. */
+    private volatile Compensation comp;
+
+    /**
+     * Immutable, atomically-published intermodulation-correction set for
+     * {@link GenSignalForm#DUAL_TONE_COMP}.  The two-tone analogue of
+     * {@link Compensation}: every distortion product of a two-tone signal -
+     * per-tone harmonic <em>and</em> intermodulation product alike - lives at
+     * {@code a·f₁ + b·f₂} for integer {@code (a, b)} and has instantaneous
+     * phase {@code a·θ₁ + b·θ₂}, so a single {@code (a, b)}-indexed table
+     * cancels them all.  {@link #ddsDualToneCompensated} reads the
+     * {@code volatile} {@link #dtComp} reference once per sample for the same
+     * lock-free hot-swap the predistortion wizard relies on.
+     */
+    private static final class DualToneComp {
+        /** Per-product amplitude ratio relative to the |F1|+|F2| reference. */
+        private final double[] amp;
+        /** Integer multiple of the first accumulator {@code θ₁} (may be negative). */
+        private final int[]    a;
+        /** Integer multiple of the second accumulator {@code θ₂} (may be negative). */
+        private final int[]    b;
+        /** Each product's initial phase as a 64-bit DDS offset - precomputed
+         *  here (not on the audio thread) so the kernel stays table-only. */
+        private final long[]   phaseOff64;
+
+        private DualToneComp(double[] ampRatios, int[] aCoef, int[] bCoef, double[] phiInits) {
+            int n = ampRatios.length;
+            this.amp        = ampRatios.clone();
+            this.a          = aCoef.clone();
+            this.b          = bCoef.clone();
+            this.phaseOff64 = new long[n];
+            for (int i = 0; i < n; i++) {
+                double turns     = phiInits[i] / (2.0 * Math.PI);
+                double fracTurns = turns - Math.floor(turns);          // [0, 1)
+                this.phaseOff64[i] = ((long) (fracTurns * 0x1.0p63)) << 1;
+            }
+        }
+    }
 
     /** Active dual-tone intermod compensation, or {@code null} for an
-     *  uncorrected two-tone signal.  Every distortion product of a two-tone
-     *  signal - per-tone harmonic and intermodulation product alike - lives at
-     *  {@code a f1 + b f2}, so the one {@code (a, b)}-indexed table cancels
-     *  them all.  Published atomically - see {@link CompensationTable}. */
-    @Getter(AccessLevel.PACKAGE)
-    private volatile CompensationTable dtComp;
-    /** The table {@link #ddsDualToneCompensated} rendered last - audio-thread
-     *  state, as {@link #compRendered}. */
-    private CompensationTable dtCompRendered;
+     *  uncorrected two-tone signal.  Published atomically - see
+     *  {@link DualToneComp}. */
+    private volatile DualToneComp dtComp;
 
     // -------------------------------------------------------------------------
     // Constructor
@@ -716,7 +483,7 @@ public class SignalGenerator implements GeneratorControls {
                     String.format(Locale.US, "%.4f", 20.0 * Math.log10(ampRatios[i])),
                     String.format(Locale.US, "%.2f", Math.toDegrees(phiInits[i])));
         }
-        this.comp = new CompensationTable(ampRatios, hNums, phiInits);
+        this.comp = new Compensation(ampRatios, hNums, phiInits);
         log.info("Harmonic compensation: {} harmonic(s) from accumulated corrections", n);
     }
 
@@ -969,45 +736,14 @@ public class SignalGenerator implements GeneratorControls {
      * switches it to {@link GenSignalForm#SINE_COMP} - the
      * predistortion wizard applies each round's corrections this way, with
      * no audio restart.  The phasors {@code (ampRatio, harmonic number,
-     * initial phase)} are published as one {@link CompensationTable}, every
-     * entry at its target from the first sample, before the form flips, so the
-     * audio thread never sees a partially-updated set.  Empty arrays leave an
-     * uncorrected sine.
+     * initial phase)} are published as one immutable {@link Compensation}
+     * before the form flips, so the audio thread never sees a
+     * partially-updated set.  Empty arrays leave an uncorrected sine.
      */
     public void applyCompensation(double[] ampRatios, int[] hNums, double[] phiInits) {
-        this.comp = new CompensationTable(ampRatios, hNums, phiInits);
+        this.comp = new Compensation(ampRatios, hNums, phiInits);
         this.form = GenSignalForm.SINE_COMP;
         logCompensation(ampRatios, hNums, phiInits);
-    }
-
-    /**
-     * Changes only the named harmonics of the RUNNING generator's table and
-     * switches it to {@link GenSignalForm#SINE_COMP} as
-     * {@link #applyCompensation} does.  Each named line fades from the
-     * magnitude and phase being rendered to its new ones over
-     * {@link #LINE_FADE_PERIODS} fundamental periods ({@link #lineFadeSamples})
-     * - both linearly, per sample, the phase the shorter way round the
-     * circle - because a step in a
-     * line's amplitude or phase is a glitch on the output and a frame the
-     * analyser's discontinuity gates reject.  A harmonic the table lacks fades
-     * in from zero at its new phase; one named with amplitude zero fades out
-     * at its old phase.  Every other entry stays bit for bit as it is.  The
-     * new table is published by one volatile write, as the whole table is.
-     */
-    @Override
-    public void applyCompensationLines(double[] ampRatios, int[] hNums, double[] phiInits) {
-        int[] zeros = new int[hNums.length];
-        CompensationTable base = comp;
-        CompensationSet set = (base == null ? CompensationSet.EMPTY : base.set)
-                .withLines(ampRatios, hNums, zeros, phiInits);
-        this.comp = new CompensationTable(set, base, lineFades(set));
-        this.form = GenSignalForm.SINE_COMP;
-        if (log.isInfoEnabled()) {
-            CompensationSet named = set.only(hNums, zeros);
-            log.info("Harmonic compensation lines applied, fading over {} samples ({} harmonic(s)):{}",
-                    Arrays.stream(lineFades(named)).max().orElse(0), named.a().length,
-                    describeHarmonics(named.ampRatios(), named.a(), named.phiInits()));
-        }
     }
 
     /** The harmonic set as it reaches the DDS - ratio to the fundamental in
@@ -1016,35 +752,14 @@ public class SignalGenerator implements GeneratorControls {
      *  log and can be compared. */
     private void logCompensation(double[] ampRatios, int[] hNums, double[] phiInits) {
         if (!log.isInfoEnabled()) return;
-        log.info("Harmonic compensation applied ({} harmonic(s)):{}", hNums.length,
-                describeHarmonics(ampRatios, hNums, phiInits));
-    }
-
-    /** One {@code " Hn ratio % phase deg;"} group per harmonic. */
-    private String describeHarmonics(double[] ampRatios, int[] hNums, double[] phiInits) {
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < hNums.length; i++) {
-            appendLine(sb, "H" + hNums[i], ampRatios[i], phiInits[i]);
+            double deg = Math.toDegrees(phiInits[i]);
+            deg -= 360.0 * Math.round(deg / 360.0);
+            sb.append(String.format(Locale.US, " H%d %.4e %% %+.2f deg;",
+                    hNums[i], ampRatios[i] * 100.0, deg));
         }
-        return sb.toString();
-    }
-
-    /** One {@code " (a,b) ratio % phase deg;"} group per product at
-     *  {@code a f1 + b f2}. */
-    private String describeProducts(double[] ampRatios, int[] aCoef, int[] bCoef, double[] phiInits) {
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < aCoef.length; i++) {
-            appendLine(sb, "(" + aCoef[i] + "," + bCoef[i] + ")", ampRatios[i], phiInits[i]);
-        }
-        return sb.toString();
-    }
-
-    /** One line's group: its name, its ratio in percent, its initial phase in
-     *  degrees wrapped to a half turn either way. */
-    private void appendLine(StringBuilder sb, String name, double ampRatio, double phiInit) {
-        double deg = Math.toDegrees(phiInit);
-        deg -= 360.0 * Math.round(deg / 360.0);
-        sb.append(String.format(Locale.US, " %s %.4e %% %+.2f deg;", name, ampRatio * 100.0, deg));
+        log.info("Harmonic compensation applied ({} harmonic(s)):{}", hNums.length, sb);
     }
 
     /**
@@ -1052,7 +767,7 @@ public class SignalGenerator implements GeneratorControls {
      * switches it to {@link GenSignalForm#DUAL_TONE_COMP} - the
      * dual-tone counterpart of {@link #applyCompensation}.  Each product is the
      * triple {@code (ampRatio, aCoef, bCoef, initial phase)} at
-     * {@code a f1 + b f2}, published as one {@link CompensationTable}
+     * {@code a·f₁ + b·f₂}, published as one immutable {@link DualToneComp}
      * before the form flips so the audio thread never sees a partial set.
      * Empty arrays leave an uncorrected two-tone signal.
      *
@@ -1062,63 +777,8 @@ public class SignalGenerator implements GeneratorControls {
      * the dual-tone split and of the master amplitude.
      */
     public void applyDualToneCompensation(double[] ampRatios, int[] aCoef, int[] bCoef, double[] phiInits) {
-        this.dtComp = new CompensationTable(ampRatios, aCoef, bCoef, phiInits);
+        this.dtComp = new DualToneComp(ampRatios, aCoef, bCoef, phiInits);
         this.form   = GenSignalForm.DUAL_TONE_COMP;
-    }
-
-    /**
-     * The dual-tone counterpart of {@link #applyCompensationLines}: changes
-     * only the named products of the RUNNING generator's table - each line
-     * named by its coefficients on F1 and F2 - fading each over
-     * {@link #LINE_FADE_PERIODS} periods of F1 or of the product's own
-     * frequency, whichever take the longer ({@link #lineFadeSamples}), and
-     * switches the generator to {@link GenSignalForm#DUAL_TONE_COMP} as
-     * {@link #applyDualToneCompensation} does.  {@code ampRatio} is a ratio
-     * to the F1 tone, as there.
-     */
-    @Override
-    public void applyDualToneCompensationLines(double[] ampRatios, int[] aCoef, int[] bCoef,
-            double[] phiInits) {
-        CompensationTable base = dtComp;
-        CompensationSet set = (base == null ? CompensationSet.EMPTY : base.set)
-                .withLines(ampRatios, aCoef, bCoef, phiInits);
-        this.dtComp = new CompensationTable(set, base, lineFades(set));
-        this.form   = GenSignalForm.DUAL_TONE_COMP;
-        if (log.isInfoEnabled()) {
-            CompensationSet named = set.only(aCoef, bCoef);
-            log.info("Intermodulation compensation lines applied, fading over up to {} samples ({} product(s)):{}",
-                    Arrays.stream(lineFades(named)).max().orElse(0), named.a().length,
-                    describeProducts(named.ampRatios(), named.a(), named.b(), named.phiInits()));
-        }
-    }
-
-    /** Each entry's fade in samples, should its line change - see
-     *  {@link #lineFadeSamples}. */
-    private int[] lineFades(CompensationSet set) {
-        int[] a = set.a();
-        int[] b = set.b();
-        double f2Hz = getDualToneFrequency2Hz();
-        int[] fades = new int[a.length];
-        for (int i = 0; i < a.length; i++) {
-            fades[i] = lineFadeSamples(a[i], b[i], f2Hz);
-        }
-        return fades;
-    }
-
-    /** The fade of the line {@code (a, b)} at {@code |a F1 + b F2|}, in samples:
-     *  the longer of {@link #LINE_FADE_PERIODS} periods of the fundamental as
-     *  it is generated now - F1 for a dual tone - and as many periods of the
-     *  line's own frequency, which takes the longer for a product below F1; a
-     *  single tone's harmonic ({@code b} zero) always sits above its
-     *  fundamental.  Rounded up so the fade is never shorter, and never under
-     *  one sample, which would be the whole-table step.  A line that lands on
-     *  0 Hz has no period of its own and takes the fundamental's.  The one
-     *  place the fade length is computed, for both kinds of table. */
-    private int lineFadeSamples(int a, int b, double f2Hz) {
-        double f1Hz    = frequencyHz;
-        double lineHz  = Math.abs(a * f1Hz + b * f2Hz);
-        double slowest = lineHz > 0.0 ? Math.min(f1Hz, lineHz) : f1Hz;
-        return Math.max(1, (int) Math.ceil(LINE_FADE_PERIODS * sampleRate / slowest));
     }
 
     /** Drops any compensation and returns a compensated generator to its plain
@@ -1759,7 +1419,7 @@ public class SignalGenerator implements GeneratorControls {
                     String.format(Locale.US, "%.2f", Math.toDegrees(phiInit)));
             i++;
         }
-        this.comp = new CompensationTable(amp, hNums, phis);
+        this.comp = new Compensation(amp, hNums, phis);
         log.info("Harmonic compensation: {} harmonic(s) loaded from FFT result", validCount);
     }
 
@@ -1788,17 +1448,12 @@ public class SignalGenerator implements GeneratorControls {
      */
     private double ddsSineCompensated() {
         double s = ddsSine();
-        CompensationTable c = comp;            // single volatile read - atomic hot-swap
-        if (c != compRendered) {
-            if (c != null) c.activate(compRendered);
-            compRendered = c;
-        }
+        Compensation c = comp;                 // single volatile read - atomic hot-swap
         if (c != null) {
             for (int i = 0; i < c.amp.length; i++) {
-                long hPhase = phaseAcc * c.a[i] + c.offAt(i);   // wraps mod 2^64
-                s -= c.ampAt(i) * ddsCos(hPhase);
+                long hPhase = phaseAcc * c.hNum[i] + c.phaseOff64[i];   // wraps mod 2^64
+                s -= c.amp[i] * ddsCos(hPhase);
             }
-            c.advance();
         }
         return s;
     }
@@ -1826,17 +1481,12 @@ public class SignalGenerator implements GeneratorControls {
     private double ddsDualToneCompensated() {
         double w1 = dualW1;                    // single volatile read - also the ratio reference
         double s = ddsSine() * w1 + ddsSine2() * dualW2;
-        CompensationTable c = dtComp;          // single volatile read - atomic hot-swap
-        if (c != dtCompRendered) {
-            if (c != null) c.activate(dtCompRendered);
-            dtCompRendered = c;
-        }
+        DualToneComp c = dtComp;               // single volatile read - atomic hot-swap
         if (c != null) {
             for (int i = 0; i < c.amp.length; i++) {
-                long pPhase = phaseAcc * c.a[i] + phaseAcc2 * c.b[i] + c.offAt(i);
-                s -= c.ampAt(i) * w1 * ddsCos(pPhase);
+                long pPhase = phaseAcc * c.a[i] + phaseAcc2 * c.b[i] + c.phaseOff64[i];
+                s -= c.amp[i] * w1 * ddsCos(pPhase);
             }
-            c.advance();
         }
         return s;
     }

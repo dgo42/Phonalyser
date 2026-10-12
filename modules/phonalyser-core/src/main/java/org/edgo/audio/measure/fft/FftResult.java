@@ -20,9 +20,7 @@ package org.edgo.audio.measure.fft;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
 import org.edgo.audio.measure.dsp.SpectralDiscontinuityDetector;
 import org.edgo.audio.measure.enums.FftOverlap;
@@ -191,21 +189,6 @@ public class FftResult {
      *  {@code null} when no floor was measured, which clamps nothing. */
     public int[]    lineFloorBins;
     public double[] lineFloorDbFs;
-    /** The averaging state of the lines the coherent average may reset on
-     *  its own ({@link LineState}) - the harmonics of the harmonic table, H2
-     *  to H({@link #harmonicCount} + 1), and every intermodulation product -
-     *  in the order of the lines' positions; stamped by
-     *  {@link CoherentAccumulator#overlayOnto}, empty when the average holds
-     *  no such line.  {@code null} when no accumulator stamped this result -
-     *  a single-frame result, a spectrum loaded from file. */
-    public List<LineState> lineStates;
-    /** {@link #lineStates} by each line's centre bin; filled together with
-     *  them by {@link #addLineState}. */
-    public Map<Integer, LineState> lineStatesByBin;
-    /** True once the coherent average's κ measurement has closed - the
-     *  earliest moment a line may be reset or marked waiting for its reset;
-     *  stamped by {@link CoherentAccumulator#overlayOnto}. */
-    public boolean coherentKappaRefined;
 
     // Raw (pre-.frc-de-embed) complex phasors of the fundamental and of each
     // distortion peak, stamped by the analyser ({@link #captureRawPeaks}) off
@@ -495,9 +478,6 @@ public class FftResult {
         c.harmonicPct                = reuseCopy(c.harmonicPct,   src.harmonicPct);
         c.lineFloorBins              = reuseCopy(c.lineFloorBins, src.lineFloorBins);
         c.lineFloorDbFs              = reuseCopy(c.lineFloorDbFs, src.lineFloorDbFs);
-        c.lineStates                 = src.lineStates != null ? new ArrayList<>(src.lineStates) : null;
-        c.lineStatesByBin            = src.lineStatesByBin != null ? new HashMap<>(src.lineStatesByBin) : null;
-        c.coherentKappaRefined       = src.coherentKappaRefined;
         c.rawFundRe                  = src.rawFundRe;
         c.rawFundIm                  = src.rawFundIm;
         c.dacFundPhaseRad            = src.dacFundPhaseRad;
@@ -620,83 +600,6 @@ public class FftResult {
         double floorDbFs = lineFloorDbFs(bin);
         if (!Double.isFinite(floorDbFs) || !Double.isFinite(linear)) return linear;
         return Math.max(linear, Math.pow(10.0, floorDbFs / 20.0));
-    }
-
-    /**
-     * The averaging state of one line the coherent average may reset on its
-     * own: a harmonic of a single tone, a harmonic or an intermodulation
-     * product of a dual tone - never a tone or a pilot.  The line's local
-     * region is its lobe (the bins the window spreads it over) plus its local
-     * band (the bins beside the lobe its band top is read from).
-     *
-     * @param a                the line's coefficient on the first pinned tone:
-     *                         harmonic h of a single tone is (h, 0), a dual-tone
-     *                         product a*F1 + b*F2 is (a, b)
-     * @param b                the line's coefficient on the second pinned tone
-     * @param bin              the line's centre bin, its fractional position
-     *                         rounded
-     * @param localCount       the frames the line's local region holds since
-     *                         the line's last reset, rounded to whole frames
-     *                         as {@link FftResult#frameCount} is; the global
-     *                         frame count while the line was never reset.
-     *                         Under the bounded moving average the count is
-     *                         a fractional weight, and this is that weight
-     *                         rounded - 0 for a weight under one half
-     * @param waitingReset     the line is marked waiting for its reset
-     * @param localBandTopDbFs the band top over the line's local band, dBFS on
-     *                         the scale of {@link FftResult#amplitudeDbFs};
-     *                         {@link Double#NaN} while not measured
-     */
-    public record LineState(int a, int b, int bin, int localCount, boolean waitingReset,
-                            double localBandTopDbFs) {}
-
-    /** Starts empty {@link #lineStates} and their index by bin, for the
-     *  coherent average to fill with {@link #addLineState}. */
-    public void startLineStates() {
-        lineStates      = new ArrayList<>();
-        lineStatesByBin = new HashMap<>();
-    }
-
-    /** Adds a line's state to {@link #lineStates} and their index by bin. */
-    public void addLineState(LineState s) {
-        lineStates.add(s);
-        lineStatesByBin.put(s.bin(), s);
-    }
-
-    /** Clears {@link #lineStates} and their index by bin: no accumulator
-     *  stamped this result. */
-    public void clearLineStates() {
-        lineStates      = null;
-        lineStatesByBin = null;
-    }
-
-    /** The local band top in dBFS of the line centred on {@code bin};
-     *  {@link Double#NaN} when the result carries no measured one there. */
-    public double localBandTopDbFs(int bin) {
-        LineState s = lineStatesByBin != null ? lineStatesByBin.get(bin) : null;
-        return s != null ? s.localBandTopDbFs() : Double.NaN;
-    }
-
-    /** The averaging state of line ({@code a}, {@code b}) as
-     *  {@link #lineStates} carries it; {@code null} when the result carries
-     *  no state for that line. */
-    public LineState lineState(int a, int b) {
-        if (lineStates == null) return null;
-        for (LineState s : lineStates) {
-            if (s.a() == a && s.b() == b) return s;
-        }
-        return null;
-    }
-
-    /** The clearance in dB of line ({@code a}, {@code b}) over its own local
-     *  band top: {@code rawLevelDbFs} less the line's
-     *  {@link LineState#localBandTopDbFs()}, the one figure the apply and the
-     *  stop decisions read.  {@link Double#NaN} while the result carries no
-     *  measured local band top for the line. */
-    public double lineClearanceDb(int a, int b, double rawLevelDbFs) {
-        LineState s = lineState(a, b);
-        if (s == null || !Double.isFinite(s.localBandTopDbFs())) return Double.NaN;
-        return rawLevelDbFs - s.localBandTopDbFs();
     }
 
     /** One distortion line as the readouts carry it: the bin it sits on and

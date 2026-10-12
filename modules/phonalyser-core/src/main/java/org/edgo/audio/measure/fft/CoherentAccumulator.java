@@ -18,13 +18,6 @@
 
 package org.edgo.audio.measure.fft;
 
-import java.io.BufferedWriter;
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.text.DecimalFormat;
-import java.text.DecimalFormatSymbols;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
@@ -32,7 +25,6 @@ import java.util.Objects;
 import java.util.function.IntToDoubleFunction;
 
 import org.edgo.audio.measure.dsp.ToneLobeLift;
-import org.edgo.audio.measure.fft.FftResult.LineState;
 
 import lombok.Getter;
 import lombok.extern.log4j.Log4j2;
@@ -89,32 +81,13 @@ import lombok.extern.log4j.Log4j2;
  * advance jumped) is not a measurement either: {@link #reanchorKappa}
  * makes the next frame a fresh anchor.
  *
- * <h2>Lines reset on their own</h2>
- * Beside the global frame count every line of the family but the two tones
- * and the pilots keeps a local count: the frames its local region holds since
- * the line's own last reset, the global frame count while it was never reset.
- * {@link #resetLine} empties one line's lobe and its local count and leaves
- * the rest of the average running; the overlay divides that lobe by the
- * line's local count.  A line is reset only once κ is refined: until then
- * the refinement rebuilds the family on the corrected κ, which moves every
- * lobe.
- *
- * <p>Once {@link #lineBands} lays them out, H2 .. H9 and every product also
- * keep a local band: their own sums of the bins beside the lobe that the
- * line's band top is read from, emptied with the lobe by a reset and
- * otherwise fed, scaled and taken out exactly as the global sums of those
- * bins are.  The band top - the level a line must stand clear of - so
- * restarts and falls with the line instead of carrying the frames from
- * before its reset.
- *
  * <h2>Statistics</h2>
  * Every frame the coherent add takes in leaves one row in the collection's
- * statistics, always and with no bound: the global frame count, and for the
- * tones, H2 .. H9 and every product the frame's and the average's magnitude
- * and phase, and for every line but a tone the band top over the frame's
- * band bins and over the line's band sums.  A restart or a reset drops the
- * rows; they are read by copy or exported to a file
- * ({@link #exportStatistics}).
+ * statistics, always and with no bound: the frame count after the add, and
+ * for the tones, H2 .. H9 and every product the frame's and the average's
+ * magnitude and phase, and for every line but a tone the band top over the
+ * frame's bins and over the average's bins beside the line.  A restart or a
+ * reset drops the rows; they are read row by row, in memory.
  *
  * <p>The incoherent average sums each bin's power with no rotation.
  */
@@ -131,12 +104,11 @@ public final class CoherentAccumulator {
      *  generator, a muted DUT).  Folding it drove κ toward zero, where the
      *  harmonic ladder h·κ < halfSize runs to millions of members. */
     static final double KAPPA_REFINE_MAX_BIN = 0.5;
-    /** The highest harmonic the statistics and the local bands follow beside
-     *  the tones and the products: H2 .. H9, the ladder the distortion
-     *  readouts and the analyser's harmonic trace are built on.  The ladder
-     *  itself runs to the Nyquist bin - over a thousand lines on a low tone,
-     *  millions on a noise peak pinned near one bin - and a statistics row
-     *  and a band of sums per line over all of them would not fit. */
+    /** The highest harmonic the statistics follow beside the tones and the
+     *  products: H2 .. H9, the ladder the distortion readouts and the
+     *  analyser's harmonic trace are built on.  The ladder itself runs to the
+     *  Nyquist bin - over a thousand lines on a low tone - and a statistics
+     *  row over all of them would not fit. */
     static final int STATS_MAX_HARMONIC = 9;
     /** Rows the statistics store is first sized for; it doubles from there. */
     private static final int    STATS_INITIAL_ROWS = 64;
@@ -145,17 +117,7 @@ public final class CoherentAccumulator {
      *  raw and the accumulated band top. */
     private static final int    STATS_TONE_COLUMNS = 4;
     private static final int    STATS_LINE_COLUMNS = 6;
-    /** The statistics file's layout: semicolon-separated, decimal comma, an
-     *  empty field where a value is not measured. */
-    private static final String STATS_SEPARATOR    = ";";
-    private static final String STATS_NUMBER       = "0.0000";
     private static final String STATS_FRAMES       = "frames";
-    private static final String STATS_LEVEL_UNIT   = " dBFS";
-    private static final String STATS_PHASE_UNIT   = " deg";
-    /** The dBFS a level of no signal is written as, the overlay's floor. */
-    private static final double STATS_NO_SIGNAL_DBFS = -300.0;
-    /** The smallest amplitude a level is written for in dBFS. */
-    private static final double STATS_MIN_AMPLITUDE  = 1e-15;
 
     /**
      * The turns one frame is turned back by, radians, and the advance they
@@ -239,16 +201,8 @@ public final class CoherentAccumulator {
     private int[]    memberHi    = new int[0];
     private double[] memberCos   = new double[0];
     private double[] memberSin   = new double[0];
-    /** Each family line's local count, index-parallel with the family's
-     *  positions: the frames its local region holds since the line's own last
-     *  reset, the global frame count while it was never reset - always for
-     *  the tones and the pilots, which are never reset. */
-    private double[]  localCount   = new double[0];
-    /** Each family line's mark waiting for its reset, index-parallel the same
-     *  way: set by {@link #markLineWaiting}, cleared by {@link #resetLine}. */
-    private boolean[] waitingReset = new boolean[0];
     /** Guards the statistics store below: the analysis thread appends a row
-     *  per frame added while another thread may read or export it. */
+     *  per frame added while another thread may read it. */
     private final Object statsLock = new Object();
     /** The collection's statistics, one row of {@link #statsWidth} values per
      *  frame {@link #add} adds, in the column order of
@@ -257,10 +211,7 @@ public final class CoherentAccumulator {
     private double[]     statsRows = new double[0];
     private int          statsRowCount;
     private int          statsWidth = 1;
-    /** The column names, the frame count first, and which columns hold a
-     *  phase in degrees rather than a level or the count. */
     private List<String> statsColumns = List.of(STATS_FRAMES);
-    private boolean[]    statsPhase   = new boolean[1];
     /** The statistics lines, fixed at the restart on the pinned family: the
      *  tones first ({@link #statsTones} of them, {@link #STATS_TONE_COLUMNS}
      *  columns each), then H2 .. {@link #STATS_MAX_HARMONIC} and every product
@@ -268,41 +219,22 @@ public final class CoherentAccumulator {
      *  row being assembled.  Each line's coefficients, and its index in the
      *  family as it stands - found again by the coefficients after the
      *  family's rebuild at the κ refinement, -1 where it holds the line no
-     *  longer.  Not guarded by {@link #statsLock}, which covers the rows,
-     *  the column names and the phase flags alone: these arrays are written
-     *  by {@link #restart}, {@link #reset} and the refinement inside
+     *  longer.  Not guarded by {@link #statsLock}: written by
+     *  {@link #restart}, {@link #reset} and the refinement inside
      *  {@link #add}, and read by {@link #add}, which all run on the one
      *  thread that feeds the accumulator. */
     private int          statsTones;
-    private int[]        statsA     = new int[0];
-    private int[]        statsB     = new int[0];
-    private int[]        statsIndex = new int[0];
-    private double[]     statsRow   = new double[0];
-    /** Reads a line's local band top: median + 4 MAD of the band beside the
-     *  line's lobe ({@link ToneLobeLift#lineFloor}). */
+    private int[]        statsF1Coef = new int[0];
+    private int[]        statsF2Coef = new int[0];
+    private int[]        statsIndex  = new int[0];
+    private double[]     statsRow    = new double[0];
+    /** Reads a line's band top: median + 4 MAD of the band beside the line's
+     *  lobe ({@link ToneLobeLift#lineFloor}). */
     private final ToneLobeLift lobe = new ToneLobeLift();
-    /** The local bands' geometry as {@link #lineBands} set it: the half-width
-     *  of a band window in bins (0 while no band is laid out), and the bin
-     *  width and the window's noise bandwidth the band top is read with. */
-    private int    bandSpan;
+    /** The bin width and the window's noise bandwidth the band top is read
+     *  with, as {@link #bandGeometry} set them; 0 while none is set. */
     private double bandBinHz;
     private double bandNenbw;
-    /** Each family line's local band, index-parallel with the family's
-     *  positions: the first bin of its window, the window's length (0 for a
-     *  line with no band) and its offset into {@link #bandRe} /
-     *  {@link #bandIm}, which hold the line's own complex sums of the
-     *  window's bins since the line's last reset.  Two lines' windows may
-     *  share bins; each keeps its own sums of them. */
-    private int[]    bandLo  = new int[0];
-    private int[]    bandLen = new int[0];
-    private int[]    bandOff = new int[0];
-    private double[] bandRe  = new double[0];
-    private double[] bandIm  = new double[0];
-    /** Every bin's contribution of the frame being added where the caller
-     *  asks for none back: the local bands take the very contribution the
-     *  global sums get. */
-    private double[] scratchRe = new double[0];
-    private double[] scratchIm = new double[0];
 
     /**
      * Starts a collection anew: empty sums for {@code fftSize}, the geometry
@@ -343,20 +275,33 @@ public final class CoherentAccumulator {
         kappaRefined    = false;
         kappaMeasFrames = 0;
         kappaSkipNext   = false;
+        bandBinHz       = 0.0;
         clearStats();
-        dropBands();
         setKappa(kappa);
         layoutStats();
     }
 
     /** Re-pins the fundamental's fractional bin and rebuilds the family's
-     *  positions on it; the statistics lines find their lines again, and
-     *  the local bands, where laid out, move with them. */
+     *  positions on it; the statistics lines find their lines again. */
     private void setKappa(double kappa) {
         this.kappa = kappa;
         buildFamily();
         mapStatsLines();
-        if (bandSpan > 0) layoutBands();
+    }
+
+    /** Sets the bin width and the window's noise bandwidth the statistics
+     *  read each line's band top with, for the collection {@link #restart}
+     *  started; until then, and on an incoherent average, the band tops read
+     *  {@link Double#NaN}.  Nothing is set for a bin width that is not
+     *  positive.
+     *
+     * @param binHz     the spectrum's bin width in Hz
+     * @param nenbwBins the window's equivalent noise bandwidth in bins
+     */
+    public void bandGeometry(double binHz, double nenbwBins) {
+        if (!started || !coherent || !(binHz > 0.0)) return;
+        bandBinHz = binHz;
+        bandNenbw = nenbwBins;
     }
 
     /** The next frame added re-anchors the κ measurement instead of folding
@@ -375,251 +320,8 @@ public final class CoherentAccumulator {
         kappa        = 0.0;
         kappa2       = Double.NaN;
         kappaRefined = false;
+        bandBinHz    = 0.0;
         clearStats();
-        dropBands();
-    }
-
-    /**
-     * Restarts the average of line ({@code a}, {@code b}) alone: the sums of
-     * its lobe - the bins the add turns by the line's own angle
-     * ({@link #ownedLo}) - are emptied, its local count is set to zero and
-     * its waiting mark is cleared; the global frame count, κ, κ2, the family,
-     * the pilots and every other line, a neighbour sharing a lobe bin
-     * included, stay as they are.  From here the lobe holds the frames added
-     * after the reset alone, and the overlay divides it by the line's own
-     * local count.
-     *
-     * <p>Refused while κ is not refined: the refinement rebuilds the family
-     * on the corrected κ, which moves every lobe and starts every local
-     * count on the global one again.  A collection dropped by {@link #reset}
-     * or not yet refined after a {@link #restart} refuses the same way.
-     *
-     * @return true when the line was reset, false when refused
-     * @throws IllegalArgumentException for the fundamental (1, 0), the second
-     *         tone (0, 1) or a pilot (0, 0), always; for a line the refined
-     *         family does not hold
-     */
-    public boolean resetLine(int a, int b) {
-        rejectNeverReset(a, b);
-        if (refusedBeforeKappaRefined("reset", a, b)) return false;
-        int m = familyLine(a, b);
-        // κ is refined by the coherent add alone, so only the complex sums
-        // can hold a line to reset.
-        Arrays.fill(sumRe, ownedLo(m), memberHi[m] + 1, 0.0);
-        Arrays.fill(sumIm, ownedLo(m), memberHi[m] + 1, 0.0);
-        if (bandLen[m] > 0) {
-            Arrays.fill(bandRe, bandOff[m], bandOff[m] + bandLen[m], 0.0);
-            Arrays.fill(bandIm, bandOff[m], bandOff[m] + bandLen[m], 0.0);
-        }
-        localCount[m]   = 0.0;
-        waitingReset[m] = false;
-        return true;
-    }
-
-    /**
-     * Marks line ({@code a}, {@code b}) waiting for its reset: its restart is
-     * requested but not yet due, and the mark travels on every result the
-     * overlay stamps until {@link #resetLine} clears it.  Refused while κ is
-     * not refined, as the reset is: a mark set before would not survive the
-     * refinement's rebuild of the family.
-     *
-     * @return true when the line was marked, false when refused
-     * @throws IllegalArgumentException as {@link #resetLine} throws
-     */
-    public boolean markLineWaiting(int a, int b) {
-        rejectNeverReset(a, b);
-        if (refusedBeforeKappaRefined("waiting mark", a, b)) return false;
-        waitingReset[familyLine(a, b)] = true;
-        return true;
-    }
-
-    /** Throws for the coefficients of a line that is never reset - the
-     *  fundamental (1, 0), the second tone (0, 1), a pilot (0, 0) - whatever
-     *  the family holds. */
-    private void rejectNeverReset(int a, int b) {
-        if (neverReset(a, b)) {
-            throw new IllegalArgumentException("Line (" + a + ", " + b
-                    + ") is a tone or a pilot, which are never reset");
-        }
-    }
-
-    /** The family index of line ({@code a}, {@code b}), a line other than a
-     *  pilot. */
-    private int familyLine(int a, int b) {
-        int m = lineIndex(a, b);
-        if (m < 0) {
-            throw new IllegalArgumentException("Line (" + a + ", " + b + ") is not in the coherent family");
-        }
-        return m;
-    }
-
-    /** True for the coefficients of the fundamental (1, 0), the second tone
-     *  (0, 1) and a pilot (0, 0): the lines that are never reset. */
-    private boolean neverReset(int a, int b) {
-        return (a == 1 && b == 0) || (a == 0 && b == 1) || (a == 0 && b == 0);
-    }
-
-    /** True for a family line a reset may name: every line but the
-     *  fundamental (1, 0), the second tone (0, 1) and the pilots. */
-    private boolean resettable(int m) {
-        return memberPilot[m] == 0 && !neverReset(memberA[m], memberB[m]);
-    }
-
-    /** The lowest bin of family line {@code m}'s lobe that the add turns by
-     *  that line's angle: a bin two lobes share goes to the lower line (the
-     *  lobe walk in {@link #add}), so the line owns its lobe from just above
-     *  the lower neighbour's top on.  The family's tops rise with its sorted
-     *  positions, the half-width being common. */
-    private int ownedLo(int m) {
-        return m > 0 ? Math.max(memberLo[m], memberHi[m - 1] + 1) : memberLo[m];
-    }
-
-    /** True, with one INFO line, while κ is not refined and the line
-     *  {@code action} on ({@code a}, {@code b}) is refused. */
-    private boolean refusedBeforeKappaRefined(String action, int a, int b) {
-        if (kappaRefined) return false;
-        if (log.isInfoEnabled()) {
-            log.info("FFT line {} of ({}, {}) refused: kappa is not refined yet", action, a, b);
-        }
-        return true;
-    }
-
-    /**
-     * Lays out each line's local band for the collection.  Every line the
-     * statistics follow ({@link #followed}: H2 .. {@link #STATS_MAX_HARMONIC}
-     * and every product) gets the window of bins
-     * {@link ToneLobeLift#lineFloor} reads its band top from:
-     * {@link ToneLobeLift#lineFloorSpanBins} to either side of its centre
-     * bin, the lobe exclusion inside it left to the band top to skip.  From
-     * here on the line keeps its own sums of that window since its last
-     * reset; a line reset empties them with the lobe, and the overlay and the
-     * statistics read the line's band top from them.
-     *
-     * <p>A band starts from the global sums of its bins, which is what a line
-     * never reset holds - so the call belongs after {@link #restart}, before
-     * any line reset - and the bands are laid out again on the family the κ
-     * refinement rebuilds.  A restart or a reset drops them.  Nothing is laid
-     * out on an incoherent average or for a bin width that is not positive.
-     *
-     * @param binHz     the spectrum's bin width in Hz
-     * @param nenbwBins the window's equivalent noise bandwidth in bins
-     */
-    public void lineBands(double binHz, double nenbwBins) {
-        if (!started || !coherent || !(binHz > 0.0)) return;
-        bandBinHz = binHz;
-        bandNenbw = nenbwBins;
-        bandSpan  = lobe.lineFloorSpanBins(binHz, nenbwBins);
-        layoutBands();
-    }
-
-    /** Lays each followed line's band window on the family as it stands,
-     *  its sums taken from the global sums of its bins. */
-    private void layoutBands() {
-        int total = 0;
-        for (int m = 0; m < memberCount; m++) {
-            bandLen[m] = 0;
-            if (!followed(m)) continue;
-            int bin = centreBin(m);
-            int lo  = Math.max(1, bin - bandSpan);
-            int hi  = Math.min(halfSize, bin + bandSpan);
-            if (hi < lo) continue;
-            bandLo[m]  = lo;
-            bandLen[m] = hi - lo + 1;
-            bandOff[m] = total;
-            total     += bandLen[m];
-        }
-        bandRe = new double[total];
-        bandIm = new double[total];
-        for (int m = 0; m < memberCount; m++) {
-            if (bandLen[m] == 0) continue;
-            System.arraycopy(sumRe, bandLo[m], bandRe, bandOff[m], bandLen[m]);
-            System.arraycopy(sumIm, bandLo[m], bandIm, bandOff[m], bandLen[m]);
-        }
-        if (total > 0 && scratchRe.length != halfSize + 1) {
-            scratchRe = new double[halfSize + 1];
-            scratchIm = new double[halfSize + 1];
-        }
-    }
-
-    /** Drops the local bands: none is laid out until the next
-     *  {@link #lineBands}. */
-    private void dropBands() {
-        bandSpan  = 0;
-        bandRe    = new double[0];
-        bandIm    = new double[0];
-        scratchRe = new double[0];
-        scratchIm = new double[0];
-    }
-
-    /** Folds {@code sign} times the contribution {@code cRe} / {@code cIm}
-     *  - every bin's, as the global sums took or gave it back - into each
-     *  local band, bin for bin: +1 for a frame added, -1 for a frame taken
-     *  out.  A line never reset so keeps its band equal to the global sums
-     *  of its bins. */
-    private void foldIntoBands(double[] cRe, double[] cIm, double sign) {
-        for (int m = 0; m < memberCount; m++) {
-            int len = bandLen[m];
-            if (len == 0) continue;
-            int lo  = bandLo[m];
-            int off = bandOff[m];
-            for (int j = 0; j < len; j++) {
-                bandRe[off + j] += sign * cRe[lo + j];
-                bandIm[off + j] += sign * cIm[lo + j];
-            }
-        }
-    }
-
-    /** Family line {@code m}'s accumulated local band top: the band top over
-     *  its band sums divided by its local count, at {@code conv} per
-     *  magnitude; 0 where the line has no band, holds no frame yet, or the
-     *  band top reads none. */
-    private double bandTop(int m, double conv) {
-        double local = localCount[m];
-        if (!(local > 0.0)) return 0.0;
-        final double   mean = 1.0 / local;
-        final int      lo   = bandLo[m];
-        final int      off  = bandOff[m];
-        final double[] bRe  = bandRe;
-        final double[] bIm  = bandIm;
-        return bandFloor(m, k -> amplitude(bRe[off + k - lo], bIm[off + k - lo], mean, conv, k));
-    }
-
-    /** Family line {@code m}'s raw local band top: the band top over the
-     *  frame {@code re} / {@code im}'s own magnitudes in the line's band
-     *  window, in the transform's unit; 0 where the line has no band or the
-     *  band top reads none. */
-    private double rawBandTop(int m, double[] re, double[] im) {
-        return bandFloor(m, k -> amplitude(re[k], im[k], 1.0, 1.0, k));
-    }
-
-    /** {@link ToneLobeLift#lineFloor} over the magnitudes {@code mag} gives
-     *  for family line {@code m}'s band window: median + 4 MAD of the bins
-     *  beside its lobe; 0 where the line has no band. */
-    private double bandFloor(int m, IntToDoubleFunction mag) {
-        if (bandLen[m] == 0) return 0.0;
-        return lobe.lineFloor(mag, centreBin(m), halfSize, bandBinHz, bandNenbw);
-    }
-
-    /** The amplitude of a bin's sum {@code sRe}, {@code sIm} times
-     *  {@code mean}, at {@code conv} per magnitude - half that at DC and
-     *  Nyquist, as the overlay writes the amplitude. */
-    private double amplitude(double sRe, double sIm, double mean, double conv, int k) {
-        double avgRe = sRe * mean;
-        double avgIm = sIm * mean;
-        return Math.sqrt(avgRe * avgRe + avgIm * avgIm) * conv * ((k == 0 || k == halfSize) ? 0.5 : 1.0);
-    }
-
-    /** True for a family line the statistics and the local bands follow: a
-     *  line a reset may name, H2 .. {@link #STATS_MAX_HARMONIC} or a
-     *  product. */
-    private boolean followed(int m) {
-        return resettable(m) && (memberB[m] != 0 || memberA[m] <= STATS_MAX_HARMONIC);
-    }
-
-    /** Family line {@code m}'s centre bin: its position rounded, clamped to
-     *  the spectrum. */
-    private int centreBin(int m) {
-        return Math.min(halfSize, Math.max(0, (int) Math.round(memberPos[m])));
     }
 
     /** The fundamental's turn over an advance of {@code delta} samples,
@@ -704,80 +406,44 @@ public final class CoherentAccumulator {
      * The amplitude scale is the result's own window gain, so an average and
      * the single frame the analyser wrote read on one scale.  The statistics
      * on the average are then {@link FftAnalyzer#recomputeStats}'s.
-     *
-     * <p>The lobe of a line reset since the collection began - the bins the
-     * add turns by that line's angle - is divided by that line's own local
-     * count instead; an emptied lobe, before its first frame, reads as no
-     * signal.  Each line a reset may name within the result's harmonic table
-     * (the harmonics up to H({@link FftResult#harmonicCount} + 1)) and every
-     * intermodulation product is stamped onto {@link FftResult#lineStates}
-     * with its coefficients, its centre bin, its local count, its waiting
-     * mark and its local band top in dBFS on the result's amplitude scale -
-     * {@link Double#NaN} for a line with no band (none laid out, or a
-     * harmonic above H9), with no frame since its reset, or whose band leaves
-     * too few bins; whether κ is refined is stamped onto
-     * {@link FftResult#coherentKappaRefined}.
      */
     public void overlayOnto(FftResult r) {
         if (!started || !(frames > 0.0)) return;
         final int    n     = halfSize + 1;
         final double mean  = 1.0 / frames;
         final double conv  = r.amplitudePerMagnitude();
-        BinRanges.parallel(n, (lo, hi) -> writeMean(r, lo, hi, mean, conv));
-        // The result's harmonic table runs to H(harmonicCount + 1); a ladder
-        // line above it is named by no readout and no correction, and the
-        // ladder runs to the Nyquist bin - thousands of lines on a low tone.
-        final int topHarmonic = r.harmonicCount + 1;
-        r.startLineStates();
-        for (int m = 0; m < memberCount; m++) {
-            if (!resettable(m)) continue;
-            double local = localCount[m];
-            if (local != frames) {
-                writeMean(r, ownedLo(m), memberHi[m] + 1, local > 0.0 ? 1.0 / local : 0.0, conv);
-            }
-            if (memberB[m] == 0 && memberA[m] > topHarmonic) continue;
-            double top = bandTop(m, conv);
-            r.addLineState(new LineState(memberA[m], memberB[m], (int) Math.round(memberPos[m]),
-                    (int) Math.round(local), waitingReset[m],
-                    top > 0.0 ? 20.0 * Math.log10(top) : Double.NaN));
-        }
-        r.coherentKappaRefined = kappaRefined;
-        int kFund = Math.min(halfSize, Math.max(1, r.fundamentalBin));
-        r.fundamentalDbFs   = r.amplitudeDbFs[kFund];
-        r.fundamentalLinear = Math.pow(10.0, r.fundamentalDbFs / 20.0);
-        r.frameCount        = (int) Math.round(frames);
-    }
-
-    /** Writes the mean of the sums over bins {@code lo} .. {@code hi - 1}
-     *  onto {@code r}, each sum times {@code mean}: the phasor into
-     *  {@code re} / {@code im} (the magnitude into {@code re} for the
-     *  incoherent average), the amplitude in dBFS at {@code conv} per
-     *  magnitude, and the phase in degrees. */
-    private void writeMean(FftResult r, int lo, int hi, double mean, double conv) {
         final double[] re = r.re, im = r.im, dbFs = r.amplitudeDbFs, deg = r.phaseDeg;
         if (coherent) {
             final double[] accRe = sumRe, accIm = sumIm;
-            for (int k = lo; k < hi; k++) {
-                double avgRe = accRe[k] * mean;
-                double avgIm = accIm[k] * mean;
-                re[k] = avgRe;
-                im[k] = avgIm;
-                double mag = Math.sqrt(avgRe * avgRe + avgIm * avgIm);
-                double amp = mag * conv * ((k == 0 || k == halfSize) ? 0.5 : 1.0);
-                dbFs[k] = amp > 1e-15 ? 20.0 * Math.log10(amp) : -300.0;
-                deg[k]  = Math.toDegrees(Math.atan2(avgIm, avgRe));
-            }
+            BinRanges.parallel(n, (lo, hi) -> {
+                for (int k = lo; k < hi; k++) {
+                    double avgRe = accRe[k] * mean;
+                    double avgIm = accIm[k] * mean;
+                    re[k] = avgRe;
+                    im[k] = avgIm;
+                    double mag = Math.sqrt(avgRe * avgRe + avgIm * avgIm);
+                    double amp = mag * conv * ((k == 0 || k == halfSize) ? 0.5 : 1.0);
+                    dbFs[k] = amp > 1e-15 ? 20.0 * Math.log10(amp) : -300.0;
+                    deg[k]  = Math.toDegrees(Math.atan2(avgIm, avgRe));
+                }
+            });
         } else {
             final double[] acc = sumPow;
-            for (int k = lo; k < hi; k++) {
-                double mag = Math.sqrt(acc[k] * mean);
-                double amp = mag * conv * ((k == 0 || k == halfSize) ? 0.5 : 1.0);
-                re[k]   = mag;
-                im[k]   = 0.0;
-                dbFs[k] = amp > 1e-15 ? 20.0 * Math.log10(amp) : -300.0;
-                deg[k]  = 0.0;
-            }
+            BinRanges.parallel(n, (lo, hi) -> {
+                for (int k = lo; k < hi; k++) {
+                    double mag = Math.sqrt(acc[k] * mean);
+                    double amp = mag * conv * ((k == 0 || k == halfSize) ? 0.5 : 1.0);
+                    re[k]   = mag;
+                    im[k]   = 0.0;
+                    dbFs[k] = amp > 1e-15 ? 20.0 * Math.log10(amp) : -300.0;
+                    deg[k]  = 0.0;
+                }
+            });
         }
+        int kFund = Math.min(halfSize, Math.max(1, r.fundamentalBin));
+        r.fundamentalDbFs   = dbFs[kFund];
+        r.fundamentalLinear = Math.pow(10.0, r.fundamentalDbFs / 20.0);
+        r.frameCount        = (int) Math.round(frames);
     }
 
     /**
@@ -814,7 +480,7 @@ public final class CoherentAccumulator {
                     }
                 }
             });
-            addFrames(weight);
+            frames += weight;
             recordStats(re, im);
             return;
         }
@@ -843,12 +509,6 @@ public final class CoherentAccumulator {
         final int    count  = memberCount;
         final double[] mCos = memberCos, mSin = memberSin;
         final int[]    mLo  = memberLo,  mHi  = memberHi;
-        // Every bin's contribution goes to the caller's arrays where it asks
-        // for it, else to the scratch arrays while local bands are laid out,
-        // which take the very same values.
-        final boolean  bands = bandRe.length > 0;
-        final double[] outRe = contribRe != null ? contribRe : bands ? scratchRe : null;
-        final double[] outIm = contribRe != null ? contribIm : bands ? scratchIm : null;
         BinRanges.parallel(n, (kLo, kHi) -> {
             double ang  = Math.IEEEremainder(theta * kLo, 2.0 * Math.PI);
             double phRe = Math.cos(ang);
@@ -873,17 +533,16 @@ public final class CoherentAccumulator {
                 double cIm = rRe * rotIm + rIm * rotRe;
                 accRe[k] += cRe;
                 accIm[k] += cIm;
-                if (outRe != null) {
-                    outRe[k] = cRe;
-                    outIm[k] = cIm;
+                if (contribRe != null) {
+                    contribRe[k] = cRe;
+                    contribIm[k] = cIm;
                 }
                 double nextRe = phRe * stepRe - phIm * stepIm;
                 phIm = phRe * stepIm + phIm * stepRe;
                 phRe = nextRe;
             }
         });
-        if (bands) foldIntoBands(outRe, outIm, 1.0);
-        addFrames(weight);
+        frames += weight;
         recordStats(re, im);
     }
 
@@ -906,7 +565,7 @@ public final class CoherentAccumulator {
             acc[k] += c;
             if (contribPow != null) contribPow[k] = c;
         }
-        addFrames(weight);
+        frames += weight;
     }
 
     /** Scales the sums and the frames held by {@code factor} - the step that
@@ -921,11 +580,6 @@ public final class CoherentAccumulator {
             for (int k = 0; k < sumPow.length; k++) sumPow[k] *= factor;
         }
         frames *= factor;
-        for (int m = 0; m < memberCount; m++) localCount[m] *= factor;
-        for (int i = 0; i < bandRe.length; i++) {
-            bandRe[i] *= factor;
-            bandIm[i] *= factor;
-        }
     }
 
     /** Takes a frame out again: its contribution exactly as {@link #add}
@@ -935,35 +589,17 @@ public final class CoherentAccumulator {
             sumRe[k] -= contribRe[k];
             sumIm[k] -= contribIm[k];
         }
-        if (bandRe.length > 0) foldIntoBands(contribRe, contribIm, -1.0);
-        removeFrames(weight);
+        frames = Math.max(0.0, frames - weight);
     }
 
     /** Takes a frame out of the incoherent average again. */
     public void removePower(double[] contribPow, double weight) {
         for (int k = 0; k < sumPow.length; k++) sumPow[k] -= contribPow[k];
-        removeFrames(weight);
-    }
-
-    /** Counts {@code weight} more frames in the global frame count and in
-     *  every line's local count: a line never reset stays on the global
-     *  count, bit for bit. */
-    private void addFrames(double weight) {
-        frames += weight;
-        for (int m = 0; m < memberCount; m++) localCount[m] += weight;
-    }
-
-    /** Takes {@code weight} frames out of the global frame count and out of
-     *  every line's local count, none below zero. */
-    private void removeFrames(double weight) {
         frames = Math.max(0.0, frames - weight);
-        for (int m = 0; m < memberCount; m++) localCount[m] = Math.max(0.0, localCount[m] - weight);
     }
 
-    /**
-     * The rows the statistics hold: one per frame {@link #add} has added
-     * since the restart.
-     */
+    /** The rows the statistics hold: one per frame {@link #add} has added
+     *  since the restart. */
     public int statisticsRowCount() {
         synchronized (statsLock) {
             return statsRowCount;
@@ -971,14 +607,14 @@ public final class CoherentAccumulator {
     }
 
     /**
-     * The statistics' column names, unmodifiable: {@code frames}, the global
-     * frame count after the add; then per line, named by its coefficients
+     * The statistics' column names, unmodifiable: {@code frames}, the frame
+     * count after the add; then per line, named by its coefficients
      * ({@code (2,0)} for H2, {@code (1,1)} for F1 + F2), at the line's centre
      * bin:
      * <ul>
      *   <li>{@code (a,b) raw} - the frame's magnitude as it was added;</li>
      *   <li>{@code (a,b) accumulated} - the average's magnitude after the
-     *       add, the line's sum over its own local count;</li>
+     *       add, the sum over the frame count;</li>
      *   <li>{@code (a,b) raw phase} - the frame's phase as the add turned
      *       it back to the collection's reference frame, degrees: the phase
      *       of its contribution to the sums, which compares with the
@@ -986,11 +622,10 @@ public final class CoherentAccumulator {
      *   <li>{@code (a,b) accumulated phase} - the average's phase,
      *       degrees;</li>
      *   <li>for every line but a tone, {@code (a,b) raw band top} - the band
-     *       top over the frame's own band bins - and
-     *       {@code (a,b) accumulated band top} - the band top over the line's
-     *       band sums over its local count, the overlay's local band top;
-     *       both {@link Double#NaN} while {@link #lineBands} has laid out no
-     *       band.</li>
+     *       top over the frame's bins beside the line - and
+     *       {@code (a,b) accumulated band top} - the band top over the
+     *       average's bins beside the line; both {@link Double#NaN} while
+     *       {@link #bandGeometry} has set none.</li>
      * </ul>
      * The lines are the fundamental (1,0), the second tone (0,1) where a
      * pair is pinned, H2 .. H9 and every intermodulation product.
@@ -1006,8 +641,8 @@ public final class CoherentAccumulator {
      * magnitude in the transform's own unit (times
      * {@link FftResult#amplitudePerMagnitude} it is the amplitude, full
      * scale 1), a phase in degrees, {@link Double#NaN} where it was not
-     * measured - a band top with no band laid out, or a line the family no
-     * longer held.
+     * measured - a band top with no band geometry set, or a line the family
+     * no longer held.
      *
      * @throws IndexOutOfBoundsException outside the rows or the columns held
      */
@@ -1019,55 +654,6 @@ public final class CoherentAccumulator {
         }
     }
 
-    /**
-     * Writes the statistics to {@code path}: a header row of the column
-     * names with their units, then one row per frame; the levels in dBFS on
-     * the amplitude scale {@code amplitudePerMagnitude}
-     * ({@link FftResult#amplitudePerMagnitude} of the collection's results),
-     * semicolon-separated with a decimal comma, an empty field where a value
-     * was not measured.  The rows are copied out first, so the file is
-     * written while the analysis goes on adding.
-     */
-    public void exportStatistics(Path path, double amplitudePerMagnitude) throws IOException {
-        double[]     rows;
-        int          count;
-        int          width;
-        List<String> columns;
-        boolean[]    phase;
-        synchronized (statsLock) {
-            count   = statsRowCount;
-            width   = statsWidth;
-            rows    = Arrays.copyOf(statsRows, count * width);
-            columns = statsColumns;
-            phase   = statsPhase;
-        }
-        DecimalFormat number = new DecimalFormat(STATS_NUMBER, DecimalFormatSymbols.getInstance(Locale.GERMAN));
-        try (BufferedWriter out = Files.newBufferedWriter(path, StandardCharsets.UTF_8)) {
-            StringBuilder line = new StringBuilder();
-            for (int c = 0; c < width; c++) {
-                if (c > 0) line.append(STATS_SEPARATOR);
-                line.append(columns.get(c)).append(c == 0 ? "" : phase[c] ? STATS_PHASE_UNIT : STATS_LEVEL_UNIT);
-            }
-            out.write(line.toString());
-            out.newLine();
-            for (int row = 0; row < count; row++) {
-                line.setLength(0);
-                for (int c = 0; c < width; c++) {
-                    if (c > 0) line.append(STATS_SEPARATOR);
-                    double v = rows[row * width + c];
-                    if (c > 0 && !phase[c]) {
-                        double amp = v * amplitudePerMagnitude;
-                        v = amp > STATS_MIN_AMPLITUDE ? 20.0 * Math.log10(amp)
-                                : Double.isNaN(v) ? Double.NaN : STATS_NO_SIGNAL_DBFS;
-                    }
-                    if (Double.isFinite(v)) line.append(number.format(v));
-                }
-                out.write(line.toString());
-                out.newLine();
-            }
-        }
-    }
-
     /** Drops the statistics and their layout. */
     private void clearStats() {
         synchronized (statsLock) {
@@ -1075,63 +661,60 @@ public final class CoherentAccumulator {
             statsRowCount = 0;
             statsWidth    = 1;
             statsColumns  = List.of(STATS_FRAMES);
-            statsPhase    = new boolean[1];
         }
-        statsTones = 0;
-        statsA     = new int[0];
-        statsB     = new int[0];
-        statsIndex = new int[0];
+        statsTones  = 0;
+        statsF1Coef = new int[0];
+        statsF2Coef = new int[0];
+        statsIndex  = new int[0];
     }
 
     /** Fixes the statistics lines of a new collection on the family just
      *  built: the fundamental, the second tone where a pair is pinned, then
      *  H2 .. {@link #STATS_MAX_HARMONIC} and every product in position
-     *  order. */
+     *  order.  A line is named by its coefficients on the two tones: the
+     *  line at {@code f1Coef F1 + f2Coef F2}, harmonic h of a single tone
+     *  being {@code (h, 0)}. */
     private void layoutStats() {
-        int[] a = new int[memberCount];
-        int[] b = new int[memberCount];
-        int   n = 0;
+        int[] f1Coefs = new int[memberCount];
+        int[] f2Coefs = new int[memberCount];
+        int   n       = 0;
         if (lineIndex(1, 0) >= 0) {
-            a[n]   = 1;
-            b[n++] = 0;
+            f1Coefs[n]   = 1;
+            f2Coefs[n++] = 0;
         }
         if (lineIndex(0, 1) >= 0) {
-            a[n]   = 0;
-            b[n++] = 1;
+            f1Coefs[n]   = 0;
+            f2Coefs[n++] = 1;
         }
         int tones = n;
         for (int m = 0; m < memberCount; m++) {
             if (followed(m)) {
-                a[n]   = memberA[m];
-                b[n++] = memberB[m];
+                f1Coefs[n]   = memberA[m];
+                f2Coefs[n++] = memberB[m];
             }
         }
-        int       width = 1 + STATS_TONE_COLUMNS * tones + STATS_LINE_COLUMNS * (n - tones);
-        String[]  names = new String[width];
-        boolean[] phase = new boolean[width];
-        int       c     = 0;
+        int      width = 1 + STATS_TONE_COLUMNS * tones + STATS_LINE_COLUMNS * (n - tones);
+        String[] names = new String[width];
+        int      c     = 0;
         names[c++] = STATS_FRAMES;
         for (int i = 0; i < n; i++) {
-            String line = "(" + a[i] + "," + b[i] + ")";
+            String line = "(" + f1Coefs[i] + "," + f2Coefs[i] + ")";
             names[c++] = line + " raw";
             names[c++] = line + " accumulated";
-            phase[c]   = true;
             names[c++] = line + " raw phase";
-            phase[c]   = true;
             names[c++] = line + " accumulated phase";
             if (i >= tones) {
                 names[c++] = line + " raw band top";
                 names[c++] = line + " accumulated band top";
             }
         }
-        statsTones = tones;
-        statsA     = Arrays.copyOf(a, n);
-        statsB     = Arrays.copyOf(b, n);
-        statsIndex = new int[n];
+        statsTones  = tones;
+        statsF1Coef = Arrays.copyOf(f1Coefs, n);
+        statsF2Coef = Arrays.copyOf(f2Coefs, n);
+        statsIndex  = new int[n];
         mapStatsLines();
         synchronized (statsLock) {
             statsColumns = List.of(names);
-            statsPhase   = phase;
             statsWidth   = width;
         }
     }
@@ -1140,52 +723,67 @@ public final class CoherentAccumulator {
      *  found by the line's coefficients; -1 where the family holds it no
      *  longer. */
     private void mapStatsLines() {
-        for (int i = 0; i < statsA.length; i++) {
-            statsIndex[i] = lineIndex(statsA[i], statsB[i]);
+        for (int i = 0; i < statsF1Coef.length; i++) {
+            statsIndex[i] = lineIndex(statsF1Coef[i], statsF2Coef[i]);
         }
     }
 
-    /** The family index of the line ({@code a}, {@code b}) other than a
-     *  pilot, -1 where the family holds none. */
-    private int lineIndex(int a, int b) {
+    /** The family index of the line at {@code f1Coef F1 + f2Coef F2} other
+     *  than a pilot, -1 where the family holds none. */
+    private int lineIndex(int f1Coef, int f2Coef) {
         for (int m = 0; m < memberCount; m++) {
-            if (memberPilot[m] == 0 && memberA[m] == a && memberB[m] == b) return m;
+            if (memberPilot[m] == 0 && memberA[m] == f1Coef && memberB[m] == f2Coef) return m;
         }
         return -1;
     }
 
-    /** Appends the row of the frame just added from {@code re} /
-     *  {@code im}: the global frame count, then per statistics line at its
-     *  centre bin the frame's and the average's magnitude (the average over
-     *  the line's local count) and phase (the frame's as turned back), and
-     *  for a line other than a tone
-     *  the band top over the frame's band bins and over the line's band sums.
-     *  The row is assembled outside the lock and copied in under it. */
-    private void recordStats(double[] re, double[] im) {
+    /** True for a family line the statistics follow beside the tones: H2 ..
+     *  {@link #STATS_MAX_HARMONIC} or a product - never a pilot, the
+     *  fundamental (1, 0) or the second tone (0, 1). */
+    private boolean followed(int member) {
+        int f1Coef = memberA[member];
+        int f2Coef = memberB[member];
+        if (memberPilot[member] != 0 || (f1Coef == 1 && f2Coef == 0) || (f1Coef == 0 && f2Coef == 1)) {
+            return false;
+        }
+        return f2Coef != 0 || f1Coef <= STATS_MAX_HARMONIC;
+    }
+
+    /** Family line {@code member}'s centre bin: its position rounded, clamped
+     *  to the spectrum. */
+    private int centreBin(int member) {
+        return Math.min(halfSize, Math.max(0, (int) Math.round(memberPos[member])));
+    }
+
+    /** Appends the row of the frame just added from {@code frameRe} /
+     *  {@code frameIm}: the frame count, then per statistics line at its
+     *  centre bin the frame's and the average's magnitude and phase (the
+     *  frame's as turned back), and for a line other than a tone the band top
+     *  over the frame's bins and over the average's bins beside it.  The row
+     *  is assembled outside the lock and copied in under it. */
+    private void recordStats(double[] frameRe, double[] frameIm) {
         if (statsRow.length != statsWidth) statsRow = new double[statsWidth];
+        final double   mean  = frames > 0.0 ? 1.0 / frames : 0.0;
+        final double[] accRe = sumRe;
+        final double[] accIm = sumIm;
         int c = 0;
         statsRow[c++] = frames;
-        for (int i = 0; i < statsA.length; i++) {
-            int     m    = statsIndex[i];
-            boolean tone = i < statsTones;
-            if (m < 0) {
+        for (int i = 0; i < statsF1Coef.length; i++) {
+            int     member = statsIndex[i];
+            boolean tone   = i < statsTones;
+            if (member < 0) {
                 int columns = tone ? STATS_TONE_COLUMNS : STATS_LINE_COLUMNS;
                 for (int j = 0; j < columns; j++) statsRow[c++] = Double.NaN;
                 continue;
             }
-            int    k     = centreBin(m);
-            double local = localCount[m];
-            double sRe   = sumRe[k];
-            double sIm   = sumIm[k];
-            statsRow[c++] = Math.sqrt(re[k] * re[k] + im[k] * im[k]);
-            statsRow[c++] = local > 0.0 ? Math.sqrt(sRe * sRe + sIm * sIm) / local : Double.NaN;
-            statsRow[c++] = turnedPhaseDeg(m, k, re[k], im[k]);
-            statsRow[c++] = Math.toDegrees(Math.atan2(sIm, sRe));
+            int bin = centreBin(member);
+            statsRow[c++] = Math.hypot(frameRe[bin], frameIm[bin]);
+            statsRow[c++] = Math.hypot(accRe[bin], accIm[bin]) * mean;
+            statsRow[c++] = turnedPhaseDeg(member, bin, frameRe[bin], frameIm[bin]);
+            statsRow[c++] = Math.toDegrees(Math.atan2(accIm[bin], accRe[bin]));
             if (!tone) {
-                double raw = rawBandTop(m, re, im);
-                double acc = bandTop(m, 1.0);
-                statsRow[c++] = raw > 0.0 ? raw : Double.NaN;
-                statsRow[c++] = acc > 0.0 ? acc : Double.NaN;
+                statsRow[c++] = bandTop(bin, bandBin -> Math.hypot(frameRe[bandBin], frameIm[bandBin]));
+                statsRow[c++] = bandTop(bin, bandBin -> Math.hypot(accRe[bandBin], accIm[bandBin]) * mean);
             }
         }
         synchronized (statsLock) {
@@ -1199,19 +797,30 @@ public final class CoherentAccumulator {
         }
     }
 
-    /** The phase in degrees of the frame's bin {@code k} - the centre bin of
-     *  family line {@code m} - as {@link #add} turned it back: by the angle
-     *  of the line the lobe walk gives the bin to, which is {@code m} unless
-     *  a lower line's lobe reaches over it.  The very phase the bin's
-     *  contribution to the sums carries, so it compares with the
-     *  accumulated phase directly.  Valid right after the add, while the
+    /** The band top beside the line centred on {@code bin} over the
+     *  magnitudes {@code mag} gives: {@link ToneLobeLift#lineFloor}, median +
+     *  4 MAD of the bins within 25 Hz beside the line's lobe;
+     *  {@link Double#NaN} while no band geometry is set or the band reads
+     *  none. */
+    private double bandTop(int bin, IntToDoubleFunction mag) {
+        if (!(bandBinHz > 0.0)) return Double.NaN;
+        double top = lobe.lineFloor(mag, bin, halfSize, bandBinHz, bandNenbw);
+        return top > 0.0 ? top : Double.NaN;
+    }
+
+    /** The phase in degrees of the frame's {@code bin} - the centre bin of
+     *  family line {@code member} - as {@link #add} turned it back: by the
+     *  angle of the line the hump walk gives the bin to, which is
+     *  {@code member} unless a lower line's hump reaches over it.  The very
+     *  phase the bin's contribution to the sums carries, so it compares with
+     *  the accumulated phase directly.  Valid right after the add, while the
      *  family's phasors still hold that frame's angles. */
-    private double turnedPhaseDeg(int m, int k, double re, double im) {
-        int owner = m;
-        while (owner > 0 && memberHi[owner - 1] >= k) owner--;
-        double c = memberCos[owner];
-        double s = memberSin[owner];
-        return Math.toDegrees(Math.atan2(re * s + im * c, re * c - im * s));
+    private double turnedPhaseDeg(int member, int bin, double binRe, double binIm) {
+        int owner = member;
+        while (owner > 0 && memberHi[owner - 1] >= bin) owner--;
+        double cos = memberCos[owner];
+        double sin = memberSin[owner];
+        return Math.toDegrees(Math.atan2(binRe * sin + binIm * cos, binRe * cos - binIm * sin));
     }
 
     /** The coherent family on the pinned geometry: the harmonic ladder h·κ
@@ -1236,11 +845,6 @@ public final class CoherentAccumulator {
             memberHi    = new int[cap];
             memberCos   = new double[cap];
             memberSin   = new double[cap];
-            localCount   = new double[cap];
-            waitingReset = new boolean[cap];
-            bandLo       = new int[cap];
-            bandLen      = new int[cap];
-            bandOff      = new int[cap];
         }
         int n = 0;
         for (int h = 1; h <= hMax; h++) {
@@ -1276,12 +880,6 @@ public final class CoherentAccumulator {
         for (int i = 0; i < n; i++) {
             memberLo[i] = Math.max(0, (int) Math.ceil(memberPos[i] - lobeHalfBins));
             memberHi[i] = Math.min(halfSize, (int) Math.floor(memberPos[i] + lobeHalfBins));
-            // Built at the restart and once more when κ is refined, and no
-            // line can be reset or marked before that refinement: every line
-            // starts on the global frame count, unmarked.
-            localCount[i]   = frames;
-            waitingReset[i] = false;
-            bandLen[i]      = 0;
         }
         memberCount = n;
     }

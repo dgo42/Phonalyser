@@ -96,19 +96,6 @@ public interface GeneratorControls {
     void applyDualToneCompensation(double[] ampRatios, int[] aCoef, int[] bCoef,
             double[] phiInits);
 
-    /** Changes only the named harmonics of the running tone's correction table
-     *  - one or more entries, the arrays parallel as for
-     *  {@link #applyCompensation} - and leaves every other entry as it is.  The
-     *  generator fades each named line from the magnitude and phase it renders
-     *  to the new ones: a step in a line is a glitch on the output and a frame
-     *  the analysis rejects as a discontinuity. */
-    void applyCompensationLines(double[] ampRatios, int[] hNums, double[] phiInits);
-
-    /** The two-tone counterpart of {@link #applyCompensationLines}: one entry per
-     *  named {@code a f1 + b f2} product. */
-    void applyDualToneCompensationLines(double[] ampRatios, int[] aCoef, int[] bCoef,
-            double[] phiInits);
-
     /** Drops every correction table and returns a compensated form to its plain
      *  tone. */
     void clearCompensation();

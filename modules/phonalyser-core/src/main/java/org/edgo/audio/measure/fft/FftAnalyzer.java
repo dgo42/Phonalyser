@@ -880,11 +880,6 @@ public class FftAnalyzer {
             // previous dual-tone tick's products.
             outResult.imd                        = null;
             outResult.preCorrectionPeaks         = null;
-            // The line states and the kappa-refined flag are the coherent
-            // average's, stamped by its overlay alone; a reused slot must not
-            // show a previous average's.
-            outResult.clearLineStates();
-            outResult.coherentKappaRefined       = false;
             // The reference channel's frequencies are the worker's to write
             // after this returns; cleared here for the same reason
             // preCorrectionPeaks is - a pooled slot must not hand the next tick
@@ -1071,9 +1066,6 @@ public class FftAnalyzer {
         // tick's value doesn't leak across pool slot recycle.  The reference
         // channel's two frequencies are the worker's in exactly the same way.
         outResult.preCorrectionPeaks = null;
-        // Both stamped by the coherent average's overlay alone.
-        outResult.clearLineStates();
-        outResult.coherentKappaRefined = false;
         outResult.referenceFundamentalHzRefined  = Double.NaN;
         outResult.referenceFundamental2HzRefined = Double.NaN;
         outResult.captureRawPeaks();   // raw F + peak phasors for the DAC-predistortion de-embed

@@ -78,10 +78,6 @@ public final class CaptureAverage {
                 ? r.fundamental2HzRefined / r.freqResolution : Double.NaN;
         accumulator.restart(fftSize, coherent, kappa, kappa2, r.imdProductA, r.imdProductB,
                 analyzer.mainLobeBins(windowType), r.pilot1Bin, r.pilot2Bin);
-        // Each line's band top - the level a correction must clear - is read
-        // from the line's local band; a capture resets no line, so it is the
-        // band top over the averaged spectrum.
-        accumulator.lineBands(r.freqResolution, r.windowNenbwBins);
         // The analysed frame is the reference the rest is turned back to; the
         // result holds its transform (the magnitude alone when incoherent).
         addFrame(r.re, r.im, 0.0, coherent);
