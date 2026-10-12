@@ -125,9 +125,8 @@ public final class ToneLobeLift {
     public double lineFloor(IntToDoubleFunction mag, int bin, int maxBin,
             double binHz, double nenbwBins) {
         if (!(binHz > 0.0)) return 0.0;
-        int exclude = (int) Math.ceil(LINE_FLOOR_EXCLUDE_NENBW * Math.max(1.0, nenbwBins));
-        int span = Math.max((int) Math.round(LINE_FLOOR_SPAN_HZ / binHz),
-                exclude + LINE_FLOOR_MIN_BINS);
+        int exclude = lineFloorExcludeBins(nenbwBins);
+        int span = lineFloorSpanBins(binHz, nenbwBins);
         int lo = Math.max(1, bin - span);
         int hi = Math.min(maxBin, bin + span);
         double[] buf = new double[Math.max(0, hi - lo + 1)];
@@ -139,6 +138,26 @@ public final class ToneLobeLift {
         }
         if (m < LINE_FLOOR_MIN_BINS) return 0.0;
         return bandTop(buf, m);
+    }
+
+    /** The half-width in bins of {@link #lineFloor}'s window around a line:
+     *  {@link #LINE_FLOOR_SPAN_HZ} at {@code binHz} per bin, and at least the
+     *  lobe exclusion plus {@link #LINE_FLOOR_MIN_BINS}, so that the window
+     *  holds that many floor bins beside the exclusion.  {@code binHz} must be
+     *  positive.
+     *
+     * @param binHz     the spectrum's bin width in Hz
+     * @param nenbwBins the window's equivalent noise bandwidth in bins
+     */
+    public int lineFloorSpanBins(double binHz, double nenbwBins) {
+        return Math.max((int) Math.round(LINE_FLOOR_SPAN_HZ / binHz),
+                lineFloorExcludeBins(nenbwBins) + LINE_FLOOR_MIN_BINS);
+    }
+
+    /** The half-width in bins of the lobe exclusion at the centre of
+     *  {@link #lineFloor}'s window. */
+    private int lineFloorExcludeBins(double nenbwBins) {
+        return (int) Math.ceil(LINE_FLOOR_EXCLUDE_NENBW * Math.max(1.0, nenbwBins));
     }
 
     /** {@code median + CEIL_K·MAD} of the first {@code m} values of

@@ -21,6 +21,9 @@ package org.edgo.audio.measure.fft;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.Random;
+
+import org.edgo.audio.measure.dsp.ToneLobeLift;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.WindowType;
 import org.junit.jupiter.api.Test;
@@ -32,8 +35,10 @@ import org.junit.jupiter.api.Test;
  */
 class CaptureAverageTest {
 
-    private static final int SAMPLE_RATE = 48_000;
-    private static final int FFT_SIZE    = 8_192;
+    private static final int    SAMPLE_RATE = 48_000;
+    private static final int    FFT_SIZE    = 8_192;
+    private static final long   NOISE_SEED  = 42L;
+    private static final double NOISE_RMS   = 1e-4;
 
     private double[] sine(double freqHz, int samples) {
         double[] s = new double[samples];
@@ -64,6 +69,23 @@ class CaptureAverageTest {
         // Identical frames: the window's leakage far from the tone sums to
         // itself as well.
         assertEquals(one.amplitudeDbFs[200], avg.amplitudeDbFs[200], 0.01, "a bin of leakage only");
+    }
+
+    @Test
+    void aLinesBandTopIsTheLineFloorOfTheAverage() {
+        // A tone in a little seeded noise, so that every band bin stands
+        // above the overlay's -300 dBFS floor.
+        double freqHz   = (double) SAMPLE_RATE / FFT_SIZE * 100;
+        double[] signal = sine(freqHz, FFT_SIZE * 4);
+        Random random   = new Random(NOISE_SEED);
+        for (int n = 0; n < signal.length; n++) signal[n] += NOISE_RMS * random.nextGaussian();
+        FftResult avg = captureAverage().analyze(signal, SAMPLE_RATE, FFT_SIZE, 8,
+                WindowType.HANN, FftOverlap.PCT_0, 0.0, 0.0, true, Double.NaN, false, Double.NaN);
+        FftResult.LineState h2 = avg.lineState(2, 0);
+        double floor = new ToneLobeLift().lineFloor(k -> Math.pow(10.0, avg.amplitudeDbFs[k] / 20.0),
+                h2.bin(), FFT_SIZE / 2, avg.freqResolution, avg.windowNenbwBins);
+        assertEquals(20.0 * Math.log10(floor), h2.localBandTopDbFs(), 1e-9,
+                "H2's band top, the lineFloor over the averaged spectrum the gate is read from");
     }
 
     @Test

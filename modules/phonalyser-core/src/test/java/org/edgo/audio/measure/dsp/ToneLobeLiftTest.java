@@ -78,6 +78,21 @@ class ToneLobeLiftTest {
     }
 
     @Test
+    void lineFloorSpanIs25HzOrTheExclusionPlusSixteenBins() {
+        ToneLobeLift lobe = new ToneLobeLift();
+        // 0.25 Hz bins: 25 Hz is 100 bins, far beyond 4 x 2 + 16 = 24
+        assertEquals(100, lobe.lineFloorSpanBins(0.25, 2.0));
+        // 5 Hz bins: 25 Hz is 5 bins, so the exclusion of ceil(4 x 2.6) = 11
+        // plus 16 floor bins sets the span
+        assertEquals(27, lobe.lineFloorSpanBins(5.0, 2.6));
+        // a noise bandwidth under one bin counts as one: 4 + 16
+        assertEquals(20, lobe.lineFloorSpanBins(5.0, 0.5));
+        // the span lineFloor reads: at 1 Hz bins and 2 bins of noise bandwidth
+        // the window reaches 25 bins, as the band-top test above relies on
+        assertEquals(25, lobe.lineFloorSpanBins(1.0, 2.0));
+    }
+
+    @Test
     void lobeExtendsOutToTheNoiseFloor() {
         // A dome descending ×0.5/bin; with the floor at 10 it stands above the
         // noise out to d=6 (1000·0.5^6 = 15.6 > 10; 0.5^7 = 7.8 < 10).

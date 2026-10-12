@@ -29,14 +29,25 @@ import org.edgo.audio.measure.enums.WindowType;
 import org.edgo.audio.measure.fft.CoherentAccumulator;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
+import org.edgo.audio.measure.fft.FftResult.LineState;
+import org.edgo.audio.measure.generator.SignalGenerator;
+import org.edgo.audio.measure.gui.bus.MessageBus;
+import org.edgo.audio.measure.gui.fft.predistortion.LineRestarts.Line;
+import org.edgo.audio.measure.gui.fft.predistortion.PredistortionEngine;
+import org.edgo.audio.measure.gui.sound.DoubleSignalBuffer;
+import org.edgo.audio.measure.gui.sound.SignalBufferReader;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
+import java.util.Collection;
+import java.util.List;
 import java.util.Random;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -225,6 +236,47 @@ class FftPhaseAlignAccumulatorTest {
     /** Degrees the pilot cases allow around an exact answer. */
     private static final double PILOT_TOL_DEG = 1.0e-3;
 
+    /** The line restart cases: the lines restarted - H2 and H3, harmonic h
+     *  being line (h, 0) - and H4, named by no request, beside them. */
+    private static final List<Line> RESTARTED    = List.of(new Line(2, 0), new Line(3, 0));
+    private static final Line       RUNNING_LINE = new Line(4, 0);
+    /** The fundamental the generator states it emits: bin 64 of 4096 points
+     *  at 48 kHz, 750 Hz, whose 10-period fade lasts 640 samples. */
+    private static final double FUND_HZ = (double) FUND_BIN * SAMPLE_RATE / FFT_SIZE;
+    /** The most frames the opening of a collection may take to refine κ, and
+     *  the most frames a restart may take to land after its request: its
+     *  bound lies 34240 samples past the write position at the request
+     *  (33600 of output drain, 640 of fade), and that position ends the last
+     *  window added before it, 4096 past its start, so the frame that lands
+     *  it starts 38 hops of 1024 after that window's start. */
+    private static final int    REFINE_MAX_FRAMES  = 60;
+    private static final int    RESTART_MAX_FRAMES = 60;
+    /** The capture the restart cases analyse, long enough for both spans. */
+    private static final int    RESTART_CAPTURE =
+            (REFINE_MAX_FRAMES + RESTART_MAX_FRAMES + 2) * HOP + WIN_LEN;
+    /** The capture ring the request reads its write position from, seconds:
+     *  longer than any write position a case states. */
+    private static final double RING_SECONDS = 2.0;
+    /** The frames between the two requests of the coexisting case, which is
+     *  also the hops between their bounds. */
+    private static final int    REQUEST_SPACING_FRAMES = 10;
+    /** The worker's one call into the engine, and the frame count the
+     *  handed result carries there, which a never-started engine records
+     *  and nothing else. */
+    private static final String HAND_TO_ENGINE = "handToPredistortionEngine";
+    private static final int    HANDED_FRAMES  = 7;
+    /** The worker's published fade tones {F1, F2}, which a request reads. */
+    private static final String FADE_TONES     = "fadeTonesHz";
+    /** The dual-tone restart case: F2 on bin 80, 937.5 Hz, 6 dB under F1,
+     *  so F2 - F1 - the product (-1, 1) - stands at 187.5 Hz, below F1, and
+     *  its 10-period fade lasts 2560 samples against F1's 640; F1 + F2 - the
+     *  product (1, 1) at 1687.5 Hz - takes F1's. */
+    private static final int    F2_BIN     = 80;
+    private static final double F2_HZ      = (double) F2_BIN * SAMPLE_RATE / FFT_SIZE;
+    private static final double F2_DB_UNDER_F1 = 6.0;
+    private static final Line   BELOW_F1   = new Line(-1, 1);
+    private static final Line   ABOVE_F1   = new Line(1, 1);
+
     /** The worker members this harness drives, by name because that is what
      *  reflection takes: the private field holding the next tick's phase
      *  excess, the private accumulate step, the private rollback the
@@ -236,6 +288,11 @@ class FftPhaseAlignAccumulatorTest {
     private static final String ACCUMULATOR = "accumulator";
 
     private static final Logger LOG = LogManager.getLogger("FftPhaseAlign");
+
+    /** The second tone the analysis is hinted at, Hz; NaN - single tone, no
+     *  hint - in every case but the dual-tone one, which sets it before its
+     *  first frame.  A fresh instance runs each case. */
+    private double secondToneHintHz = Double.NaN;
 
     /** One tick's phase excess in radians, as the driver supplies it. */
     @FunctionalInterface
@@ -1202,6 +1259,324 @@ class FftPhaseAlignAccumulatorTest {
         return HOLD_STEP_RAD * ((sample / HOP) / HOLD_TICKS);
     }
 
+    /**
+     * A line restart counts samples, not frames.  The lines named are marked
+     * waiting for their reset at once, and every frame that follows still
+     * adds to their old average until the first one whose window starts at
+     * or past the bound: the capture's write position at the request, plus
+     * the output drain and the generator's fade.  That frame starts after
+     * the change reached the converter whole, and it is the first the reset
+     * lines hold - their local count is its one
+     * frame and the waiting mark is gone - and the next adds a second.  A
+     * line no request names keeps averaging on the global frame count
+     * throughout.
+     */
+    @Test
+    void aLineRestartLandsOnTheFirstFrameStartingPastItsBound() throws Exception {
+        FftAnalyzerWorker worker   = new FftAnalyzerWorker(null);
+        FftAnalyzer       analyzer = new FftAnalyzer();
+        double[] analysed = channel(SEED + 7, RESTART_CAPTURE, FUND_BIN, HARMONICS, 0.0, null);
+        long base      = accumulateUntilRefined(worker, analyzer, analysed, 0);
+        long lastStart = base - HOP;
+        long fade  = (long) Math.ceil(SignalGenerator.LINE_FADE_PERIODS * SAMPLE_RATE / FUND_HZ);
+        long drain = (long) Math.ceil((Double) FieldUtils.readStaticField(
+                FftAnalyzerWorker.class, "OUTPUT_DRAIN_SKIP_SEC", true) * SAMPLE_RATE);
+        assertEquals(640, fade, "10 periods of 750 Hz at 48 kHz");
+        assertEquals(33_600, drain, "0.7 s of output drain at 48 kHz");
+        // The capture runs ahead of the analysis: written this far past the
+        // end of the last window added, the bound falls exactly on the start
+        // of a frame, which pins the "at or past" of the rule.
+        long ahead    = Math.floorMod(-(WIN_LEN + drain + fade), HOP);
+        long writePos = lastStart + WIN_LEN + ahead;
+        holdCaptureAndTone(worker, writePos);
+
+        worker.requestLineRestart(RESTARTED);
+
+        long bound = writePos + drain + fade;
+        assertEquals(0, Math.floorMod(bound - lastStart, HOP), "the bound falls on a frame start");
+        // the frame starting at the bound, counted in hops from the last frame
+        // added before the request
+        long landing = (bound - lastStart) / HOP;
+        assertEquals(38, landing, "4096 + 576 + 34240 samples past that frame's start");
+
+        int frames = 0;
+        while (base < bound) {
+            assertTrue(frames < RESTART_MAX_FRAMES, "the bound is reached within the capture");
+            FftResult r = addFrame(worker, analyzer, analysed, base);
+            for (Line line : RESTARTED) {
+                LineState s = r.lineState(line.a(), line.b());
+                assertTrue(s.waitingReset(), line + " is waiting for its reset at frame " + base);
+                assertEquals(r.frameCount, s.localCount(), line + " still adds to its old average");
+                assertTrue(Double.isFinite(s.localBandTopDbFs()), line + " carries its local band top");
+            }
+            assertEquals(r.frameCount, r.lineState(RUNNING_LINE.a(), RUNNING_LINE.b()).localCount(),
+                    "the line no request names runs on the global count");
+            frames++;
+            base += HOP;
+        }
+        assertEquals(landing - 1, frames, "every frame before the landing one starts short of the bound");
+        assertEquals(bound, base, "the landing frame starts exactly on the bound");
+
+        FftResult landed = addFrame(worker, analyzer, analysed, base);
+        for (Line line : RESTARTED) {
+            LineState s = landed.lineState(line.a(), line.b());
+            assertFalse(s.waitingReset(), line + " is no longer waiting once reset");
+            assertEquals(1, s.localCount(), line + " holds the landing frame alone");
+        }
+        LineState running = landed.lineState(RUNNING_LINE.a(), RUNNING_LINE.b());
+        assertEquals(landed.frameCount, running.localCount(), "the line no request names is untouched");
+        assertFalse(running.waitingReset(), "and never marked");
+        assertEquals(0, pendingRestarts(worker), "the request is dropped once carried out");
+
+        FftResult next = addFrame(worker, analyzer, analysed, base + HOP);
+        for (Line line : RESTARTED) {
+            assertEquals(2, next.lineState(line.a(), line.b()).localCount(),
+                    line + " averages on from its reset");
+        }
+    }
+
+    /**
+     * Requests coexist, each with its own bound.  H2 is requested first and
+     * H3 ten frames later, so H3's bound lies ten hops past H2's: H2 is reset
+     * on the first frame past its own bound while H3 still waits, and H3 ten
+     * frames after it, while H2 averages on from its own reset.
+     */
+    @Test
+    void twoRequestsCoexistEachWithItsOwnBound() throws Exception {
+        FftAnalyzerWorker worker   = new FftAnalyzerWorker(null);
+        FftAnalyzer       analyzer = new FftAnalyzer();
+        double[] analysed = channel(SEED + 9, RESTART_CAPTURE, FUND_BIN, HARMONICS, 0.0, null);
+        Line first  = RESTARTED.get(0);
+        Line second = RESTARTED.get(1);
+        long base = accumulateUntilRefined(worker, analyzer, analysed, 0);
+        holdCaptureAndTone(worker, base - HOP + WIN_LEN);
+        worker.requestLineRestart(List.of(first));
+        for (int f = 0; f < REQUEST_SPACING_FRAMES; f++) {
+            addFrame(worker, analyzer, analysed, base);
+            base += HOP;
+        }
+        holdCaptureAndTone(worker, base - HOP + WIN_LEN);
+        worker.requestLineRestart(List.of(second));
+        assertEquals(1, pendingRestarts(worker), "the first request is taken in");
+        assertEquals(1, queuedRestarts(worker), "the second waits for the next frame to be taken in");
+
+        FftResult r = null;
+        int frames = 0;
+        while (r == null || r.lineState(first.a(), first.b()).waitingReset()) {
+            assertTrue(frames++ < RESTART_MAX_FRAMES, "the first bound is reached within the capture");
+            r = addFrame(worker, analyzer, analysed, base);
+            base += HOP;
+        }
+        assertEquals(1, r.lineState(first.a(), first.b()).localCount(), first + " holds its landing frame");
+        assertTrue(r.lineState(second.a(), second.b()).waitingReset(), second + " still waits for its own bound");
+        assertEquals(1, pendingRestarts(worker), "the second request is still pending");
+
+        for (int f = 1; f < REQUEST_SPACING_FRAMES; f++) {
+            r = addFrame(worker, analyzer, analysed, base);
+            base += HOP;
+            assertTrue(r.lineState(second.a(), second.b()).waitingReset(),
+                    second + " waits until ten frames after the first landed");
+        }
+        r = addFrame(worker, analyzer, analysed, base);
+        assertFalse(r.lineState(second.a(), second.b()).waitingReset(), second + " is reset at its own bound");
+        assertEquals(1, r.lineState(second.a(), second.b()).localCount(), second + " holds its landing frame");
+        assertEquals(REQUEST_SPACING_FRAMES + 1, r.lineState(first.a(), first.b()).localCount(),
+                first + " averages on from its own reset");
+        assertEquals(0, pendingRestarts(worker), "both requests are carried out");
+    }
+
+    /**
+     * Dual tone: the generator fades a product over 10 periods of F1 or of
+     * the product's own frequency |a F1 + b F2|, whichever take the longer,
+     * and each line is bounded by its own fade.  F2 - F1 at 187.5 Hz fades
+     * over 2560 samples, F1 + F2 over F1's 640, so the two products requested
+     * together are stored as two requests whose bounds lie 1920 samples
+     * apart: F1 + F2 is reset on the 38th hop after the last frame added
+     * before the request, F2 - F1 on the 40th, and waits in between.
+     */
+    @Test
+    void aProductBelowF1WaitsForItsLongerFade() throws Exception {
+        secondToneHintHz = F2_HZ;
+        FftAnalyzerWorker worker   = new FftAnalyzerWorker(null);
+        FftAnalyzer       analyzer = new FftAnalyzer();
+        double[] analysed = channel(SEED + 10, RESTART_CAPTURE, FUND_BIN, HARMONICS, 0.0, null);
+        double   a2       = Math.pow(10.0, (FUND_DBFS - F2_DB_UNDER_F1) / 20.0);
+        for (int k = 0; k < analysed.length; k++) {
+            analysed[k] += a2 * Math.sin(2.0 * Math.PI * F2_BIN * k / FFT_SIZE);
+        }
+        long lastStart = accumulateUntilRefined(worker, analyzer, analysed, 0) - HOP;
+        long writePos  = lastStart + WIN_LEN;      // the end of the last window added
+        holdCaptureAndTone(worker, writePos);
+
+        // no second tone known: a product's fade cannot be placed
+        FieldUtils.writeField(worker, FADE_TONES, new double[]{ FUND_HZ, Double.NaN }, true);
+        worker.requestLineRestart(List.of(BELOW_F1, ABOVE_F1));
+        assertEquals(0, queuedRestarts(worker), "a product with no F2 known is refused");
+
+        FieldUtils.writeField(worker, FADE_TONES, new double[]{ FUND_HZ, F2_HZ }, true);
+        worker.requestLineRestart(List.of(BELOW_F1, ABOVE_F1));
+        assertEquals(2, queuedRestarts(worker), "two fades, two requests, each with its own bound");
+
+        long belowFade = (long) Math.ceil(SignalGenerator.LINE_FADE_PERIODS * SAMPLE_RATE / (F2_HZ - FUND_HZ));
+        long aboveFade = (long) Math.ceil(SignalGenerator.LINE_FADE_PERIODS * SAMPLE_RATE / FUND_HZ);
+        long drain     = (long) Math.ceil((Double) FieldUtils.readStaticField(
+                FftAnalyzerWorker.class, "OUTPUT_DRAIN_SKIP_SEC", true) * SAMPLE_RATE);
+        assertEquals(2560, belowFade, "10 periods of 187.5 Hz at 48 kHz");
+        assertEquals(640, aboveFade, "10 periods of F1, 750 Hz, at 48 kHz");
+        long belowLanding = (long) Math.ceil((double) (writePos + drain + belowFade - lastStart) / HOP);
+        long aboveLanding = (long) Math.ceil((double) (writePos + drain + aboveFade - lastStart) / HOP);
+        assertEquals(40, belowLanding, "4096 + 33600 + 2560 samples past the last frame's start");
+        assertEquals(38, aboveLanding, "4096 + 33600 + 640 samples past the last frame's start");
+
+        FftResult r = null;
+        for (int k = 1; k <= belowLanding; k++) {
+            r = addFrame(worker, analyzer, analysed, lastStart + k * HOP);
+            assertEquals(k < aboveLanding, r.lineState(ABOVE_F1.a(), ABOVE_F1.b()).waitingReset(),
+                    ABOVE_F1 + " waits up to its own bound, hop " + k);
+            assertEquals(k < belowLanding, r.lineState(BELOW_F1.a(), BELOW_F1.b()).waitingReset(),
+                    BELOW_F1 + " waits up to its own, longer bound, hop " + k);
+        }
+        assertEquals(1, r.lineState(BELOW_F1.a(), BELOW_F1.b()).localCount(), BELOW_F1 + " holds its landing frame");
+        assertEquals(belowLanding - aboveLanding + 1, r.lineState(ABOVE_F1.a(), ABOVE_F1.b()).localCount(),
+                ABOVE_F1 + " averages on from its own, earlier reset");
+        assertEquals(0, pendingRestarts(worker), "both requests are carried out");
+    }
+
+    /**
+     * A requested restart belongs to its collection.  With no fundamental
+     * known no bound is placed and nothing is queued; a request taken in
+     * before κ is refined is refused by the accumulator and nothing is
+     * stored.  A full reset - the statistics reset, which on a worker that is
+     * not running wipes the worker's own state at once - drops every request,
+     * queued or pending, and so does a restart of the collection by the
+     * accumulate step, here on a change of the averaging mode, which takes
+     * the queue in first and drops it with the rest.
+     */
+    @Test
+    void aFullResetAndACollectionRestartDropThePendingRestarts() throws Exception {
+        FftAnalyzerWorker worker   = new FftAnalyzerWorker(null);
+        FftAnalyzer       analyzer = new FftAnalyzer();
+        double[] analysed = channel(SEED + 8, RESTART_CAPTURE, FUND_BIN, HARMONICS, 0.0, null);
+
+        addFrame(worker, analyzer, analysed, 0);
+        holdCaptureAndTone(worker, WIN_LEN);
+        FieldUtils.writeField(worker, FADE_TONES, null, true);
+        worker.requestLineRestart(RESTARTED);
+        assertEquals(0, queuedRestarts(worker), "refused with no fundamental known");
+
+        holdCaptureAndTone(worker, WIN_LEN);
+        worker.requestLineRestart(RESTARTED);
+        assertEquals(1, queuedRestarts(worker), "queued at the call");
+        addFrame(worker, analyzer, analysed, HOP);
+        assertEquals(0, queuedRestarts(worker), "taken in on the next frame");
+        assertEquals(0, pendingRestarts(worker), "and refused there while κ is not refined");
+
+        long base = accumulateUntilRefined(worker, analyzer, analysed, 2 * HOP);
+        holdCaptureAndTone(worker, base - HOP + WIN_LEN);
+        worker.requestLineRestart(RESTARTED);
+        addFrame(worker, analyzer, analysed, base);
+        worker.requestLineRestart(RESTARTED);
+        assertEquals(1, pendingRestarts(worker), "one request taken in");
+        assertEquals(1, queuedRestarts(worker), "one still queued");
+        worker.resetStatistics();
+        assertEquals(0, pendingRestarts(worker), "the full reset drops the pending one");
+        assertEquals(0, queuedRestarts(worker), "and the queued one");
+
+        base = accumulateUntilRefined(worker, analyzer, analysed, 0);
+        holdCaptureAndTone(worker, base - HOP + WIN_LEN);
+        worker.requestLineRestart(RESTARTED);
+        assertEquals(1, queuedRestarts(worker), "queued again on the new collection");
+        FftResult r = analyze(analyzer,
+                Arrays.copyOfRange(analysed, (int) base, (int) base + WIN_LEN), base);
+        call(worker, ACCUMULATE, r, base, false, Integer.MAX_VALUE);
+        assertEquals(0, queuedRestarts(worker), "the collection restart takes the queue in");
+        assertEquals(0, pendingRestarts(worker), "and drops it with the rest");
+    }
+
+    /**
+     * A request is queued at the call, from any thread, and taken in by the
+     * worker on its next accumulated frame: until then the accumulator holds
+     * no mark for the lines; on that frame they are marked waiting.  The
+     * request here comes from a thread of its own, as the engine's comes
+     * from the display's thread once the correction went to the generator.
+     */
+    @Test
+    void aRequestIsQueuedAndMarkedOnTheNextFrame() throws Exception {
+        FftAnalyzerWorker worker   = new FftAnalyzerWorker(null);
+        FftAnalyzer       analyzer = new FftAnalyzer();
+        double[] analysed = channel(SEED + 11, RESTART_CAPTURE, FUND_BIN, HARMONICS, 0.0, null);
+        long base = accumulateUntilRefined(worker, analyzer, analysed, 0);
+        holdCaptureAndTone(worker, base - HOP + WIN_LEN);
+
+        Thread caller = new Thread(() -> worker.requestLineRestart(RESTARTED), "line-restart-caller");
+        caller.start();
+        caller.join();
+        assertEquals(1, queuedRestarts(worker), "queued at the call");
+        assertEquals(0, pendingRestarts(worker), "not yet taken in");
+        FftResult before = analyze(analyzer,
+                Arrays.copyOfRange(analysed, (int) base, (int) base + WIN_LEN), base);
+        overlay(worker, before);
+        for (Line line : RESTARTED) {
+            assertFalse(before.lineState(line.a(), line.b()).waitingReset(),
+                    line + " is not marked before the worker takes the request in");
+        }
+
+        FftResult next = addFrame(worker, analyzer, analysed, base);
+        assertEquals(0, queuedRestarts(worker), "taken in on the next frame");
+        assertEquals(1, pendingRestarts(worker), "and pending with its bound");
+        for (Line line : RESTARTED) {
+            assertTrue(next.lineState(line.a(), line.b()).waitingReset(), line + " is marked on that frame");
+        }
+    }
+
+    /**
+     * The worker's one call into the engine hands the result to the
+     * registered engine on the calling thread, and to nothing once it is
+     * unregistered or once a reset has moved the epoch past the result's.
+     * Before the hand it publishes the tones a restart's fade is placed on:
+     * the emitted pair it holds, or, while it holds none, the result's own
+     * refined tones.  The engine here was never started, so it takes no
+     * decision and only records the frame count it was handed - the
+     * observable that the result arrived.
+     */
+    @Test
+    void aRegisteredEngineIsHandedTheResult() throws Exception {
+        FftAnalyzerWorker   worker = new FftAnalyzerWorker(null);
+        PredistortionEngine engine =
+                new PredistortionEngine(Runnable::run, MessageBus.instance(), worker, null, null);
+        FftResult r = new FftResult();
+        r.frameCount            = HANDED_FRAMES;
+        r.fundamentalHzRefined  = FUND_HZ;
+        r.fundamental2HzRefined = Double.NaN;
+
+        call(worker, HAND_TO_ENGINE, r);
+        assertEquals(0, engine.getFrameCount(), "nothing is handed while no engine is registered");
+
+        worker.registerPredistortionEngine(engine);
+        call(worker, HAND_TO_ENGINE, r);
+        assertEquals(HANDED_FRAMES, engine.getFrameCount(), "the registered engine is handed the result");
+        assertArrayEquals(new double[]{ FUND_HZ, Double.NaN },
+                (double[]) FieldUtils.readField(worker, FADE_TONES, true),
+                "with no emitted pair held, the result's refined tones place the fade");
+
+        FieldUtils.writeField(worker, "heldEmittedHz", new double[]{ FUND_HZ, F2_HZ }, true);
+        call(worker, HAND_TO_ENGINE, r);
+        assertArrayEquals(new double[]{ FUND_HZ, F2_HZ },
+                (double[]) FieldUtils.readField(worker, FADE_TONES, true),
+                "the emitted pair held places it");
+
+        r.epoch      = ((AtomicLong) FieldUtils.readField(worker, "resetEpoch", true)).get() - 1;
+        r.frameCount = HANDED_FRAMES + 1;
+        call(worker, HAND_TO_ENGINE, r);
+        assertEquals(HANDED_FRAMES, engine.getFrameCount(), "a result from before a reset is not handed");
+        r.epoch = ((AtomicLong) FieldUtils.readField(worker, "resetEpoch", true)).get();
+
+        worker.unregisterPredistortionEngine();
+        r.frameCount = HANDED_FRAMES + 1;
+        call(worker, HAND_TO_ENGINE, r);
+        assertEquals(HANDED_FRAMES, engine.getFrameCount(), "and nothing once it is unregistered");
+    }
+
     // ── Drivers ────────────────────────────────────────────────────────────
 
     /**
@@ -1270,6 +1645,57 @@ class FftPhaseAlignAccumulatorTest {
         return levels;
     }
 
+    /** Adds frames of {@code analysed}, one hop apart from sample
+     *  {@code from} on, until the accumulator's κ is refined - the earliest
+     *  moment a line may be marked or reset - and returns the start of the
+     *  next frame. */
+    private long accumulateUntilRefined(FftAnalyzerWorker worker, FftAnalyzer analyzer,
+            double[] analysed, long from) throws IllegalAccessException {
+        CoherentAccumulator accumulator =
+                (CoherentAccumulator) FieldUtils.readField(worker, ACCUMULATOR, true);
+        long base = from;
+        for (int f = 0; f < REFINE_MAX_FRAMES && !accumulator.isKappaRefined(); f++) {
+            addFrame(worker, analyzer, analysed, base);
+            base += HOP;
+        }
+        assertTrue(accumulator.isKappaRefined(), "κ is refined within " + REFINE_MAX_FRAMES + " frames");
+        return base;
+    }
+
+    /** One coherent frame of {@code analysed} starting at {@code base},
+     *  added through the worker's accumulate step and written back by the
+     *  overlay, which stamps the lines' states; returns that result. */
+    private FftResult addFrame(FftAnalyzerWorker worker, FftAnalyzer analyzer,
+            double[] analysed, long base) {
+        FftResult r = analyze(analyzer,
+                Arrays.copyOfRange(analysed, (int) base, (int) base + WIN_LEN), base);
+        call(worker, ACCUMULATE, r, base, true, Integer.MAX_VALUE);
+        overlay(worker, r);
+        return r;
+    }
+
+    /** What a line restart request reads off the worker, which the harness
+     *  never starts: a capture written up to {@code writePos} and the fade
+     *  tones a single tone's emitted pair publishes, {F1, 0}. */
+    private void holdCaptureAndTone(FftAnalyzerWorker worker, long writePos)
+            throws IllegalAccessException {
+        DoubleSignalBuffer ring = new DoubleSignalBuffer(SAMPLE_RATE, RING_SECONDS);
+        double[] silence = new double[(int) writePos];
+        ring.appendBatch(silence, silence, silence.length);
+        FieldUtils.writeField(worker, "reader", new SignalBufferReader(ring), true);
+        FieldUtils.writeField(worker, FADE_TONES, new double[]{ FUND_HZ, 0.0 }, true);
+    }
+
+    /** The line restarts the worker has taken in and not yet carried out. */
+    private int pendingRestarts(FftAnalyzerWorker worker) throws IllegalAccessException {
+        return ((List<?>) FieldUtils.readField(worker, "pendingLineRestarts", true)).size();
+    }
+
+    /** The line restarts requested and not yet taken in by the worker. */
+    private int queuedRestarts(FftAnalyzerWorker worker) throws IllegalAccessException {
+        return ((Collection<?>) FieldUtils.readField(worker, "requestedLineRestarts", true)).size();
+    }
+
     /** The worker's accumulator, written back onto {@code r} - the display
      *  path's step. */
     private void overlay(FftAnalyzerWorker worker, FftResult r) {
@@ -1281,11 +1707,13 @@ class FftPhaseAlignAccumulatorTest {
     }
 
     /** One tick's analysis, with the worker's own settings: the spectrum only
-     *  (the stats are re-derived from the accumulator), single tone, no hint. */
+     *  (the stats are re-derived from the accumulator), single tone, no hint -
+     *  or, while {@link #secondToneHintHz} names one, the dual tone hinted at
+     *  it, as the worker hints the generator's second tone. */
     private FftResult analyze(FftAnalyzer analyzer, double[] win, long base) {
         analyzer.setSpectrumOnly(true);
-        analyzer.setMultiTone(false);
-        analyzer.setSecondToneHintHz(Double.NaN);
+        analyzer.setMultiTone(!Double.isNaN(secondToneHintHz));
+        analyzer.setSecondToneHintHz(secondToneHintHz);
         return analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, HARMONICS, WINDOW, OVERLAP,
                 0.0, 0.0, true, Double.NaN, false, Double.NaN);
     }

@@ -79,8 +79,9 @@ public final class HarmonicCompensation {
     private final double[] accRe;
     private final double[] accIm;
     private final double[] hFreqs;
-    /** The change the last {@link #accumulate} made to each harmonic's
-     *  correction - zero where the apply gate held the harmonic. */
+    /** The change the last {@link #accumulate} or {@link #applyLine} made to
+     *  each harmonic's correction - zero where the apply gate held the
+     *  harmonic. */
     private final double[]  lastDeltaRe;
     private final double[]  lastDeltaIm;
     /** Reads each harmonic's local noise floor for the apply gate. */
@@ -112,8 +113,9 @@ public final class HarmonicCompensation {
         return new double[] { accRe[h], accIm[h] };
     }
 
-    /** The change the last {@link #accumulate} made to harmonic H(h+2)'s
-     *  correction as {@code [re, im]} - zero where the apply gate held it. */
+    /** The change the last {@link #accumulate} or {@link #applyLine} made to
+     *  harmonic H(h+2)'s correction as {@code [re, im]} - zero where the apply
+     *  gate held it. */
     public double[] lastDelta(int h) {
         return new double[] { lastDeltaRe[h], lastDeltaIm[h] };
     }
@@ -174,14 +176,53 @@ public final class HarmonicCompensation {
     }
 
     /**
+     * One line's apply: harmonic H(h+2)'s measured residual {@code (re, im)},
+     * read at {@code hz}, added at the full step to the correction in force -
+     * the plain inversion of {@link #accumulate}, for one harmonic - and
+     * recorded as its last delta.  Returns that harmonic's generator entry,
+     * converted by the same {@link #toEntry} as {@link #toGeneratorCorrections},
+     * so the entry a per-line apply hands the generator is the one the whole
+     * set lists for that harmonic.  No apply gate here: the caller applies
+     * only the lines that cleared it.  Every other harmonic's correction,
+     * frequency and last delta stay as they are.
+     */
+    public GeneratorCorrections applyLine(int h, double re, double im, double hz,
+            double fundamentalHz, DoubleFunction<double[]> calResponseAt,
+            double adcFsVoltageRms, double dacFundamentalVrms) {
+        lastDeltaRe[h] = re;
+        lastDeltaIm[h] = im;
+        accRe[h] += re;
+        accIm[h] += im;
+        hFreqs[h] = hz;
+        GeneratorCorrections entry = new GeneratorCorrections(new double[1], new int[1], new double[1]);
+        toEntry(h, entry, 0, fundamentalHz, calResponseAt, adcFsVoltageRms, dacFundamentalVrms);
+        return entry;
+    }
+
+    /**
      * The harmonics of one frame as complex phasors in the accumulator's frame
      * - the construction {@link #accumulate} adds in.  Magnitude is the
-     * harmonic's ABSOLUTE measured level (linear, from its raw dBFS before
-     * the chain's de-embedding), phase is the RAW measured phase de-rotated by
-     * n*phi1 as described on {@link #accumulate}; a harmonic that was not
-     * located carries {@code (0, 0)} at frequency 0.  The clearance is the
-     * same raw level over the upper border of the noise band beside the line
-     * ({@link ToneLobeLift#lineFloor}).
+     * harmonic's ABSOLUTE measured level (linear dBFS, before the chain's
+     * de-embedding), phase is the RAW measured phase de-rotated by n*phi1 as
+     * described on {@link #accumulate}; a harmonic that was not located
+     * carries {@code (0, 0)} at frequency 0.
+     *
+     * <p>Both are read off the averaged peak phasor at the harmonic's bin
+     * ({@link FftResult#rawPeakRe}, captured from the averaged spectrum): with
+     * the FLL holding the tone on the analysis bin grid, each harmonic's
+     * coherently averaged lobe peaks on that bin, so the one bin carries the
+     * harmonic's averaged level and phase together - the same single-bin
+     * reading the intermodulation products take.  The analyzer's harmonic
+     * table is one frame's reading on a live averaged result, and is the level
+     * only on a result without captured peaks
+     * ({@link FftResult#rawHarmonicDbFs}).
+     *
+     * <p>The clearance is the
+     * same raw level over the line's own local band top on a result that
+     * carries line states ({@link FftResult#lineClearanceDb}, {@code NaN}
+     * while that band top is not measured), and on a result without line
+     * states over the upper border of the noise band beside the line in this
+     * spectrum ({@link ToneLobeLift#lineFloor}).
      */
     public HarmonicPhasors measurePhasors(FftResult r, double calFundPhaseRad) {
         double[] re = new double[maxHarmonics];
@@ -208,9 +249,24 @@ public final class HarmonicCompensation {
             int bin = r.harmonicBins[h];
             if (bin <= 0) continue;
 
-            double magLin = Math.pow(10.0, r.rawHarmonicDbFs(h) / 20.0);    // absolute ADC level, pre-.frc
-            double rawRe  = (r.rawPeakRe != null && h < r.rawPeakRe.length) ? r.rawPeakRe[h] : r.re[bin];
-            double rawIm  = (r.rawPeakIm != null && h < r.rawPeakIm.length) ? r.rawPeakIm[h] : r.im[bin];
+            // The averaged peak phasor where the result captured one: its
+            // magnitude is the level, its argument the phase, both off the same
+            // averaged bin.  The result's harmonic table holds the analyzer's
+            // reading of the single frame just analysed, which against a band
+            // top averaged over N frames stands about 10 log10(N) dB clear on
+            // noise.
+            boolean captured = r.rawPeakRe != null && h < r.rawPeakRe.length;
+            double rawRe  = captured ? r.rawPeakRe[h] : r.re[bin];
+            double rawIm  = captured ? r.rawPeakIm[h] : r.im[bin];
+            double magLin;                                                   // absolute ADC level, pre-.frc
+            double rawDb;
+            if (captured) {
+                magLin = Math.hypot(rawRe, rawIm);
+                rawDb  = 20.0 * Math.log10(magLin);
+            } else {
+                rawDb  = r.rawHarmonicDbFs(h);
+                magLin = Math.pow(10.0, rawDb / 20.0);
+            }
             double phiH   = Math.atan2(rawIm, rawRe);                       // RAW phase; .frc de-embed is downstream
             double phiInit = phiH + r.harmonicHz[h] * frameRefRadPerHz;
             re[h] = magLin * Math.cos(phiInit);
@@ -221,10 +277,17 @@ public final class HarmonicCompensation {
             // the tone bins and their lobes only - a harmonic bin read from it
             // stands lifted by the chain's loss at that frequency (about 19 dB
             // at H2) while its neighbours do not, which would fake exactly
-            // that much clearance.
-            if (r.amplitudeDbFs != null && bin < r.amplitudeDbFs.length) {
+            // that much clearance.  On a result the coherent average stamped,
+            // the band top is the line's own local one - the figure the apply
+            // and the stop decisions read - and NaN while it is not measured:
+            // the spectrum's band bins there hold the whole collection's
+            // average, which after the line's own reset would show the line
+            // clear on noise.  Only a result without line states (a single
+            // frame) reads the noise band beside the line in this spectrum.
+            if (r.lineStates != null) {
+                clearance[h] = r.lineClearanceDb(h + 2, 0, rawDb);
+            } else if (r.amplitudeDbFs != null && bin < r.amplitudeDbFs.length) {
                 double[] ampDb  = r.amplitudeDbFs;
-                double rawDb    = r.rawHarmonicDbFs(h);
                 double floorLin = lobe.lineFloor(k -> Math.pow(10.0, ampDb[k] / 20.0), bin, ampDb.length - 1,
                         r.freqResolution, r.windowNenbwBins);
                 double floorDb  = floorLin > 0.0 ? 20.0 * Math.log10(floorLin) : Double.NaN;
@@ -258,23 +321,30 @@ public final class HarmonicCompensation {
         for (int h = 0; h < maxHarmonics; h++) {
             if (accRe[h] != 0.0 || accIm[h] != 0.0) valid++;
         }
-        double[] amp = new double[valid];
-        int[]    num = new int[valid];
-        double[] phi = new double[valid];
+        GeneratorCorrections gc = new GeneratorCorrections(new double[valid], new int[valid], new double[valid]);
         int i = 0;
         for (int h = 0; h < maxHarmonics; h++) {
             if (accRe[h] == 0.0 && accIm[h] == 0.0) continue;
-            double   re = accRe[h];
-            double   im = accIm[h];
-            double[] cal = calResponseAt.apply(hFreqs[h]);                 // [magLin, phaseRad] of H(f_h)
-            double magDe = Math.hypot(re, im) / (cal[0] > 0.0 ? cal[0] : 1.0);   // ÷ chain magnitude (de-embed)
-            double vH    = magDe * adcFsVoltageRms;                        // ADC dBFS -> absolute Vrms at DAC out
-            amp[i] = dacFundamentalVrms > 0.0 ? vH / dacFundamentalVrms : 0.0;   // ratio to the DAC fundamental
-            phi[i] = Math.atan2(im, re) - cal[1];                          // − chain phase (de-embed)
-            num[i] = (int) Math.round(hFreqs[h] / fundamentalHz);
+            toEntry(h, gc, i, fundamentalHz, calResponseAt, adcFsVoltageRms, dacFundamentalVrms);
             i++;
         }
-        return new GeneratorCorrections(amp, num, phi);
+        return gc;
+    }
+
+    /** Harmonic H(h+2)'s accumulated correction converted into entry
+     *  {@code i} of {@code out} - the one conversion
+     *  {@link #toGeneratorCorrections} and {@link #applyLine} share, so a
+     *  harmonic's entry is the same whichever of the two produced it. */
+    private void toEntry(int h, GeneratorCorrections out, int i, double fundamentalHz,
+            DoubleFunction<double[]> calResponseAt, double adcFsVoltageRms, double dacFundamentalVrms) {
+        double   re = accRe[h];
+        double   im = accIm[h];
+        double[] cal = calResponseAt.apply(hFreqs[h]);                 // [magLin, phaseRad] of H(f_h)
+        double magDe = Math.hypot(re, im) / (cal[0] > 0.0 ? cal[0] : 1.0);   // / chain magnitude (de-embed)
+        double vH    = magDe * adcFsVoltageRms;                        // ADC dBFS -> absolute Vrms at DAC out
+        out.ampRatios()[i]       = dacFundamentalVrms > 0.0 ? vH / dacFundamentalVrms : 0.0;   // ratio to the DAC fundamental
+        out.phiInits()[i]        = Math.atan2(im, re) - cal[1];        // - chain phase (de-embed)
+        out.harmonicNumbers()[i] = (int) Math.round(hFreqs[h] / fundamentalHz);
     }
 
     /** Deep copy - lets the wizard snapshot the best-THD iteration's
