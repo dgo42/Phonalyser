@@ -23,7 +23,6 @@ import java.io.PrintWriter;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
@@ -41,8 +40,9 @@ import org.edgo.audio.measure.fft.FftResult;
  * {@code a·f₁ + b·f₂} for integer {@code (a, b)} and has instantaneous phase
  * {@code a·θ₁ + b·θ₂} from the generator's two DDS accumulators, so a single
  * {@code (a, b)}-indexed correction set cancels them all.  This class holds a
- * fixed grid of such products (per-tone harmonics + the low-order intermod
- * comb) and accumulates an LMS-style correction phasor per product:
+ * fixed grid of such products - the eight sideband products
+ * {@code n*f1 - (n-1)*f2} and {@code n*f2 - (n-1)*f1} for n = 2 .. 5 - and
+ * accumulates an LMS-style correction phasor per product:
  *
  * <ul>
  *   <li>the product's <b>phase-stable</b> averaged value comes straight from
@@ -55,7 +55,8 @@ import org.edgo.audio.measure.fft.FftResult;
  *       per product by its frequency - identical to the single-tone path.</li>
  * </ul>
  *
- * Products within {@code snrMargin} dB of the noise floor are skipped (they
+ * Only a product standing {@link HarmonicCompensation#APPLY_CLEARANCE_DB} or
+ * more over its own local band top moves its correction (a floor-level reading
  * would random-walk the accumulator).  The result converts to the generator's
  * dual-tone compensation API ({@link #toGeneratorCorrections}) and serialises
  * to a dual-tone {@code applied_compensation} CSV ({@link #writeCsv}).
@@ -68,10 +69,20 @@ import org.edgo.audio.measure.fft.FftResult;
  */
 public final class IntermodCompensation {
 
-    /** Highest |a|+|b| the FFT analyzer is guaranteed to de-rotate (its grid
-     *  order is {@code max(5, harmonicCount+1)}), so every b≠0 product we list
-     *  stays at or below it and is therefore one the analyzer published. */
-    private static final int INTERMOD_ORDER_CAP = 5;
+    /** The correction grid as {@code (a, b)} of {@code a*f1 + b*f2}: per
+     *  sideband index n = 2 .. 5 the product {@code n*f1 - (n-1)*f2} below F1,
+     *  then {@code n*f2 - (n-1)*f1} above F2.  The n-th pair is of order
+     *  {@code 2n - 1}, and the analyzer de-rotates products only up to order
+     *  {@code max(5, harmonicCount + 1)} ({@link FftResult#imdProductA}): the
+     *  pairs of order 7 and 9 carry a phasor only from 6 and 8 harmonics on;
+     *  below that such a product has no frequency on the result and never
+     *  moves its correction. */
+    private static final int[][] SIDEBAND_PRODUCTS = {
+        {  2, -1 }, { -1,  2 },
+        {  3, -2 }, { -2,  3 },
+        {  4, -3 }, { -3,  4 },
+        {  5, -4 }, { -4,  5 },
+    };
 
     /** Per-product θ₁ / θ₂ integer multipliers (the grid), the accumulated
      *  correction phasor, and the product's last-measured frequency. */
@@ -80,38 +91,20 @@ public final class IntermodCompensation {
     private final double[] accRe;
     private final double[] accIm;
     private final double[] freqHz;
+    /** Reads each product's local noise floor for the apply gate. */
+    private final ToneLobeLift lobe = new ToneLobeLift();
 
-    public IntermodCompensation(int maxHarmonics) {
-        List<int[]> grid = buildGrid(maxHarmonics);
-        int n = grid.size();
-        this.coefA  = new int[n];
-        this.coefB  = new int[n];
-        for (int i = 0; i < n; i++) {
-            coefA[i] = grid.get(i)[0];
-            coefB[i] = grid.get(i)[1];
+    public IntermodCompensation() {
+        int products = SIDEBAND_PRODUCTS.length;
+        this.coefA  = new int[products];
+        this.coefB  = new int[products];
+        for (int g = 0; g < products; g++) {
+            coefA[g] = SIDEBAND_PRODUCTS[g][0];
+            coefB[g] = SIDEBAND_PRODUCTS[g][1];
         }
-        this.accRe   = new double[n];
-        this.accIm   = new double[n];
-        this.freqHz  = new double[n];
-    }
-
-    /** Builds the fixed correction grid: F1 harmonics {@code (h,0)} and F2
-     *  harmonics {@code (0,h)} up to the harmonic cap, plus the low-order
-     *  intermodulation comb.  Order kept ≤ {@link #INTERMOD_ORDER_CAP} for the
-     *  b≠0 products so each is one the analyzer de-rotated. */
-    private List<int[]> buildGrid(int maxHarmonics) {
-        List<int[]> g = new ArrayList<>();
-        int hMax = Math.max(2, maxHarmonics);
-        for (int h = 2; h <= hMax; h++)                      g.add(new int[]{ h, 0 });   // F1 harmonics
-        for (int h = 2; h <= Math.min(hMax, INTERMOD_ORDER_CAP); h++) g.add(new int[]{ 0, h });   // F2 harmonics
-        // Intermod comb (|a|+|b| ≤ INTERMOD_ORDER_CAP): 2nd, 3rd and 5th order.
-        int[][] intermod = {
-            { 1,  1}, {-1,  1},                 // f1+f2, f2−f1            (2nd order)
-            { 2, -1}, {-1,  2}, { 2, 1}, {1, 2},// 2f1−f2, 2f2−f1, 2f1+f2, f1+2f2 (3rd)
-            { 3, -2}, {-2,  3},                 // 3f1−2f2, 3f2−2f1        (5th order)
-        };
-        for (int[] ab : intermod) g.add(ab);
-        return g;
+        this.accRe   = new double[products];
+        this.accIm   = new double[products];
+        this.freqHz  = new double[products];
     }
 
     /** Generator-shaped snapshot: only the non-zero correction phasors, as the
@@ -127,7 +120,8 @@ public final class IntermodCompensation {
      * not a notched-fundamental ratio) as a complex phasor, window-derotated; the
      * {@code .frc} de-embed, the dBV conversion and the division by the DAC
      * fundamental are applied on the way OUT ({@link #toGeneratorCorrections} /
-     * {@link #writeDpd}).  Every detected product is corrected - no noise gate.
+     * {@link #writeDpd}).  The products are gated as the overload over the
+     * measured {@link ProductPhasors} states.
      *
      * <p><b>Two fundamentals frame the products.</b>  Each product {@code a·f₁+b·f₂}
      * is de-rotated by {@code a·(φ₁+π/2) + b·(φ₂+π/2)} so it lands in the same
@@ -136,31 +130,48 @@ public final class IntermodCompensation {
      * the twin-T notch phase removed (a pure phase subtraction; without it the
      * notch's ≈π at each tone would flip products and build the dual-tone
      * triangle - see HarmonicCompensation).  F2 is the {@code (0,1)} grid product.
-     * The b=0 F1 harmonics read the display-de-embedded {@code re}/{@code im}
-     * phase + {@link FftResult#rawHarmonicDbFs} magnitude (and take unit response
-     * downstream); every b≠0 product reads the raw conv-scaled phasor and is
-     * de-embedded downstream.
+     * Every product reads the raw conv-scaled phasor and is de-embedded
+     * downstream.
      *
      * @param calF1PhaseRad {@code argH(f₁)} - the {@code .frc} phase at F1
      * @param calF2PhaseRad {@code argH(f₂)} - the {@code .frc} phase at F2
      */
     public void accumulate(FftResult r, double f1Hz, double f2Hz, double step,
                            double calF1PhaseRad, double calF2PhaseRad) {
-        ProductPhasors z = measurePhasors(r, f1Hz, f2Hz, calF1PhaseRad, calF2PhaseRad);
+        accumulate(measurePhasors(r, f1Hz, f2Hz, calF1PhaseRad, calF2PhaseRad), step);
+    }
+
+    /**
+     * The update from one frame's measured products: a clear product's
+     * measured residual added at {@code step} to the correction in force.
+     * Only a product standing {@link HarmonicCompensation#APPLY_CLEARANCE_DB}
+     * or more over its own local band top moves its correction, as in
+     * {@link HarmonicCompensation#accumulate}: a floor-level reading is a
+     * noise vector, and a step on it writes that noise into the generator.
+     * A gated-out product, and one without a measured clearance, keeps its
+     * correction unchanged; a measured product's frequency is stored either
+     * way.
+     */
+    public void accumulate(ProductPhasors z, double step) {
         for (int g = 0; g < accRe.length; g++) {
             if (!(z.hz()[g] > 0.0)) continue;            // product not measured in this frame
-            accRe[g] += step * z.re()[g];
-            accIm[g] += step * z.im()[g];
+            double clearance = z.clearanceDb() != null ? z.clearanceDb()[g] : Double.NaN;
+            if (Double.isFinite(clearance) && clearance >= HarmonicCompensation.APPLY_CLEARANCE_DB) {
+                accRe[g] += step * z.re()[g];
+                accIm[g] += step * z.im()[g];
+            }
             freqHz[g] = z.hz()[g];
         }
     }
 
-    /** Per-product complex phasors with the grid coordinates and the frequency
-     *  each belongs to.  Carries a frame's measurement
+    /** Per-product complex phasors with the grid coordinates, the frequency
+     *  each belongs to and how far each stood above its own local band top
+     *  (dB, {@link Double#NaN} when unknown).  Carries a frame's measurement
      *  ({@link #measurePhasors}) and the measured plant
      *  ({@link #measurePlant}), whose unmeasured entries are
      *  {@link Double#NaN}. */
-    public record ProductPhasors(int[] coefA, int[] coefB, double[] re, double[] im, double[] hz) {}
+    public record ProductPhasors(int[] coefA, int[] coefB, double[] re, double[] im, double[] hz,
+                                 double[] clearanceDb) {}
 
     /**
      * The distortion products of one frame as complex phasors in the
@@ -168,6 +179,10 @@ public final class IntermodCompensation {
      * the same one the probe differences to measure the plant, so both read a
      * frame identically.  A product the analyzer did not publish this tick
      * carries {@code (0, 0)} at frequency 0.
+     * The clearance is the product's raw level over the upper border of the
+     * noise band beside its bin ({@link ToneLobeLift#lineFloor}), as
+     * {@link HarmonicCompensation#measurePhasors} reads it for a harmonic;
+     * {@link Double#NaN} where either is unknown.
      *
      * @param calF1PhaseRad {@code argH(f₁)} - the {@code .frc} phase at F1
      * @param calF2PhaseRad {@code argH(f₂)} - the {@code .frc} phase at F2
@@ -177,7 +192,9 @@ public final class IntermodCompensation {
         double[] re = new double[coefA.length];
         double[] im = new double[coefA.length];
         double[] hz = new double[coefA.length];
-        ProductPhasors out = new ProductPhasors(coefA.clone(), coefB.clone(), re, im, hz);
+        double[] clearance = new double[coefA.length];
+        Arrays.fill(clearance, Double.NaN);
+        ProductPhasors out = new ProductPhasors(coefA.clone(), coefB.clone(), re, im, hz, clearance);
         if (r.re == null || r.im == null) return out;
         int fundBin = r.fundamentalBin;
         if (fundBin <= 0 || fundBin >= r.re.length || !(f1Hz > 0.0) || !(f2Hz > 0.0)) return out;
@@ -207,6 +224,7 @@ public final class IntermodCompensation {
             re[g] = slot[0] * Math.cos(phiInit);
             im[g] = slot[0] * Math.sin(phiInit);
             hz[g] = slot[2];
+            clearance[g] = clearanceDb(r, g, 20.0 * Math.log10(slot[0]));
         }
         return out;
     }
@@ -217,13 +235,16 @@ public final class IntermodCompensation {
      * The diagnostic record keeps the raw observation and states the two tone
      * references beside it, so the de-rotation can be reproduced from the file
      * instead of being baked into it.  A product the frame does not carry
-     * stays {@code (0, 0)} at frequency 0.
+     * stays {@code (0, 0)} at frequency 0.  No clearance is read here
+     * ({@link Double#NaN} throughout).
      */
     public ProductPhasors rawPhasors(FftResult r, double f1Hz, double f2Hz) {
         double[] re = new double[coefA.length];
         double[] im = new double[coefA.length];
         double[] hz = new double[coefA.length];
-        ProductPhasors out = new ProductPhasors(coefA.clone(), coefB.clone(), re, im, hz);
+        double[] clearance = new double[coefA.length];
+        Arrays.fill(clearance, Double.NaN);
+        ProductPhasors out = new ProductPhasors(coefA.clone(), coefB.clone(), re, im, hz, clearance);
         if (r.re == null || r.im == null) return out;
         if (r.fundamentalBin <= 0 || !(f1Hz > 0.0) || !(f2Hz > 0.0)) return out;
         for (int g = 0; g < coefA.length; g++) {
@@ -238,18 +259,20 @@ public final class IntermodCompensation {
 
     /** The grid this accumulator corrects at the given tones - the {@code (a,
      *  b)} coordinates and each product's frequency, with no measurement
-     *  ({@link Double#NaN} phasors).  Lets a caller state the chain response at
-     *  every product without knowing how the grid is built. */
+     *  ({@link Double#NaN} phasors and clearances).  Lets a caller state the
+     *  chain response at every product without knowing how the grid is built. */
     public ProductPhasors grid(double f1Hz, double f2Hz) {
         double[] re = new double[coefA.length];
         double[] im = new double[coefA.length];
         double[] hz = new double[coefA.length];
+        double[] clearance = new double[coefA.length];
         Arrays.fill(re, Double.NaN);
         Arrays.fill(im, Double.NaN);
+        Arrays.fill(clearance, Double.NaN);
         for (int g = 0; g < coefA.length; g++) {
             hz[g] = coefA[g] * f1Hz + coefB[g] * f2Hz;
         }
-        return new ProductPhasors(coefA.clone(), coefB.clone(), re, im, hz);
+        return new ProductPhasors(coefA.clone(), coefB.clone(), re, im, hz, clearance);
     }
 
     /** The SECOND tone's raw phasor {@code [re, im]} - the {@code (0,1)} entry
@@ -268,46 +291,42 @@ public final class IntermodCompensation {
      * {@code [magLin, phaseRad, freqHz]}, or {@code null} when the frame does
      * not carry that product.  The single definition both the accumulator
      * frame and the raw view read through, so the two can never disagree about
-     * what a frame says: a b=0 F1 harmonic takes the display-de-embedded
-     * {@code re}/{@code im} phase with the raw harmonic level (and unit
-     * response downstream), every b!=0 product takes the raw conv-scaled
-     * phasor.
+     * what a frame says: every product takes the raw conv-scaled phasor the
+     * analyzer's product grid captured ({@link FftResult#rawPeakRe}), the
+     * chain de-embedded downstream.
      */
     private double[] rawSlot(FftResult r, int g, double f1Hz, double f2Hz) {
         int a = coefA[g];
         int b = coefB[g];
         double fp = a * f1Hz + b * f2Hz;
         if (!(fp > 0.0)) return null;
-        double magLin;
-        double phiRaw;
-        if (b == 0) {
-            int idx = a - 2;                              // harmonicBins[0] = 2nd harmonic
-            if (r.harmonicBins == null || idx < 0 || idx >= r.harmonicCount) return null;
-            int bin = r.harmonicBins[idx];
-            if (bin <= 0 || bin >= r.re.length) return null;
-            magLin = Math.pow(10.0, r.rawHarmonicDbFs(idx) / 20.0);   // absolute (lobe dBFS)
-            phiRaw = Math.atan2(r.im[bin], r.re[bin]);               // display-de-embedded phase
-        } else {
-            int i = productIndex(r, a, b);
-            if (i < 0 || r.rawPeakRe == null || i >= r.rawPeakRe.length) return null;
-            magLin = Math.hypot(r.rawPeakRe[i], r.rawPeakIm[i]);     // absolute (conv-scaled dBFS-linear)
-            phiRaw = Math.atan2(r.rawPeakIm[i], r.rawPeakRe[i]);     // raw phase (de-embed downstream)
-        }
+        int i = productIndex(r, a, b);
+        if (i < 0 || r.rawPeakRe == null || i >= r.rawPeakRe.length) return null;
+        double magLin = Math.hypot(r.rawPeakRe[i], r.rawPeakIm[i]);     // absolute (conv-scaled dBFS-linear)
+        double phiRaw = Math.atan2(r.rawPeakIm[i], r.rawPeakRe[i]);     // raw phase (de-embed downstream)
         return new double[]{ magLin, phiRaw, fp };
     }
 
-    /** Unit calibration response {@code [magLin=1, phaseRad=0]} - a no-op divide
-     *  for the b=0 harmonics the display already de-embedded. */
-    private static final double[] UNIT_RESPONSE = { 1.0, 0.0 };
-
-    /** The chain response product {@code g} is de-embedded against on the way
-     *  out: the loaded {@code .frc} at its frequency, or unity for a b=0
-     *  harmonic the display already de-embedded.  The single definition of that
-     *  convention - the conversions, the plant measurement and any record of
-     *  the response all read it here, so none of them can drift from the
-     *  others. */
-    public double[] deEmbedResponse(int g, double freqHz, DoubleFunction<double[]> calResponseAt) {
-        return coefB[g] == 0 ? UNIT_RESPONSE : calResponseAt.apply(freqHz);
+    /**
+     * Grid slot {@code g}'s clearance in {@code r}, dB: the product's raw
+     * level {@code rawDbFs} over the upper border of the noise band beside
+     * its bin ({@link ToneLobeLift#lineFloor} on
+     * {@link FftResult#amplitudeDbFs}), read the way
+     * {@link HarmonicCompensation#measurePhasors} reads a harmonic's.
+     * {@link Double#NaN} when the result carries no spectrum or no bin for
+     * the product, or when either level is not finite.
+     */
+    private double clearanceDb(FftResult r, int g, double rawDbFs) {
+        int i = productIndex(r, coefA[g], coefB[g]);
+        if (i < 0 || r.imdProductBin == null || i >= r.imdProductBin.length
+                || r.amplitudeDbFs == null) return Double.NaN;
+        int bin = r.imdProductBin[i];
+        double[] ampDb = r.amplitudeDbFs;
+        if (bin <= 0 || bin >= ampDb.length) return Double.NaN;
+        double floorLin = lobe.lineFloor(k -> Math.pow(10.0, ampDb[k] / 20.0), bin, ampDb.length - 1,
+                r.freqResolution, r.windowNenbwBins);
+        double floorDb  = floorLin > 0.0 ? 20.0 * Math.log10(floorLin) : Double.NaN;
+        return Double.isFinite(rawDbFs) && Double.isFinite(floorDb) ? rawDbFs - floorDb : Double.NaN;
     }
 
     /** Index of a b≠0 product in the analyzer's de-rotated grid (so the raw
@@ -332,10 +351,9 @@ public final class IntermodCompensation {
 
     /** Converts the accumulated ABSOLUTE (ADC-dBFS) phasors to the generator's
      *  dual-tone compensation quad - applying HERE (on the values reaching the
-     *  DDS): the {@code .frc} de-embed (÷H, −argH) for every b≠0 product (b=0
-     *  harmonics took the display de-embed already -> unit response), the
-     *  ADC-dBFS -> Vrms conversion, and the division by the DAC F1 fundamental.
-     *  Products below the gate are dropped. */
+     *  DDS): the {@code .frc} de-embed (divide by H, subtract argH) for every
+     *  product alike, the ADC-dBFS -> Vrms conversion, and the division by the
+     *  DAC F1 fundamental.  Products below the gate are dropped. */
     public GeneratorCorrections toGeneratorCorrections(DoubleFunction<double[]> calResponseAt,
             double adcFsVoltageRms, double dacFundamentalVrms) {
         int valid = 0;
@@ -349,7 +367,7 @@ public final class IntermodCompensation {
         int i = 0;
         for (int g = 0; g < accRe.length; g++) {
             if (accRe[g] == 0.0 && accIm[g] == 0.0) continue;
-            double[] cal = deEmbedResponse(g, freqHz[g], calResponseAt);
+            double[] cal = calResponseAt.apply(freqHz[g]);                // [magLin, phaseRad] of H(f_g)
             double magDe = Math.hypot(accRe[g], accIm[g]) / (cal[0] > 0.0 ? cal[0] : 1.0);
             double vP    = magDe * adcFsVoltageRms;                       // ADC dBFS -> absolute Vrms
             amp[i] = dacFundamentalVrms > 0.0 ? vP / dacFundamentalVrms : 0.0;   // ratio to DAC F1
@@ -407,7 +425,7 @@ public final class IntermodCompensation {
                 if (accRe[g] == 0.0 && accIm[g] == 0.0) continue;
                 // Same de-embed as toGeneratorCorrections - a saved file must
                 // reproduce what the generator was actually running.
-                double[] cal = deEmbedResponse(g, freqHz[g], calResponseAt);
+                double[] cal = calResponseAt.apply(freqHz[g]);
                 double magDe = Math.hypot(accRe[g], accIm[g]) / (cal[0] > 0.0 ? cal[0] : 1.0);
                 double vP    = magDe * adcFsVoltageRms;
                 double amp   = dacFundamentalVrms > 0.0 ? vP / dacFundamentalVrms : 0.0;

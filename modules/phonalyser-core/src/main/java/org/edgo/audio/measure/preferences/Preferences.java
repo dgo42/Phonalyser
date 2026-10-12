@@ -398,8 +398,12 @@ public final class Preferences {
     private final Property<String> genDpdDual = bound(null);
     /** Folder remembered for the generator's "browse for .dpd" dialog. */
     private final Property<String> genDpdFolder = bound(null);
-    /** DAC predistortion wizard: target distortion to stop at (%); 0 = run to stall. */
+    /** DAC predistortion wizard: the target THD (%) the compensation is to
+     *  reach; each line's phase limit follows from it. */
     private final Property<Double>  predistortionTargetPct   = bound(0.000001);
+    /** DAC predistortion wizard: the least averages a result needs before the
+     *  run may settle on it. */
+    private final Property<Integer> predistortionMinAverages = bound(1000);
     /** Rectangle / pulse duty cycle as a fraction in [0.001, 0.999].  Default 50 %. */
     private final Property<Double>  genRectangleDuty = bound(0.5);
     /** Triangle duty cycle (rise-portion fraction) in [0.001, 0.999].  Default 50 %
@@ -1917,6 +1921,10 @@ public final class Preferences {
 
     public double getPredistortionTargetPct()          { return predistortionTargetPct.get(); }
     public void   setPredistortionTargetPct(double v)   { predistortionTargetPct.set(v); }
+    public Property<Double> predistortionTargetPctProperty() { return predistortionTargetPct; }
+    public int  getPredistortionMinAverages()           { return predistortionMinAverages.get(); }
+    public void setPredistortionMinAverages(int v)      { predistortionMinAverages.set(v); }
+    public Property<Integer> predistortionMinAveragesProperty() { return predistortionMinAverages; }
 
     public String getGenWavPath()              { return genWavPath.get(); }
     public void setGenWavPath(String v)        { genWavPath.set(v); }
@@ -2275,6 +2283,7 @@ public final class Preferences {
         if (genDpdDual.get() != null) root.put("genDpdDual", genDpdDual.get());
         if (genDpdFolder.get() != null) root.put("genDpdFolder", genDpdFolder.get());
         root.put("predistortionTargetPct",   predistortionTargetPct.get());
+        root.put("predistortionMinAverages", predistortionMinAverages.get());
         root.put("genRectangleDuty",      genRectangleDuty.get());
         root.put("genTriangleDuty",       genTriangleDuty.get());
         root.put("genSweepFreqStartHz",   genSweepFreqStartHz.get());
@@ -2660,6 +2669,7 @@ public final class Preferences {
         if (root.get("genDpdDual")                    instanceof String s) genDpdDual.set(s);
         if (root.get("genDpdFolder")                 instanceof String s) genDpdFolder.set(s);
         if (root.get("predistortionTargetPct")       instanceof Number n) predistortionTargetPct.set(n.doubleValue());
+        if (root.get("predistortionMinAverages")     instanceof Number n) predistortionMinAverages.set(n.intValue());
         if (root.get("genRectangleDuty")             instanceof Number n) genRectangleDuty.set(n.doubleValue());
         if (root.get("genTriangleDuty")              instanceof Number n) genTriangleDuty.set(n.doubleValue());
         if (root.get("genSweepFreqStartHz")          instanceof Number n) genSweepFreqStartHz.set(n.doubleValue());
