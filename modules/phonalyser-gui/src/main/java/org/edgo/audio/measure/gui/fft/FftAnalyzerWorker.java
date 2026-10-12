@@ -55,6 +55,7 @@ import org.edgo.audio.measure.gui.bus.GeneratorOutput;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.bus.PilotToneRequest;
 import org.edgo.audio.measure.gui.common.DebugSwitches;
+import org.edgo.audio.measure.gui.fft.predistortion.PredistortionEngine;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.gui.sound.SharedCapture;
@@ -94,13 +95,6 @@ public final class FftAnalyzerWorker {
      *  so the view can't freeze. */
     private static final long DISPLAY_MIN_NANOS =  40_000_000L;   // ≤25 Hz refresh when keeping up
     private static final long DISPLAY_MAX_NANOS = 500_000_000L;   // ≥2 Hz even while behind
-    /** Output-pipeline drain to skip after a signal change, in seconds.
-     *  The DAC's hardware buffer (≈480 ms on the JavaSound render path)
-     *  keeps the OLD tone flowing into the ADC after the generator
-     *  changed; a window built before it drains straddles both signals -
-     *  poisoning the fresh accumulator AND feeding the FLL a smeared,
-     *  plausible-looking first measurement. */
-    private static final double OUTPUT_DRAIN_SKIP_SEC = 0.7;
     /** Mains-comb re-track cadence in analysis ticks.  The tracker's lock
      *  is an EWMA with ≈33-detection memory, so tracking every Nth tick
      *  changes the smoothed lock negligibly while freeing the ~208
@@ -125,6 +119,10 @@ public final class FftAnalyzerWorker {
      *  {@link #accumulateIntoForeverBuffer} on the collection's first frame
      *  and on a change of the transform length or the averaging mode. */
     private final CoherentAccumulator accumulator = new CoherentAccumulator();
+    /** The predistortion engine every published result is handed to, on this
+     *  worker's thread; null while none is registered.  Stored, not owned: the
+     *  predistortion dialog creates the engine, registers and unregisters it. */
+    private volatile PredistortionEngine predistortionEngine;
 
     private volatile SignalBufferReader reader;
     /** True while this worker holds a {@code SharedCapture} reference (acquired
@@ -153,7 +151,7 @@ public final class FftAnalyzerWorker {
     private final    AtomicBoolean      resetPending = new AtomicBoolean();
     /** Companion to {@link #resetPending} for resets caused by a change of
      *  the GENERATED SIGNAL: the worker discards
-     *  {@link #OUTPUT_DRAIN_SKIP_SEC} of samples after the re-anchor before
+     *  {@link FrequencyAligner#OUTPUT_DRAIN_SKIP_SEC} of samples after the re-anchor before
      *  building the first window - see
      *  {@link #resetStatisticsAfterSignalChange()}. */
     private final    AtomicBoolean      drainSkipPending = new AtomicBoolean();
@@ -3341,7 +3339,7 @@ public final class FftAnalyzerWorker {
      *  the GENERATED SIGNAL (user input on the generator pane, generator
      *  start/stop): additionally arms the post-re-anchor drain skip so the
      *  first window holds none of the old tone still flowing out of the
-     *  DAC's hardware buffer - see {@link #OUTPUT_DRAIN_SKIP_SEC}.
+     *  DAC's hardware buffer - see {@link FrequencyAligner#OUTPUT_DRAIN_SKIP_SEC}.
      *  Setting-only resets (window / channel / fftLength) use plain
      *  {@link #resetStatistics()}: the signal didn't change, so there is
      *  nothing to drain. */
@@ -3587,7 +3585,7 @@ public final class FftAnalyzerWorker {
             invalidateWindow();
             dropFllFeed();
             if (drainSkipPending.getAndSet(false)) {
-                drainSkipRemaining = (long) Math.ceil(OUTPUT_DRAIN_SKIP_SEC * sampleRate);
+                drainSkipRemaining = (long) Math.ceil(FrequencyAligner.OUTPUT_DRAIN_SKIP_SEC * sampleRate);
             }
         }
         // Output-drain skip: after a signal-change re-anchor, consume and
@@ -4056,11 +4054,7 @@ public final class FftAnalyzerWorker {
         if (foreverMode
                 && prefs.isFftStopAfterNEnabled()
                 && completedAnalyses >= prefs.getFftStopAfterN()) {
-            paused.set(true);
-            if (display != null && !display.isDisposed()) {
-                display.asyncExec(() ->
-                        MessageBus.instance().publish(Events.FFT_RECORDING_AUTO_STOPPED));
-            }
+            pauseAndAnnounceAutoStop();
         }
 
         // Per-tick TRIM: the accumulator above ran this tick, but the O(N) display
@@ -4120,7 +4114,20 @@ public final class FftAnalyzerWorker {
             return IDLE_TICK_MS;
         }
         publishResult(r);
+        handToPredistortionEngine(r);
         return awaitFor(pendingHopSamples, sampleRate);
+    }
+
+    /** Pauses the analysis after this cycle - the worker loop runs no further
+     *  analysis while the pause flag is set - and announces the auto-stop on
+     *  {@link Events#FFT_RECORDING_AUTO_STOPPED} on the display thread, on
+     *  which the FFT pane flips Record off. */
+    private void pauseAndAnnounceAutoStop() {
+        paused.set(true);
+        if (display != null && !display.isDisposed()) {
+            display.asyncExec(() ->
+                    MessageBus.instance().publish(Events.FFT_RECORDING_AUTO_STOPPED));
+        }
     }
 
     /** Deep-copies {@code newSlot} on the worker thread and publishes
@@ -4193,6 +4200,57 @@ public final class FftAnalyzerWorker {
         if (log.isWarnEnabled() && DebugSwitches.SHOW_FFT_ANALYZE_TIME) {
             log.warn("2. FFT result achieved UI in {} ms", (double)(System.nanoTime() - startSendToUi) / 1_000_000);
         }
+    }
+
+    /** Hands every published result to {@code engine} from now on, in place
+     *  of any engine registered before. */
+    public void registerPredistortionEngine(PredistortionEngine engine) {
+        predistortionEngine = engine;
+    }
+
+    /** Stops handing results to the registered engine. */
+    public void unregisterPredistortionEngine() {
+        predistortionEngine = null;
+    }
+
+    /**
+     * Hands {@code r}, the same object {@link #publishResult} has just put
+     * into the hand-off slot, to the registered engine on this worker's
+     * thread; the engine judges it and returns.  A result whose epoch a reset
+     * has moved past since the last gate belongs to a collection that has
+     * ended and is not handed.  The result the engine's run settles on stops
+     * the analysis the way stop-after-N stops it
+     * ({@link #pauseAndAnnounceAutoStop}).
+     *
+     * <p>The view finalizes the same object in place on the display's thread.
+     * The engine reads, directly and through the correction sets'
+     * measurements: the frame count, the channel, the bin
+     * width, the refined tones, the captured fundamental and peak phasors
+     * ({@link FftResult#rawFundRe} / {@link FftResult#rawFundIm},
+     * {@link FftResult#rawPeakRe} / {@link FftResult#rawPeakIm}), the tones'
+     * DAC phases ({@link FftResult#dacFundPhaseRad},
+     * {@link FftResult#dacFund2PhaseRad}), the harmonic count, bins and
+     * frequencies, the harmonics' levels ({@link FftResult#rawHarmonicDbFs}:
+     * {@link FftResult#preCorrectionPeaks}, otherwise
+     * {@link FftResult#harmonicDbFs}), the product grid
+     * ({@link FftResult#imdProductA} / {@link FftResult#imdProductB}), and
+     * {@link FftResult#amplitudeDbFs} with {@link FftResult#freqResolution}
+     * and {@link FftResult#windowNenbwBins} for the lines' clearances.  The
+     * view rewrites four of them in place: the harmonic bins, which its
+     * statistics recompute rewrites with the value they hold (the nearest bin
+     * to the same harmonic frequency); {@link FftResult#harmonicDbFs}, which
+     * the same recompute rewrites; {@link FftResult#preCorrectionPeaks},
+     * which its calibration sets; and {@link FftResult#amplitudeDbFs}, which
+     * its mains correction and calibration rewrite.  Until the view has run,
+     * the pre-correction peaks are null and the harmonic levels hold the
+     * analyser's detection on the last single frame, not the average.
+     */
+    private void handToPredistortionEngine(FftResult r) {
+        PredistortionEngine engine = predistortionEngine;
+        if (engine == null) return;
+        if (r.epoch != resetEpoch.get()) return;
+        boolean settled = engine.onResult(r);
+        if (settled) pauseAndAnnounceAutoStop();
     }
 
     private int msForSamples(int samples, int sampleRate) {

@@ -85,6 +85,10 @@ public final class FftPane extends AbstractPane {
     /** The generator controller the predistortion wizard drives - stored so
      *  {@link #openPredistortionForCapture()} can construct the wizard. */
     private final GeneratorController genController;
+    /** The live analyser worker the predistortion wizard registers its
+     *  engine on; {@code null} on the offscreen clone, which never opens the
+     *  wizard. */
+    private final FftAnalyzerWorker worker;
     private FlatScrollbar   freqScrollbar;
     private FlatScrollbar   magScrollbar;
 
@@ -144,8 +148,9 @@ public final class FftPane extends AbstractPane {
      * the Record LED lights up and the view simply picks up the worker's
      * next published result.
      */
-    public FftPane(Composite parent, GeneratorController genController, FftController controller) {
-        this(parent, false, genController, controller);
+    public FftPane(Composite parent, GeneratorController genController, FftController controller,
+                   FftAnalyzerWorker worker) {
+        this(parent, false, genController, controller, worker);
     }
 
     /**
@@ -155,17 +160,19 @@ public final class FftPane extends AbstractPane {
      * on the bus, so the copy never reaches the live pane.
      */
     public FftPane(Composite parent) {
-        this(parent, true, null, null);
+        this(parent, true, null, null, null);
     }
 
     /** Builds + shows the DAC-predistortion wizard non-modally for a help
-     *  capture and returns it, so an automation script can drive it (set target,
+     *  capture and returns it, so an automation script can drive it (start,
      *  screenshot) without the modal loop.  The live pane owns the wizard's
      *  collaborators, so it constructs the wizard here rather than exposing
      *  them.  Returns {@code null} on the offscreen (non-live) pane. */
     public PredistortionWizardDialog openPredistortionForCapture() {
         if (genController == null) return null;
-        PredistortionWizardDialog d = new PredistortionWizardDialog(getGroup().getShell(), controller, view);
+        PredistortionWizardDialog d = new PredistortionWizardDialog(
+                getGroup().getShell(), controller, view,
+                controller.getCorrectionStore(), worker);
         d.buildAndShow();
         return d;
     }
@@ -179,7 +186,7 @@ public final class FftPane extends AbstractPane {
     }
 
     private FftPane(Composite parent, boolean offScreen, GeneratorController genController,
-                    FftController controller) {
+                    FftController controller, FftAnalyzerWorker worker) {
         super(parent);
         // FFT-length changes, capture acquire / release, and the
         // generator-running query all flow through the MessageBus - no
@@ -215,6 +222,7 @@ public final class FftPane extends AbstractPane {
         }
         this.controller = controller;
         this.genController = genController;
+        this.worker = worker;
         CorrectionStore correctionStore = controller.getCorrectionStore();
         view = new FftView(plotRow, correctionStore, controller, offScreen);
         magScrollbar = new FlatScrollbar(plotRow, SWT.VERTICAL);
@@ -295,7 +303,8 @@ public final class FftPane extends AbstractPane {
             wizardButton.setImage(IconUtils.icon(d, Icon.WAND));
             wizardButton.setToolTipText(I18n.t("predistortion.button.wizard.tooltip"));
             wizardButton.addListener(SWT.Selection, e ->
-                    new PredistortionWizardDialog(group.getShell(), wizardController, view).open());
+                    new PredistortionWizardDialog(group.getShell(), wizardController, view, correctionStore,
+                            worker).open());
             wizardButton.setData("helpAnchor", "fft.html#fft-predistortion");
         }
 

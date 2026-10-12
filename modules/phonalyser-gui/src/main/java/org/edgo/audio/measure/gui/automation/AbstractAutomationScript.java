@@ -161,8 +161,8 @@ public abstract class AbstractAutomationScript {
      *  (Control.print renders a Composite's children; a Shell prints blank). */
     private Control tuneNotchContent;
     /** The DAC-predistortion wizard while {@link #openPredistortion()} keeps it
-     *  up; driven by the set-target / start / wait / re-translate / screenshot
-     *  hooks; closed by {@link #closePredistortion()}. */
+     *  up; driven by the set-target / start / wait / re-translate / screenshot hooks;
+     *  closed by {@link #closePredistortion()}. */
     private PredistortionWizardDialog predistortionDialog;
 
     protected AbstractAutomationScript(Display display, MainWindow window) {
@@ -1192,7 +1192,7 @@ public abstract class AbstractAutomationScript {
     }
 
     /** Closes the predistortion wizard - via {@code close()} so its SWT.Close
-     *  listener reverts the generator and resets the FFT statistics. */
+     *  listener detaches a running engine from the analyser worker. */
     protected final void closePredistortion() {
         ui(() -> {
             if (predistortionDialog != null && predistortionDialog.getContent() != null
