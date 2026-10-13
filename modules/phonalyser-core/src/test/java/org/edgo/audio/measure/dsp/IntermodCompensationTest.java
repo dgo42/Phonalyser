@@ -36,8 +36,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * The correction grid of the intermodulation accumulator, the clearance its
  * measurement carries per product, and the apply gate on that clearance.  The
- * grid is the eight sideband products n*f1 - (n-1)*f2 and n*f2 - (n-1)*f1 for
- * n = 2 .. 5; a product's clearance is its raw level over the noise band
+ * grid is the IMD readout's eight products: f2 - f1 and f1 + f2, then
+ * (n-1)*f1 - (n-2)*f2 and (n-1)*f2 - (n-2)*f1 for n = 3 .. 5; a product's
+ * clearance is its raw level over the noise band
  * beside its bin; only a product at least 5 dB over that band moves its
  * correction, and a product held by the gate keeps its correction while its
  * frequency is still taken.
@@ -47,10 +48,11 @@ class IntermodCompensationTest {
     private static final double F1_HZ = 1000.0;
     private static final double F2_HZ = 1100.0;
     /** The grid's (a, b) pairs of a*f1 + b*f2, in grid order. */
-    private static final int[]  GRID_A = { 2, -1, 3, -2, 4, -3, 5, -4 };
-    private static final int[]  GRID_B = { -1, 2, -2, 3, -3, 4, -4, 5 };
-    /** The sideband index n of the grid's first and last pair. */
-    private static final int    FIRST_SIDEBAND = 2;
+    private static final int[]  GRID_A = { -1, 1, 2, -1, 3, -2, 4, -3 };
+    private static final int[]  GRID_B = { 1, 1, -1, 2, -2, 3, -3, 4 };
+    /** The index n of the grid's first and last sideband pair, after the
+     *  second-order pair f2 - f1, f1 + f2. */
+    private static final int    FIRST_SIDEBAND = 3;
     private static final int    LAST_SIDEBAND  = 5;
 
     /** The measured result: 1 Hz bins, a flat noise floor, and one product
@@ -92,16 +94,18 @@ class IntermodCompensationTest {
     private static final double AMPLITUDE_TOLERANCE = 1e-18;
 
     @Test
-    void theGridIsTheEightSidebandProductsInOrder() {
+    void theGridIsTheImdReadoutsEightProductsInOrder() {
         ProductPhasors grid = new IntermodCompensation().grid(F1_HZ, F2_HZ);
-        assertArrayEquals(GRID_A, grid.coefA(), "a of a*f1 + b*f2, in grid order");
-        assertArrayEquals(GRID_B, grid.coefB(), "b of a*f1 + b*f2, in grid order");
+        assertArrayEquals(GRID_A, grid.toneOneMultiples(), "a of a*f1 + b*f2, in grid order");
+        assertArrayEquals(GRID_B, grid.toneTwoMultiples(), "b of a*f1 + b*f2, in grid order");
+        assertEquals(F2_HZ - F1_HZ, grid.hz()[0], 0.0, "d2L, f2 - f1");
+        assertEquals(F1_HZ + F2_HZ, grid.hz()[1], 0.0, "d2H, f1 + f2");
         for (int n = FIRST_SIDEBAND; n <= LAST_SIDEBAND; n++) {
-            int lower = 2 * (n - FIRST_SIDEBAND);
-            assertEquals(n * F1_HZ - (n - 1) * F2_HZ, grid.hz()[lower], 0.0,
-                    "n*f1 - (n-1)*f2 below F1, n = " + n);
-            assertEquals(n * F2_HZ - (n - 1) * F1_HZ, grid.hz()[lower + 1], 0.0,
-                    "n*f2 - (n-1)*f1 above F2, n = " + n);
+            int lower = 2 * (n - FIRST_SIDEBAND + 1);
+            assertEquals((n - 1) * F1_HZ - (n - 2) * F2_HZ, grid.hz()[lower], 0.0,
+                    "(n-1)*f1 - (n-2)*f2 below F1, n = " + n);
+            assertEquals((n - 1) * F2_HZ - (n - 2) * F1_HZ, grid.hz()[lower + 1], 0.0,
+                    "(n-1)*f2 - (n-2)*f1 above F2, n = " + n);
         }
     }
 
@@ -114,7 +118,7 @@ class IntermodCompensationTest {
                 "2 F1 - F2 stands its raw level over the flat floor");
         for (int g = 0; g < z.hz().length; g++) {
             if (g == published) continue;
-            String name = "(" + z.coefA()[g] + ", " + z.coefB()[g] + ")";
+            String name = "(" + z.toneOneMultiples()[g] + ", " + z.toneTwoMultiples()[g] + ")";
             assertEquals(0.0, z.hz()[g], 0.0, name + " has no bin on the result");
             assertTrue(Double.isNaN(z.clearanceDb()[g]), name + " without a bin reads NaN");
         }
@@ -219,13 +223,13 @@ class IntermodCompensationTest {
         int held = slotOf(grid, HELD_A, HELD_B);
         clearance[held] = heldClearanceDb;
         hz[held] += heldShiftHz;
-        return new ProductPhasors(grid.coefA(), grid.coefB(), re, im, hz, clearance);
+        return new ProductPhasors(grid.toneOneMultiples(), grid.toneTwoMultiples(), re, im, hz, clearance);
     }
 
     /** Grid slot of product {@code (a, b)} in {@code z}. */
     private int slotOf(ProductPhasors z, int a, int b) {
-        for (int g = 0; g < z.coefA().length; g++) {
-            if (z.coefA()[g] == a && z.coefB()[g] == b) return g;
+        for (int g = 0; g < z.toneOneMultiples().length; g++) {
+            if (z.toneOneMultiples()[g] == a && z.toneTwoMultiples()[g] == b) return g;
         }
         throw new AssertionError("(" + a + ", " + b + ") is not on the grid");
     }

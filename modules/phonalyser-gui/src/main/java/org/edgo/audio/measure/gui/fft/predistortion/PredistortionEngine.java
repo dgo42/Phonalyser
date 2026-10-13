@@ -20,7 +20,6 @@ package org.edgo.audio.measure.gui.fft.predistortion;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.Executor;
 import java.util.function.DoubleFunction;
 
 import org.edgo.audio.measure.dsp.FreqRespCalHelper;
@@ -35,6 +34,7 @@ import org.edgo.audio.measure.enums.MainsSuppression;
 import org.edgo.audio.measure.enums.WindowType;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.gui.common.CorrectionStore;
+import org.edgo.audio.measure.gui.common.GuiUtil;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioBackend;
 
@@ -85,26 +85,32 @@ import lombok.extern.log4j.Log4j2;
  *
  * <p>The lines are the harmonics H2 .. H{@value #HIGHEST_HARMONIC} for a
  * single tone and the products of the intermodulation grid for a dual
- * tone.  The listener callbacks reach the UI thread through the injected
- * executor.  The engine talks to neither the bus nor the generator.
+ * tone.  The listener callbacks reach the UI thread through the
+ * application's marshal.  The engine talks to neither the bus nor the
+ * generator.
  */
 @Log4j2
 public final class PredistortionEngine {
 
-    /** Why the run ended - drives the wizard's end-of-run message. */
+    /** Why the engine ended the run - drives the wizard's end-of-run
+     *  message.  A stop by hand is the wizard's own action and has no
+     *  reason here. */
     public enum StopReason {
-        SETTLED, USER_STOP, ERROR;
+        SETTLED, ERROR;
 
         private StopReason() {}
     }
 
     /** Wizard callbacks, both delivered on the UI thread. */
     public interface Listener {
-        /** The run has started. */
-        void onStarted();
-        /** The run ended.  {@code hasResult} is true when the run settled and
-         *  the correction built on the settle holds at least one line
-         *  (enables Save). */
+        /** The lines as they stand: after the start, with the form's lines
+         *  laid out fresh, and after every result the run takes, with what
+         *  that result made of them.  On the settling result it precedes
+         *  {@link #onFinished}. */
+        void onResult(List<LineReadout> readouts);
+        /** The engine ended the run.  {@code hasResult} is true when the run
+         *  settled and the correction built on the settle holds at least one
+         *  line (enables Save). */
         void onFinished(StopReason reason, boolean hasResult);
     }
 
@@ -113,16 +119,17 @@ public final class PredistortionEngine {
      *  values present and its limit, in degrees, and its clearance over its
      *  local band top on the last taken result, in dB - the wobble
      *  {@link Double#NaN} while fewer than two values are in, the limit
-     *  before the line's first value, when its last value stood at or under
-     *  the line's share of the target, and when that value's level against
-     *  the fundamental is not known, the clearance while not computable. */
+     *  before the line's first value and when that value's level against
+     *  the fundamental is not known, the clearance while not computable; the
+     *  limit {@link Double#POSITIVE_INFINITY} when the line stands at or
+     *  under half its share of the target, where no phase error leaves more
+     *  than the share. */
     public record LineReadout(String name, boolean gated, boolean windowFull,
                               double wobbleDeg, double limitDeg, double clearanceDb) {}
 
     /**
      * One line's window of its last {@link #WINDOW_VALUES} accumulator values
-     * and what the last taken result made of it.  Guarded by the engine's
-     * lock.
+     * and what the last taken result made of it.
      */
     private static final class LineWindow {
 
@@ -182,14 +189,15 @@ public final class PredistortionEngine {
             gated    = Double.isFinite(lineClearanceDb)
                     && lineClearanceDb >= HarmonicCompensation.APPLY_CLEARANCE_DB;
             // Compensated with a phase error d, the line leaves a residual of
-            // 2 L sin(d / 2); the limit is the d that leaves its share.  A
-            // line at or under its share needs no accuracy.  A level that is
-            // not known gives no limit and is still awaited, so it holds the
-            // run.
+            // 2 L sin(d / 2); the limit is the d that leaves its share - none
+            // once the line is at or under half its share, where no d leaves
+            // more.  A line at or under its share needs no accuracy and is not
+            // awaited; its limit is still stated.  A level that is not known
+            // gives no limit and is still awaited, so it holds the run.
             belowShare = linePct <= sharePct;
-            limitDeg   = linePct > sharePct
+            limitDeg   = linePct > sharePct / 2.0
                     ? Math.toDegrees(2.0 * Math.asin(sharePct / (2.0 * linePct)))
-                    : Double.NaN;
+                    : linePct >= 0.0 ? Double.POSITIVE_INFINITY : Double.NaN;
             // A single value has no spread: the wobble starts with the second.
             if (count >= 2) tailMeans();
         }
@@ -289,13 +297,13 @@ public final class PredistortionEngine {
     /** A level in dBFS to its linear amplitude: 10^(dB / 20). */
     private static final double DECADE        = 10.0;
     private static final double DB_PER_DECADE = 20.0;
-    /** The tones a dual-tone line is named by. */
-    private static final String TONE1 = "F1";
-    private static final String TONE2 = "F2";
+    /** The sides a dual-tone line is named by, as the IMD table names its
+     *  products: lower - F2 - F1, or a multiple of the first tone less the
+     *  second; upper - F1 + F2, or a multiple of the second tone less the
+     *  first. */
+    private static final String LOWER_SIDEBAND = "L";
+    private static final String UPPER_SIDEBAND = "H";
 
-    /** Runs a task on the UI thread, deferred - the listener callbacks go
-     *  through it. */
-    private final Executor        uiThread;
     /** The least frame count a result needs to settle the run, read from the
      *  preferences at the start. */
     private int minAverages;
@@ -307,14 +315,11 @@ public final class PredistortionEngine {
      *  Save ({@link #calResponseFor}). */
     private final CorrectionStore correctionStore;
     private final Listener        listener;
-    /** Guards the windows, the wobbles, the readouts and the run's state
-     *  between the worker thread, the UI thread and the readout snapshots. */
-    private final Object          lock  = new Object();
     /** The run's lines in the order of the form's correction set. */
     private final List<LineWindow> lines = new ArrayList<>();
 
     /** No run is on before {@link #start}. */
-    private volatile boolean finished = true;
+    private boolean finished = true;
     /** True when this run is compensating a two-tone signal (drives the
      *  wizard's save / apply branch). */
     @Getter private boolean dualTone;
@@ -322,62 +327,69 @@ public final class PredistortionEngine {
      *  or the dual-tone one; the other stays null. */
     private HarmonicCompensation harmonicReader;
     private IntermodCompensation intermodReader;
-    /** The dual-tone grid's coefficients, in the order of {@link #lines};
-     *  null for a single tone. */
-    private int[] productA;
-    private int[] productB;
+    /** The dual-tone grid's products, in the order of {@link #lines}: each
+     *  product's multiple of the first tone and of the second; null for a
+     *  single tone. */
+    private int[] toneOneMultiples;
+    private int[] toneTwoMultiples;
     /** The single-tone correction set built on the settle, for the wizard's
      *  Save.  {@code null} before the settle and in dual-tone mode. */
-    @Getter private volatile HarmonicCompensation harmonicsInForce;
+    @Getter private HarmonicCompensation harmonicsInForce;
     /** The dual-tone counterpart of {@link #harmonicsInForce}; {@code null}
      *  before the settle and in single-tone mode. */
-    @Getter private volatile IntermodCompensation intermodInForce;
+    @Getter private IntermodCompensation intermodInForce;
 
-    public PredistortionEngine(Executor uiThread, CorrectionStore correctionStore, Listener listener) {
-        this.uiThread        = uiThread;
+    /** Lays out the lines of the form the preferences hold at once, so the
+     *  readouts name them before the first start. */
+    public PredistortionEngine(CorrectionStore correctionStore, Listener listener) {
         this.correctionStore = correctionStore;
         this.listener        = listener;
+        layoutLines(Preferences.instance());
+    }
+
+    /** Lays out the run's lines for the form and the target the preferences
+     *  hold: fresh windows, the reader of the form, the share of the target. */
+    private void layoutLines(Preferences prefs) {
+        double sharePct = PHASE_SHARE * prefs.getPredistortionTargetPct() / Math.sqrt(LINE_COUNT);
+        dualTone = prefs.getGenSignalForm().isDualTone();
+        lines.clear();
+        if (dualTone) {
+            harmonicReader = null;
+            intermodReader = new IntermodCompensation();
+            // Only the grid's products are read here; the tones are not known
+            // before the first result.
+            ProductPhasors grid = intermodReader.grid(0.0, 0.0);
+            toneOneMultiples = grid.toneOneMultiples();
+            toneTwoMultiples = grid.toneTwoMultiples();
+            for (int product = 0; product < toneOneMultiples.length; product++) {
+                lines.add(new LineWindow(lineName(toneOneMultiples[product], toneTwoMultiples[product]), sharePct));
+            }
+        } else {
+            harmonicReader   = new HarmonicCompensation(HARMONIC_SLOTS);
+            intermodReader   = null;
+            toneOneMultiples = null;
+            toneTwoMultiples = null;
+            for (int slot = 0; slot < HARMONIC_SLOTS; slot++) {
+                lines.add(new LineWindow(lineName(slot + 2, 0), sharePct));   // slot 0 is H2
+            }
+        }
     }
 
     /**
      * Starts a run against the already-running generator and analyser: a
-     * fresh state, the measurement preferences, then
-     * {@link Listener#onStarted}.  The form, the target THD (percent) and the
+     * fresh state, the measurement preferences, then the fresh lines to
+     * {@link Listener#onResult}.  The form, the target THD (percent) and the
      * least averages are read from the preferences; every line gets an equal
      * share of the target.  UI thread, before the engine is registered on the
      * worker - the worker thread reads what is set here from then on.
      */
     public void start() {
         Preferences prefs = Preferences.instance();
-        double sharePct = PHASE_SHARE * prefs.getPredistortionTargetPct() / Math.sqrt(LINE_COUNT);
-        synchronized (lock) {
-            dualTone    = prefs.getGenSignalForm().isDualTone();
-            minAverages = prefs.getPredistortionMinAverages();
-            harmonicsInForce = null;
-            intermodInForce  = null;
-            lines.clear();
-            if (dualTone) {
-                harmonicReader = null;
-                intermodReader = new IntermodCompensation();
-                // Only the grid's coefficients are read here; the tones are
-                // not known before the first result.
-                ProductPhasors grid = intermodReader.grid(0.0, 0.0);
-                productA = grid.coefA();
-                productB = grid.coefB();
-                for (int g = 0; g < productA.length; g++) {
-                    lines.add(new LineWindow(lineName(productA[g], productB[g]), sharePct));
-                }
-            } else {
-                harmonicReader = new HarmonicCompensation(HARMONIC_SLOTS);
-                intermodReader = null;
-                productA = null;
-                productB = null;
-                for (int h = 0; h < HARMONIC_SLOTS; h++) {
-                    lines.add(new LineWindow(lineName(h + 2, 0), sharePct));   // index 0 is H2
-                }
-            }
-            finished = false;
-        }
+        minAverages      = prefs.getPredistortionMinAverages();
+        harmonicsInForce = null;
+        intermodInForce  = null;
+        layoutLines(prefs);
+        finished = false;
 
         // Predistortion needs a deep, phase-coherent, generator-locked
         // measurement: switch the FFT to INFINITE coherent averaging, take the
@@ -400,12 +412,7 @@ public final class PredistortionEngine {
                         mains);
             }
         }
-        on(listener::onStarted);
-    }
-
-    /** Ends the run at once with {@link StopReason#USER_STOP}.  UI thread. */
-    public void stop() {
-        finish(StopReason.USER_STOP);
+        publishReadouts();
     }
 
     // -------------------------------------------------------------------------
@@ -426,9 +433,7 @@ public final class PredistortionEngine {
         if (finished) return false;
         boolean settled;
         try {
-            synchronized (lock) {
-                settled = !finished && judge(result) && end();
-            }
+            settled = judge(result) && end();
         } catch (RuntimeException ex) {
             // The worker's analysis cycle outlives a failed judgement; the
             // run does not.
@@ -438,13 +443,16 @@ public final class PredistortionEngine {
             finish(StopReason.ERROR);
             return false;
         }
+        // The lines as this result left them, ahead of the end it may have
+        // brought: both go the same way to the UI thread, in this order.
+        publishReadouts();
         if (settled) announce(StopReason.SETTLED);
         return settled;
     }
 
     /**
      * Takes {@code r} into the windows and judges the settle; on the settling
-     * result the correction is built.  Caller holds the lock.
+     * result the correction is built.
      *
      * @return true when {@code r} settled the run
      */
@@ -485,16 +493,21 @@ public final class PredistortionEngine {
     }
 
     /** Takes one result's phasors, index-parallel to {@link #lines}, into the
-     *  lines' windows, each with its level in percent of the fundamental:
+     *  lines' windows, each with its level in percent of the fundamental -
      *  the line de-embedded at its frequency over the de-embedded
-     *  fundamental, the figures the displayed distortion is built from. */
+     *  fundamental, the figures the displayed distortion is built from - and
+     *  its clearance: the de-embedded accumulated line over the accumulated
+     *  band top beside it.  The reader's clearance is the accumulated line
+     *  over that band top as captured; de-embedding the line takes 20 log10
+     *  of the response at its frequency off it. */
     private void take(FftResult r, double[] re, double[] im, double[] hz, double[] clearanceDb) {
         boolean left = r.channelLeft;
         double fundamentalLin = deembeddedFundamentalLinear(r, left);
         for (int i = 0; i < lines.size(); i++) {
-            double linePct = PERCENT * Math.hypot(re[i], im[i]) / calResponseAt(hz[i], left)[0]
-                    / fundamentalLin;
-            lines.get(i).take(re[i], im[i], hz[i], clearanceDb[i], linePct);
+            double response = calResponseAt(hz[i], left)[0];
+            double linePct = PERCENT * Math.hypot(re[i], im[i]) / response / fundamentalLin;
+            double lineClearanceDb = clearanceDb[i] - DB_PER_DECADE * Math.log10(response);
+            lines.get(i).take(re[i], im[i], hz[i], lineClearanceDb, linePct);
         }
     }
 
@@ -530,7 +543,8 @@ public final class PredistortionEngine {
         }
         if (dualTone) {
             IntermodCompensation correction = new IntermodCompensation();
-            correction.accumulate(new ProductPhasors(productA, productB, re, im, hz, clearanceDb), FULL_STEP);
+            correction.accumulate(new ProductPhasors(toneOneMultiples, toneTwoMultiples, re, im, hz, clearanceDb),
+                    FULL_STEP);
             intermodInForce = correction;
         } else {
             HarmonicCompensation correction = new HarmonicCompensation(HARMONIC_SLOTS);
@@ -540,44 +554,46 @@ public final class PredistortionEngine {
     }
 
     /** A snapshot of every line's readout, in the order of the form's
-     *  correction set.  Any thread. */
+     *  correction set.  On the thread that holds the engine: the UI thread
+     *  while the engine is not registered on the worker, the worker thread
+     *  while it is. */
     public List<LineReadout> readouts() {
-        synchronized (lock) {
-            List<LineReadout> snapshot = new ArrayList<>(lines.size());
-            for (LineWindow line : lines) {
-                snapshot.add(line.readout());
-            }
-            return snapshot;
+        List<LineReadout> snapshot = new ArrayList<>(lines.size());
+        for (LineWindow line : lines) {
+            snapshot.add(line.readout());
         }
+        return snapshot;
     }
 
     /** Ends the run once with {@code reason}; a call after the end changes
      *  nothing. */
     private void finish(StopReason reason) {
-        boolean ended;
-        synchronized (lock) {
-            ended = end();
-        }
-        if (ended) announce(reason);
+        if (end()) announce(reason);
     }
 
-    /** Marks the run ended; false when it had ended already.  Caller holds
-     *  the lock. */
+    /** Marks the run ended; false when it had ended already. */
     private boolean end() {
         if (finished) return false;
         finished = true;
         return true;
     }
 
-    /** {@link Listener#onFinished} on the UI thread, with whether the
-     *  correction built on the settle holds a line.  Outside the lock: the
-     *  executor may run the callback in place. */
+    /** {@link Listener#onResult} on the UI thread with the lines' snapshot:
+     *  in place when called there, posted from the worker thread. */
+    private void publishReadouts() {
+        List<LineReadout> snapshot = readouts();
+        GuiUtil.marshal(() -> listener.onResult(snapshot));
+    }
+
+    /** {@link Listener#onFinished} on the UI thread, posted from the worker
+     *  thread, with whether the correction built on the settle holds a
+     *  line. */
     private void announce(StopReason reason) {
         boolean hasResult = hasResult();
         if (log.isInfoEnabled()) {
             log.info("Predistortion finished: {}", reason);
         }
-        on(() -> listener.onFinished(reason, hasResult));
+        GuiUtil.marshal(() -> listener.onFinished(reason, hasResult));
     }
 
     /** True when the correction built on the settle holds at least one
@@ -589,18 +605,18 @@ public final class PredistortionEngine {
     }
 
     /** A line's name in the wizard: "H2" for harmonic 2 of a single tone;
-     *  for a dual tone the difference of the product's terms, the positive
-     *  one first - "2F1-F2", "2F2-F1". */
-    private String lineName(int a, int b) {
-        if (!dualTone) return "H" + a;
-        return a > 0 ? term(a, TONE1) + "-" + term(-b, TONE2)
-                     : term(b, TONE2) + "-" + term(-a, TONE1);
-    }
-
-    /** One term of a product name: the tone with its coefficient, a
-     *  coefficient of one left out. */
-    private String term(int coefficient, String tone) {
-        return coefficient == 1 ? tone : coefficient + tone;
+     *  for a dual tone the IMD readout's name (ImdAnalyzer): "d2L" for
+     *  F2 - F1 and "d2H" for F1 + F2; for a sideband "dnL" for
+     *  (n-1) F1 - (n-2) F2 and "dnH" for (n-1) F2 - (n-2) F1 - n is one
+     *  above the positive multiple, the side the tone it multiplies. */
+    private String lineName(int toneOneMultiple, int toneTwoMultiple) {
+        if (!dualTone) return "H" + toneOneMultiple;
+        if (toneOneMultiple + toneTwoMultiple != 1) {
+            return "d2" + (toneOneMultiple < 0 ? LOWER_SIDEBAND : UPPER_SIDEBAND);
+        }
+        return toneOneMultiple > 0
+                ? "d" + (toneOneMultiple + 1) + LOWER_SIDEBAND
+                : "d" + (toneTwoMultiple + 1) + UPPER_SIDEBAND;
     }
 
     // -------------------------------------------------------------------------
@@ -632,25 +648,25 @@ public final class PredistortionEngine {
     }
 
     /** The fundamental the line levels are a ratio against, linear on the
-     *  dBFS scale.  Where the manual fundamental is set it is the level before
-     *  the notch and taken as it stands, with no de-embedding: the tone
-     *  itself for a single tone; for a dual tone the combined level split
-     *  between the tones as configured and their two levels summed, the
-     *  reference of the displayed intermodulation.  Without it, the measured
-     *  tone de-embedded at its frequency - for a dual tone F1 and F2 each so,
-     *  summed, F2 being the {@code (0, 1)} entry of the analyser's product
-     *  grid as the dual-tone set reads it.  {@link Double#NaN} when the
-     *  result did not capture a measured tone. */
+     *  dBFS scale, computed as the displayed distortion computes it.  A single
+     *  tone: the manual fundamental where set - the level before the notch,
+     *  taken as it stands - else the measured tone de-embedded at its
+     *  frequency.  A dual tone: |F1| + |F2|, the reference of the displayed
+     *  intermodulation (ImdAnalyzer), each tone measured and de-embedded at
+     *  its frequency, F2 being the {@code (0, 1)} entry of the analyser's
+     *  product grid as the dual-tone set reads it; where the manual
+     *  fundamental is set it is the two tones' combined level, split between
+     *  them by their measured ratio.  {@link Double#NaN} when the result did
+     *  not capture a measured tone. */
     private double deembeddedFundamentalLinear(FftResult r, boolean left) {
-        if (Double.isFinite(r.fundamentalTrueDbFs)) {
-            double manualLin = Math.pow(DECADE, r.fundamentalTrueDbFs / DB_PER_DECADE);
-            return dualTone ? dualToneSum(manualLin) : manualLin;
-        }
+        boolean manual = Double.isFinite(r.fundamentalTrueDbFs);
+        double manualLin = manual ? Math.pow(DECADE, r.fundamentalTrueDbFs / DB_PER_DECADE) : Double.NaN;
         double f1Lin = Math.hypot(r.rawFundRe, r.rawFundIm) / calResponseAt(r.fundamentalHzRefined, left)[0];
-        if (!dualTone) return f1Lin;
+        if (!dualTone) return manual ? manualLin : f1Lin;
         double[] f2Phasor = intermodReader.secondTonePhasor(r);
         double f2RawLin = f2Phasor != null ? Math.hypot(f2Phasor[0], f2Phasor[1]) : Double.NaN;
-        return f1Lin + f2RawLin / calResponseAt(r.fundamental2HzRefined, left)[0];
+        double f2Lin = f2RawLin / calResponseAt(r.fundamental2HzRefined, left)[0];
+        return manual ? manualLin * (f1Lin + f2Lin) / Math.hypot(f1Lin, f2Lin) : f1Lin + f2Lin;
     }
 
     /** The loaded {@code .frc} response as a frequency function for the given
@@ -673,7 +689,7 @@ public final class PredistortionEngine {
     /** The two tones' levels summed, from their combined RMS level split as
      *  configured: each tone carries {@code combined * w / sqrt(w1^2 + w2^2)}
      *  with {@code w1 = split%, w2 = 100-split%}, and the weights sum to
-     *  one.  The DAC amplitude and the manual fundamental split alike. */
+     *  one - the DAC amplitude's split. */
     private double dualToneSum(double combinedLevel) {
         double w1 = Preferences.instance().getGenDualToneSplitPct() / PERCENT;
         return combinedLevel / Math.hypot(w1, 1.0 - w1);
@@ -686,8 +702,4 @@ public final class PredistortionEngine {
                 .amplitudeVrms(Preferences.instance().getGenAmplitudeLeft(), Channel.L);
     }
 
-    /** Delivers {@code callback} on the UI thread. */
-    private void on(Runnable callback) {
-        uiThread.execute(callback);
-    }
 }

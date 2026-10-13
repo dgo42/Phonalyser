@@ -24,6 +24,9 @@ import java.util.List;
 import java.util.Random;
 import java.util.function.DoubleFunction;
 
+import org.eclipse.swt.SWTError;
+import org.eclipse.swt.widgets.Display;
+import org.eclipse.swt.widgets.Shell;
 import org.edgo.audio.measure.dsp.HarmonicCompensation;
 import org.edgo.audio.measure.dsp.IntermodCompensation;
 import org.edgo.audio.measure.dsp.IntermodCompensation.GeneratorCorrections;
@@ -31,11 +34,13 @@ import org.edgo.audio.measure.enums.AlignGenerator;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.gui.common.CorrectionStore;
+import org.edgo.audio.measure.gui.common.GuiUtil;
 import org.edgo.audio.measure.gui.fft.predistortion.PredistortionEngine.LineReadout;
 import org.edgo.audio.measure.gui.fft.predistortion.PredistortionEngine.Listener;
 import org.edgo.audio.measure.gui.fft.predistortion.PredistortionEngine.StopReason;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -46,7 +51,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -83,10 +87,10 @@ class PredistortionEngineTest {
     private static final double F2_HZ          = 10000.0;
     /** The intermodulation grid of the plan in its order, and the names the
      *  wizard shows for it. */
-    private static final int[]    PRODUCT_A     = { 2, -1, 3, -2, 4, -3, 5, -4 };
-    private static final int[]    PRODUCT_B     = { -1, 2, -2, 3, -3, 4, -4, 5 };
+    private static final int[]    PRODUCT_A     = { -1, 1, 2, -1, 3, -2, 4, -3 };
+    private static final int[]    PRODUCT_B     = { 1, 1, -1, 2, -2, 3, -3, 4 };
     private static final String[] PRODUCT_NAMES = {
-        "2F1-F2", "2F2-F1", "3F1-2F2", "3F2-2F1", "4F1-3F2", "4F2-3F1", "5F1-4F2", "5F2-4F1",
+        "d2L", "d2H", "d3L", "d3H", "d4L", "d4H", "d5L", "d5H",
     };
     private static final double CLEAR_DB          = 40.0;
     private static final double UNDER_GATE_DB     = 2.0;
@@ -114,7 +118,9 @@ class PredistortionEngineTest {
     private static final double SHARE_CLEARANCE_DB = 20.0;
     private static final double UNDER_SHARE_DB     = 10.0;
     /** A dual tone's manual fundamental, dBFS - over the measured tones -
-     *  and the share of it the configured split gives F1, percent. */
+     *  and a configured split, percent, unequal to the measured tones' ratio:
+     *  the reference splits the manual level by the measured ratio, not by
+     *  the configured one. */
     private static final double MANUAL_FUND_DBFS   = 6.0;
     private static final double SPLIT_PCT          = 70.0;
     /** A dual tone's measured reference without a manual fundamental: F1 and
@@ -148,13 +154,13 @@ class PredistortionEngineTest {
     /** Records the listener's callbacks in the order they arrive. */
     private static final class Recorder implements Listener {
 
-        private int started;
-        private final List<StopReason> reasons = new ArrayList<>();
-        private final List<Boolean>    results = new ArrayList<>();
+        private final List<List<LineReadout>> snapshots = new ArrayList<>();
+        private final List<StopReason>        reasons   = new ArrayList<>();
+        private final List<Boolean>           results   = new ArrayList<>();
 
         @Override
-        public void onStarted() {
-            started++;
+        public void onResult(List<LineReadout> readouts) {
+            snapshots.add(readouts);
         }
 
         @Override
@@ -168,6 +174,11 @@ class PredistortionEngineTest {
     private static final int MIN_AVERAGES = 1000;
 
     private final Recorder recorder = new Recorder();
+    /** The display the engine's callbacks are marshalled to: the test thread
+     *  is its thread, so they run in place, and the application's main shell
+     *  is a shell on it for the length of a case. */
+    private Display        display;
+    private Shell          mainShell;
     private boolean        previousTransient;
     private GenSignalForm  previousForm;
     private double         previousTargetPct;
@@ -196,6 +207,27 @@ class PredistortionEngineTest {
         previousAlign       = prefs.getFftAlignGenerator();
         prefs.setPredistortionTargetPct(TARGET_PCT);
         prefs.setPredistortionMinAverages(MIN_AVERAGES);
+    }
+
+    /** The callbacks reach the listener through the application's marshal,
+     *  which needs the main shell; a host without a display skips the
+     *  cases. */
+    @BeforeEach
+    void mainShellSet() {
+        try {
+            display = new Display();
+        } catch (SWTError | UnsatisfiedLinkError e) {
+            Assumptions.assumeTrue(false, "SWT display unavailable: " + e.getMessage());
+        }
+        mainShell = new Shell(display);
+        GuiUtil.setMainShell(mainShell);
+    }
+
+    @AfterEach
+    void mainShellCleared() {
+        GuiUtil.setMainShell(null);
+        if (mainShell != null && !mainShell.isDisposed()) mainShell.dispose();
+        if (display != null && !display.isDisposed()) display.dispose();
     }
 
     @AfterEach
@@ -227,7 +259,11 @@ class PredistortionEngineTest {
         for (int n = 0; n < EXTRA_RESULTS; n++) {
             assertFalse(engine.onResult(r), "a call after the end");
         }
-        assertEquals(1, recorder.started);
+        // One snapshot for the start, one per taken result, none after the end.
+        assertEquals(1 + WINDOW_VALUES, recorder.snapshots.size(), "snapshots");
+        for (LineReadout line : recorder.snapshots.get(recorder.snapshots.size() - 1)) {
+            assertTrue(line.windowFull(), line.name() + " full on the settling snapshot");
+        }
         assertEquals(List.of(StopReason.SETTLED), recorder.reasons);
         assertEquals(List.of(true), recorder.results);
     }
@@ -401,7 +437,7 @@ class PredistortionEngineTest {
         List<LineReadout> readouts = engine.readouts();
         LineReadout h3 = readouts.get(H3_LINE);
         assertTrue(h3.gated(), "H3 over the clearance gate");
-        assertTrue(Double.isNaN(h3.limitDeg()), "H3 under its share has no limit");
+        assertTrue(Double.isInfinite(h3.limitDeg()), "H3 under half its share has no limit");
         assertTrue(Double.isFinite(readouts.get(H2_LINE).limitDeg()), "H2 over its share has its limit");
     }
 
@@ -527,14 +563,13 @@ class PredistortionEngineTest {
         }
         assertEquals(List.of(StopReason.SETTLED), recorder.reasons);
         assertEquals(List.of(true), recorder.results);
-        // The products' levels are percent of the manual fundamental split
-        // between the tones as configured, the two tones summed.
+        // The products' levels are percent of |F1| + |F2|, as the displayed
+        // intermodulation takes them: the manual fundamental is the two
+        // tones' combined level, split by their measured ratio - F1 and F2
+        // equal here - whatever the configured split.
         double manualLin = Math.pow(DECADE, MANUAL_FUND_DBFS / DB_PER_DECADE);
-        double w1 = SPLIT_PCT / PERCENT;
-        double w2 = 1.0 - w1;
-        double f1Lin = manualLin * w1 / Math.hypot(w1, w2);
-        double f2Lin = manualLin * w2 / Math.hypot(w1, w2);
-        assertProductLimits(engine, clearanceDb, f1Lin + f2Lin);
+        double toneLin   = MEASURED_TONES_LIN / 2.0;
+        assertProductLimits(engine, clearanceDb, manualLin * MEASURED_TONES_LIN / Math.hypot(toneLin, toneLin));
     }
 
     @Test
@@ -547,46 +582,14 @@ class PredistortionEngineTest {
     }
 
     // -------------------------------------------------------------------------
-    // Stop by hand
-    // -------------------------------------------------------------------------
-
-    @Test
-    void aStopByHandBeforeTheSettleHasNoResult() {
-        PredistortionEngine engine = started(GenSignalForm.SINE);
-        FftResult r = harmonics(distinctPhases(HARMONIC_LINES), uniform(HARMONIC_LINES, CLEAR_DB));
-        for (int n = 0; n < EXTRA_RESULTS; n++) {
-            assertFalse(engine.onResult(r), "result " + n);
-        }
-        engine.stop();
-        assertEquals(List.of(StopReason.USER_STOP), recorder.reasons);
-        assertEquals(List.of(false), recorder.results);
-        for (int n = 0; n < WINDOW_VALUES; n++) {
-            assertFalse(engine.onResult(r), "the run ended");
-        }
-        engine.stop();
-        assertEquals(1, recorder.reasons.size(), "the end is announced once");
-        assertNull(engine.getHarmonicsInForce(), "no correction without a settle");
-    }
-
-    @Test
-    void aStopByHandAfterTheSettleKeepsTheSettledResult() {
-        PredistortionEngine engine = started(GenSignalForm.SINE);
-        settle(engine, harmonics(distinctPhases(HARMONIC_LINES), uniform(HARMONIC_LINES, CLEAR_DB)));
-        engine.stop();
-        assertEquals(List.of(StopReason.SETTLED), recorder.reasons, "the stop after the end announces nothing");
-        assertEquals(List.of(true), recorder.results);
-        assertNotNull(engine.getHarmonicsInForce(), "the settled correction stays");
-    }
-
-    // -------------------------------------------------------------------------
     // Harness
     // -------------------------------------------------------------------------
 
-    /** An engine on {@code form}, started; its listener is the recorder and
-     *  its executor the calling thread. */
+    /** An engine on {@code form}, started; its listener is the recorder,
+     *  called in place on the test thread. */
     private PredistortionEngine started(GenSignalForm form) {
         Preferences.instance().setGenSignalForm(form);
-        PredistortionEngine engine = new PredistortionEngine(Runnable::run,
+        PredistortionEngine engine = new PredistortionEngine(
                 new CorrectionStore(STORE_LABEL, null), recorder);
         engine.start();
         return engine;

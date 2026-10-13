@@ -23,11 +23,12 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 
 import org.eclipse.swt.SWT;
+import org.eclipse.swt.graphics.Color;
+import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.layout.GridData;
@@ -35,6 +36,7 @@ import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Display;
+import org.eclipse.swt.widgets.Event;
 import org.eclipse.swt.widgets.FileDialog;
 import org.eclipse.swt.widgets.Group;
 import org.eclipse.swt.widgets.Label;
@@ -118,9 +120,6 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
     /** The lines the cells show: a single tone's H2 .. H9, or the dual
      *  tone's eight sideband products. */
     private static final int    LINE_CELLS = LINE_ROWS * COLUMNS;
-    /** The single tone's first line, the harmonic the cells begin with
-     *  before the first Start. */
-    private static final int    FIRST_HARMONIC = 2;
     /** Between a line's name and its value in a line cell:
      *  "H2 - σ 0.012° (42.0 dB, 0.016°)". */
     private static final String CELL_SEPARATOR = " - σ ";
@@ -133,10 +132,18 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
     /** The clearance shown for a line held at its band top. */
     private static final String CLAMPED_CLEARANCE = "0 dB";
     private static final String LIMIT_FORMAT     = ", %.3f°";
+    /** The limit shown for a line no phase error can push over its share. */
+    private static final String UNLIMITED        = ", ∞";
     /** A line cell's value while the line has none to show. */
     private static final String NO_VALUE = "-";
     /** Between the two cells of a line row in the saved file's header. */
     private static final String HEADER_CELL_GAP = "    ";
+    /** The three buttons' fixed width: 1.5 times the 48 the widest text,
+     *  "Close", takes at 100 % scaling. */
+    private static final int    BUTTON_WIDTH = 72;
+    /** The wobble's colour within its limit and over it. */
+    private static final int    WITHIN_LIMIT_COLOR = SWT.COLOR_DARK_GREEN;
+    private static final int    OVER_LIMIT_COLOR   = SWT.COLOR_RED;
 
     private final Shell               parentShell;
     private final FftController       fft;
@@ -173,29 +180,26 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
     private Button           saveBtn;
     private Button           cancelBtn;
 
-    /** The window's size after the last resize {@link #keepIntroWhole()}
-     *  saw - which dimension a resize lowered is read against it. */
-    private Point            lastSize;
     /** Set while {@link #keepIntroWhole()} resizes the window itself, so
      *  the resize it causes is not judged again. */
     private boolean          fitting;
 
     private PredistortionEngine engine;
-    /** {@code true} while a run is on. */
-    private boolean running;
+    private RunState state = RunState.IDLE;
     /** When the last run started and ended - the progress's time; the start
      *  {@code null} before the first run, the end {@code null} while it runs. */
     private Instant runStart, runEnd;
     private boolean timerArmed;
     private String  savedPath;
-    /** The key of the state the last run ended in, or of the Save after it -
-     *  what {@link #isTargetReached} compares. */
-    private String  terminalStatusKey = "predistortion.status.idle";
-    /** The lines' names and values the line cells show, row by row and left
-     *  to right; a cell reads name, {@link #CELL_SEPARATOR}, value.  UI-thread
-     *  confined. */
-    private final String[] lineNames  = new String[LINE_CELLS];
-    private final String[] lineValues = new String[LINE_CELLS];
+    /** The lines' names, wobbles and bracket texts the line cells show, row
+     *  by row and left to right; a cell reads name, {@link #CELL_SEPARATOR},
+     *  wobble, brackets.  The wobble's colour per cell, {@code null} for the
+     *  table's own while the line has no wobble or no limit to judge it
+     *  against.  UI-thread confined. */
+    private final String[] lineNames        = new String[LINE_CELLS];
+    private final String[] lineWobbles      = new String[LINE_CELLS];
+    private final String[] lineBrackets     = new String[LINE_CELLS];
+    private final Color[]  lineWobbleColors = new Color[LINE_CELLS];
     /** A deep copy of the displayed result as the run ended - the
      *  provenance a Save writes; {@code null} before a run has ended. */
     private FftResult resultAtStop;
@@ -207,25 +211,14 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         this.view            = view;
         this.correctionStore = correctionStore;
         this.worker          = worker;
-        // Before the first Start the cells name the single tone's lines.
-        for (int cell = 0; cell < LINE_CELLS; cell++) {
-            lineNames[cell] = "H" + (FIRST_HARMONIC + cell);
-        }
-        Arrays.fill(lineValues, NO_VALUE);
     }
 
-    /** Opens the wizard and blocks until it is dismissed (interactive use). */
-    public void open() {
-        buildAndShow();
-        while (!dialog.isDisposed()) {
-            if (!dialog.getDisplay().readAndDispatch()) dialog.getDisplay().sleep();
-        }
-    }
-
-    /** Builds and shows the wizard non-modally (no blocking loop), returning the
-     *  shell - for automation capture, which drives it via {@link #setTargetPct},
-     *  {@link #pressStart}, {@link #isTargetReached}, {@link #retranslate} and
-     *  {@link #getContent}. */
+    /** Builds and shows the wizard and returns at once, with no event loop of
+     *  its own: the application's loop dispatches the window's events, the
+     *  shell's modality keeps the rest of the application out.  Returns the
+     *  shell - the automation capture drives it via {@link #setTargetPct},
+     *  {@link #pressStart}, {@link #isTargetReached}, {@link #retranslate}
+     *  and {@link #getContent}. */
     public Shell buildAndShow() {
         dialog = new Shell(parentShell, SWT.DIALOG_TRIM | SWT.APPLICATION_MODAL | SWT.RESIZE);
         ShellIcons.apply(dialog);
@@ -259,9 +252,20 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         lineCellGd.widthHint  = 405;
         lineCellTable.setLayoutData(lineCellGd);
         lineCellTable.addListener(SWT.Resize, e -> fitLineCellColumns());
+        // The cells draw their own text, the wobble in its own colour: the
+        // table's text drawing is switched off and each cell is painted in
+        // three pieces.
+        lineCellTable.addListener(SWT.EraseItem, e -> e.detail &= ~SWT.FOREGROUND);
+        lineCellTable.addListener(SWT.PaintItem, this::paintLineCell);
         for (int row = 0; row < LINE_ROWS; row++) {
-            fillLineRow(new TableItem(lineCellTable, SWT.NONE), row);
+            new TableItem(lineCellTable, SWT.NONE);
         }
+        // The engine reaches this window on the UI thread with its lines
+        // after every result and with its own end of a run.  It lives as long
+        // as the window: created here, it names the lines of the generator's
+        // form in the cells before the first Start.
+        engine = new PredistortionEngine(correctionStore, this);
+        showLineReadouts(engine.readouts());
 
         buildFftGroup();
         buildProgressGroup();
@@ -276,9 +280,15 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         // edge of the last row, laid out, is the height hint - the item height
         // the table reports before its first layout is not trusted.  The
         // table's computeSize adds its own frame to the hint, so the trim
-        // counts once.  The content is laid out again on the measured hint.
+        // counts once.  It also adds the height of the horizontal scrollbar a
+        // Windows table always carries, though the two columns always fit the
+        // client width and the bar never shows: that share - what computeSize
+        // adds to a zero hint beyond the frame - comes off the hint.  The
+        // content is laid out again on the measured hint.
         Rectangle lastRow = lineCellTable.getItem(LINE_ROWS - 1).getBounds();
-        lineCellGd.heightHint = lastRow.y + lastRow.height;
+        int scrollbarShare = lineCellTable.computeSize(SWT.DEFAULT, 0).y
+                - 2 * lineCellTable.getBorderWidth();
+        lineCellGd.heightHint = lastRow.y + lastRow.height - scrollbarShare;
         content.layout(true, true);
         // pack() wraps the intro at its width hint, the column is as wide as
         // its widest row: the height the content needs at the packed width,
@@ -286,14 +296,14 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         Rectangle trim = dialog.computeTrim(0, 0, 0, 0);
         int width = dialog.getSize().x;
         dialog.setSize(width, contentHeightAt(width - trim.width) + trim.height);
-        // The initial size is the minimum.
-        dialog.setMinimumSize(dialog.getSize());
+        // The packed width is the narrowest the window gets; its height
+        // always follows from its width.
+        dialog.setMinimumSize(width, 0);
         // Bottom-right corner on the main window's, clear of the spectrum.
         Rectangle parentBounds = parentShell.getBounds();
         Point size = dialog.getSize();
         dialog.setLocation(parentBounds.x + parentBounds.width - size.x,
                 parentBounds.y + parentBounds.height - size.y);
-        lastSize = dialog.getSize();
         dialog.addListener(SWT.Resize, e -> keepIntroWhole());
         dialog.open();
         armTimer();
@@ -357,7 +367,6 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         Bindings.stepFieldInt(minAveragesField, Preferences.instance().predistortionMinAveragesProperty());
 
         targetLabel = new Label(c, SWT.NONE);
-        targetLabel.setText(I18n.t("predistortion.targetThd"));
         GridData targetLabelGd = new GridData(SWT.END, SWT.CENTER, true, false);
         targetLabelGd.horizontalIndent = SETTINGS_GAP_PX;
         targetLabel.setLayoutData(targetLabelGd);
@@ -365,8 +374,17 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         // target distortion can be entered; the floor of 0.1e-6 % keeps the
         // target above zero, which the stop rule needs.
         targetField = new NumericStepField(c, UnitFamily.PERCENT, MIN_TARGET_PCT, 100.0, 8, 90);
-        targetField.setToolTipText(I18n.t("predistortion.targetThd.tooltip"));
+        showTargetLabel();
         Bindings.stepField(targetField, Preferences.instance().predistortionTargetPctProperty());
+    }
+
+    /** The target field's label and tooltip for the generator's form: the
+     *  target IMD for a dual tone, the target THD otherwise. */
+    private void showTargetLabel() {
+        String key = Preferences.instance().getGenSignalForm().isDualTone()
+                ? "predistortion.targetImd" : "predistortion.targetThd";
+        targetLabel.setText(I18n.t(key));
+        targetField.setToolTipText(I18n.t(key + ".tooltip"));
     }
 
     private void buildButtonBar() {
@@ -378,24 +396,31 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
 
         startStopBtn = new Button(bar, SWT.PUSH);
         startStopBtn.setText(I18n.t("predistortion.button.start"));
-        startStopBtn.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        startStopBtn.setLayoutData(buttonLayoutData());
         startStopBtn.addListener(SWT.Selection, e -> onStartStop());
 
         saveBtn = new Button(bar, SWT.PUSH);
         saveBtn.setText(I18n.t("predistortion.button.save"));
         saveBtn.setEnabled(false);
-        saveBtn.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        saveBtn.setLayoutData(buttonLayoutData());
         saveBtn.addListener(SWT.Selection, e -> onSaveOrApply());
 
         cancelBtn = new Button(bar, SWT.PUSH);
         cancelBtn.setText(I18n.t("common.close"));
-        cancelBtn.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        cancelBtn.setLayoutData(buttonLayoutData());
         cancelBtn.addListener(SWT.Selection, e -> dialog.close());
     }
 
+    /** A button's layout data: {@link #BUTTON_WIDTH} wide. */
+    private GridData buttonLayoutData() {
+        GridData gd = new GridData(SWT.FILL, SWT.CENTER, true, false);
+        gd.widthHint = BUTTON_WIDTH;
+        return gd;
+    }
+
     // -------------------------------------------------------------------------
-    // Automation capture hooks - drive the wizard from a body script with no
-    // modal loop.  An in-place language re-translate leaves the measurement and
+    // Automation capture hooks - drive the wizard from a body script.  An
+    // in-place language re-translate leaves the measurement and
     // the FFT averages untouched, so ONE collection yields a screenshot per
     // language.
     // -------------------------------------------------------------------------
@@ -407,12 +432,12 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
 
     /** Presses Start if idle (no-op while a run is in progress). */
     public void pressStart() {
-        if (!running) onStartStop();
+        if (state != RunState.RUNNING) onStartStop();
     }
 
     /** {@code true} once a run ended settled, until a Save of its result. */
     public boolean isTargetReached() {
-        return !running && "predistortion.status.targetReached".equals(terminalStatusKey);
+        return state == RunState.TARGET_REACHED;
     }
 
     /** Re-reads every UI label in the current locale, in place, WITHOUT rebuilding
@@ -427,9 +452,10 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         intro.setText(I18n.t("predistortion.intro"));
         fftGroup.setText(I18n.t("predistortion.group.fft"));
         progressGroup.setText(I18n.t("predistortion.group.progress"));
-        targetLabel.setText(I18n.t("predistortion.targetThd"));
+        showTargetLabel();
         minAveragesLabel.setText(I18n.t("predistortion.minAverages"));
-        startStopBtn.setText(I18n.t(running ? "predistortion.button.stop" : "predistortion.button.start"));
+        startStopBtn.setText(I18n.t(state == RunState.RUNNING
+                ? "predistortion.button.stop" : "predistortion.button.start"));
         saveBtn.setText(I18n.t(savedPath == null ? "predistortion.button.save" : "predistortion.button.apply"));
         cancelBtn.setText(I18n.t("common.close"));
         refresh();
@@ -437,50 +463,21 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         keepIntroWhole();
     }
 
-    /**
-     * Keeps the wrapped intro whole: when the window's client area is lower
-     * than the content needs at its width, the window gives way in the other
-     * dimension.  A lowered window widens to the narrowest width at which the
-     * wrapped text fits its height - up to the screen's width, beyond which
-     * the height grows after all; a narrowed one grows to the height its
-     * width needs.  A taller or wider window than needed is left as it is.
-     */
+    /** Keeps the window exactly as high as its content at the window's
+     *  width: only the wrapped intro varies, so the height follows from the
+     *  width. */
     private void keepIntroWhole() {
         if (fitting || dialog.isDisposed()) return;
         Point size = dialog.getSize();
         Rectangle trim = dialog.computeTrim(0, 0, 0, 0);
-        int clientWidth  = size.x - trim.width;
-        int clientHeight = size.y - trim.height;
-        if (contentHeightAt(clientWidth) > clientHeight) {
-            boolean lowered = size.y < lastSize.y;
-            int maxClientWidth = dialog.getDisplay().getClientArea().width - trim.width;
-            int width = lowered ? widthFitting(clientHeight, clientWidth, maxClientWidth) : clientWidth;
-            int height = Math.max(clientHeight, contentHeightAt(width));
-            fitting = true;
-            try {
-                dialog.setSize(width + trim.width, height + trim.height);
-            } finally {
-                fitting = false;
-            }
-            size = dialog.getSize();
+        int height = contentHeightAt(size.x - trim.width) + trim.height;
+        if (height == size.y) return;
+        fitting = true;
+        try {
+            dialog.setSize(size.x, height);
+        } finally {
+            fitting = false;
         }
-        lastSize = size;
-    }
-
-    /** The narrowest client width from {@code from} up to {@code max} at
-     *  which the content fits {@code height}, or {@code max} when even that
-     *  is too narrow.  The content's height only falls as its width grows,
-     *  so a bisection finds it. */
-    private int widthFitting(int height, int from, int max) {
-        if (contentHeightAt(max) > height) return Math.max(from, max);
-        int lo = from;
-        int hi = max;
-        while (lo < hi) {
-            int mid = (lo + hi) >>> 1;
-            if (contentHeightAt(mid) > height) lo = mid + 1;
-            else hi = mid;
-        }
-        return lo;
     }
 
     /** The height the content needs at client width {@code width}, the
@@ -530,8 +527,12 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         curThdLbl.setText(dual
                 ? metric("currentImd", imd != null ? fmtPct(imd.imdPwrPct) : "-")
                 : metric("currentThd", live != null ? fmtPct(live.thdPct) : "-"));
-        timeLbl .setText(metric("time", runStart != null ? fmtElapsed(Duration.between(runStart,
-                runEnd != null ? runEnd : Instant.now())) : "-"));
+        Duration elapsed = runStart != null
+                ? Duration.between(runStart, runEnd != null ? runEnd : Instant.now()) : null;
+        timeLbl .setText(metric("time", elapsed != null
+                ? String.format(Locale.ROOT, ELAPSED_FORMAT,
+                        elapsed.toHours(), elapsed.toMinutesPart(), elapsed.toSecondsPart())
+                : "-"));
         // What is inside the average - the SAME number the FFT pane shows: the
         // averages performed since the last reset, NOT the per-call frameCount
         // (only the 2-3 frames of one analyze() segment).
@@ -546,20 +547,17 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         snrLbl  .setText(metric("snr",      live != null ? fmtDb(live.snrDb) : "-"));
         sinadLbl.setText(metric("sinad",    live != null ? fmtDb(live.sinadDb) : "-"));
         double dbvOffsetDb = AudioBackend.instance().analysedChannelDbvOffsetDb();
-        fundLbl .setText(metric("fund",     live != null ? fmtDbv(live.fundamentalDbFs + dbvOffsetDb) : "-"));
+        // A dual tone's fundamental is the two tones' combined level: the
+        // root of the sum of their squares.
+        double fundDbFs = imd != null
+                ? 20.0 * Math.log10(Math.hypot(imd.f1Mag, imd.f2Mag))
+                : live != null ? live.fundamentalDbFs : Double.NaN;
+        fundLbl .setText(metric("fund",     live != null ? fmtDbv(fundDbFs + dbvOffsetDb) : "-"));
         floorLbl.setText(metric("floor",    live != null ? fmtDbv(live.noisePeakFloorDbFs() + dbvOffsetDb) : "-"));
-        // The line cells follow the engine only while a run is on; after it
-        // they keep the run's last values.
-        if (running) showLineReadouts();
     }
 
     private String metric(String key, String value) {
         return I18n.t("predistortion.metric." + key) + ":  " + value;
-    }
-
-    /** A run's length as hh:mm:ss. */
-    private String fmtElapsed(Duration d) {
-        return String.format(Locale.ROOT, ELAPSED_FORMAT, d.toHours(), d.toMinutesPart(), d.toSecondsPart());
     }
 
     // -------------------------------------------------------------------------
@@ -567,10 +565,13 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
     // -------------------------------------------------------------------------
 
     private void onStartStop() {
-        if (running) {
-            engine.stop();
+        if (state == RunState.RUNNING) {
+            // The end by hand is this window's own: the worker stops handing
+            // the engine results, and the state here is set in place; a
+            // snapshot or a settle still on its way from the worker is
+            // ignored.  The cells keep the last result's lines.
             worker.unregisterPredistortionEngine();
-            startStopBtn.setEnabled(false);   // re-enabled by onFinished
+            endRun(RunState.STOPPED, false);
             return;
         }
         // "Is the generator emitting?" - the same bus question the analyser
@@ -595,7 +596,7 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
             return;
         }
 
-        running = true;
+        state = RunState.RUNNING;
         runStart = Instant.now();
         runEnd = null;
         savedPath = null;
@@ -607,6 +608,8 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         targetField.setEnabled(false);
         minAveragesField.setEnabled(false);
         startStopBtn.setText(I18n.t("predistortion.button.stop"));
+        // The form may have changed since the window opened.
+        showTargetLabel();
 
         // The run measures the converter's own distortion: a compensated form
         // gives way to its plain sibling through the preferences before the
@@ -625,12 +628,6 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
             prefs.setFftStopAfterNEnabled(false);
         }
 
-        // The engine reaches this window through a deferred UI-thread task:
-        // a settle comes from the worker thread, and a stop from this thread
-        // delivers its end of run after the button handler has returned.
-        Display display = dialog.getDisplay();
-        engine = new PredistortionEngine(r -> { if (!display.isDisposed()) display.asyncExec(r); },
-                correctionStore, this);
         engine.start();
         // The worker hands the engine every result, so the analyser runs.
         if (!fft.isRecording()) fft.startRecording();
@@ -646,21 +643,28 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
     // -------------------------------------------------------------------------
 
     @Override
-    public void onStarted() {
-        // Start has set the buttons and the run state before the engine
-        // started; the cells follow the engine on the refresh timer.
+    public void onResult(List<PredistortionEngine.LineReadout> readouts) {
+        if (dialog.isDisposed() || state != RunState.RUNNING) return;
+        showLineReadouts(readouts);
     }
 
     @Override
     public void onFinished(PredistortionEngine.StopReason reason, boolean hasResult) {
+        if (dialog.isDisposed() || state != RunState.RUNNING) return;
         worker.unregisterPredistortionEngine();
-        if (dialog.isDisposed()) return;
-        // The cells keep the values of the result the run ended on: one last
-        // read while the run still counts as on.
-        showLineReadouts();
-        running = false;
+        endRun(switch (reason) {
+            case SETTLED -> RunState.TARGET_REACHED;
+            case ERROR   -> RunState.ERROR;
+        }, hasResult);
+    }
+
+    /** The window at the end of a run, by the engine or by hand: {@code end}
+     *  as the state, the run's end time, the displayed result as the
+     *  provenance of a Save, the buttons and the fields back to the idle
+     *  state, Save enabled when the run has a correction to write. */
+    private void endRun(RunState end, boolean hasResult) {
+        state = end;
         runEnd = Instant.now();
-        // The provenance of a Save: the displayed result as the run ended.
         FftResult last = view.getLastResult();
         resultAtStop = last != null ? last.deepCopy() : null;
         startStopBtn.setEnabled(true);
@@ -670,11 +674,6 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         // Save writes the displayed result's provenance; without one there is
         // nothing to write the file from.
         if (hasResult && resultAtStop != null) saveBtn.setEnabled(true);
-        terminalStatusKey = switch (reason) {
-            case SETTLED -> "predistortion.status.targetReached";
-            case ERROR   -> "predistortion.status.error";
-            default      -> "predistortion.status.stopped";
-        };
         refresh();
     }
 
@@ -683,15 +682,17 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
     // -------------------------------------------------------------------------
 
     /**
-     * Takes the lines' names, wobbles, clearances and limits from the
-     * engine's snapshot into the line cells, in place.  A cell shows its
-     * line's wobble while the line is gated and the wobble is a number,
-     * otherwise {@link #NO_VALUE}; then one bracket pair with the line's
-     * clearance over its local band top, 0 dB for a line held at that band
-     * top, and, while the limit is a number, a comma and the limit.
+     * Takes the lines' names, wobbles, clearances and limits from
+     * {@code readouts}, the engine's snapshot, into the line cells, in
+     * place.  A cell shows its line's wobble while the line is gated and the
+     * wobble is a number, otherwise {@link #NO_VALUE}; then one bracket pair
+     * with the line's clearance over its local band top, 0 dB for a line
+     * held at that band top (no positive clearance), and, while the line is
+     * gated and the limit is a number, a comma and the limit.  A shown
+     * wobble with a limit is green within it and red over it.
      */
-    private void showLineReadouts() {
-        List<PredistortionEngine.LineReadout> readouts = engine.readouts();
+    private void showLineReadouts(List<PredistortionEngine.LineReadout> readouts) {
+        Display display = lineCellTable.getDisplay();
         for (int cell = 0; cell < LINE_CELLS; cell++) {
             PredistortionEngine.LineReadout line = readouts.get(cell);
             lineNames[cell] = line.name();
@@ -699,17 +700,45 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
             String wobble = wobbleShown
                     ? String.format(Locale.US, WOBBLE_FORMAT, line.wobbleDeg())
                     : NO_VALUE;
-            String clearance = line.gated()
+            lineWobbleColors[cell] = !wobbleShown || Double.isNaN(line.limitDeg()) ? null
+                    : display.getSystemColor(line.wobbleDeg() <= line.limitDeg()
+                            ? WITHIN_LIMIT_COLOR : OVER_LIMIT_COLOR);
+            String clearance = line.clearanceDb() > 0.0
                     ? String.format(Locale.US, CLEARANCE_FORMAT, line.clearanceDb())
                     : CLAMPED_CLEARANCE;
-            String limit = wobbleShown && !Double.isNaN(line.limitDeg())
-                    ? String.format(Locale.US, LIMIT_FORMAT, line.limitDeg())
-                    : "";
-            lineValues[cell] = wobble + " (" + clearance + limit + ")";
+            String limit = !line.gated() || Double.isNaN(line.limitDeg()) ? ""
+                    : Double.isInfinite(line.limitDeg()) ? UNLIMITED
+                    : String.format(Locale.US, LIMIT_FORMAT, line.limitDeg());
+            lineWobbles[cell]  = wobble;
+            lineBrackets[cell] = " (" + clearance + limit + ")";
         }
         for (int row = 0; row < LINE_ROWS; row++) {
             fillLineRow(lineCellTable.getItem(row), row);
         }
+    }
+
+    /** Paints one line cell's text where the table would: the name with
+     *  {@link #CELL_SEPARATOR}, the wobble in its colour, the brackets - in
+     *  the table's own colour around the wobble, clipped to the cell. */
+    private void paintLineCell(Event e) {
+        TableItem item = (TableItem) e.item;
+        int cell = lineCellTable.indexOf(item) * COLUMNS + e.index;
+        Rectangle text = item.getTextBounds(e.index);
+        GC gc = e.gc;
+        Rectangle clip = gc.getClipping();
+        gc.setClipping(clip.intersection(item.getBounds(e.index)));
+        String head = lineNames[cell] + CELL_SEPARATOR;
+        int x = text.x;
+        int y = text.y + (text.height - gc.getFontMetrics().getHeight()) / 2;
+        gc.drawText(head, x, y, true);
+        x += gc.textExtent(head).x;
+        Color plain = gc.getForeground();
+        if (lineWobbleColors[cell] != null) gc.setForeground(lineWobbleColors[cell]);
+        gc.drawText(lineWobbles[cell], x, y, true);
+        x += gc.textExtent(lineWobbles[cell]).x;
+        gc.setForeground(plain);
+        gc.drawText(lineBrackets[cell], x, y, true);
+        gc.setClipping(clip);
     }
 
     /** Sets the two cells of line row {@code row}. */
@@ -719,10 +748,10 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         }
     }
 
-    /** A line cell's text: the line's name, {@link #CELL_SEPARATOR} and its
-     *  value. */
+    /** A line cell's text: the line's name, {@link #CELL_SEPARATOR}, its
+     *  wobble and its brackets. */
     private String cellText(int cell) {
-        return lineNames[cell] + CELL_SEPARATOR + lineValues[cell];
+        return lineNames[cell] + CELL_SEPARATOR + lineWobbles[cell] + lineBrackets[cell];
     }
 
     /** The two columns, half the table's client width each and together as
@@ -783,7 +812,7 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
             prefs.setGenDpdFolder(new File(picked).getParent());
             prefs.save();
             saveBtn.setText(I18n.t("predistortion.button.apply"));
-            terminalStatusKey = "predistortion.status.saved";
+            state = RunState.SAVED;
             if (log.isInfoEnabled()) {
                 log.info("Predistortion saved to {}", picked);
             }
@@ -929,10 +958,9 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
      *  detached from the worker.  Nothing else - the generator, the
      *  analyser, the recording and the statistics stay as they are. */
     private void handleCancel() {
-        if (!running) return;
-        engine.stop();
+        if (state != RunState.RUNNING) return;
         worker.unregisterPredistortionEngine();
-        running = false;
+        state = RunState.STOPPED;
     }
 
     // -------------------------------------------------------------------------

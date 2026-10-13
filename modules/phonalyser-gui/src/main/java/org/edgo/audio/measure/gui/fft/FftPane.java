@@ -163,9 +163,9 @@ public final class FftPane extends AbstractPane {
         this(parent, true, null, null, null);
     }
 
-    /** Builds + shows the DAC-predistortion wizard non-modally for a help
-     *  capture and returns it, so an automation script can drive it (start,
-     *  screenshot) without the modal loop.  The live pane owns the wizard's
+    /** Builds + shows the DAC-predistortion wizard for a help capture and
+     *  returns it, so an automation script can drive it (start,
+     *  screenshot).  The live pane owns the wizard's
      *  collaborators, so it constructs the wizard here rather than exposing
      *  them.  Returns {@code null} on the offscreen (non-live) pane. */
     public PredistortionWizardDialog openPredistortionForCapture() {
@@ -304,7 +304,7 @@ public final class FftPane extends AbstractPane {
             wizardButton.setToolTipText(I18n.t("predistortion.button.wizard.tooltip"));
             wizardButton.addListener(SWT.Selection, e ->
                     new PredistortionWizardDialog(group.getShell(), wizardController, view, correctionStore,
-                            worker).open());
+                            worker).buildAndShow());
             wizardButton.setData("helpAnchor", "fft.html#fft-predistortion");
         }
 

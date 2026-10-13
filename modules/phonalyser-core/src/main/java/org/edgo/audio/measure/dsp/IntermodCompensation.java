@@ -40,9 +40,10 @@ import org.edgo.audio.measure.fft.FftResult;
  * {@code a·f₁ + b·f₂} for integer {@code (a, b)} and has instantaneous phase
  * {@code a·θ₁ + b·θ₂} from the generator's two DDS accumulators, so a single
  * {@code (a, b)}-indexed correction set cancels them all.  This class holds a
- * fixed grid of such products - the eight sideband products
- * {@code n*f1 - (n-1)*f2} and {@code n*f2 - (n-1)*f1} for n = 2 .. 5 - and
- * accumulates an LMS-style correction phasor per product:
+ * fixed grid of such products - the eight products the IMD readout lists
+ * ({@code ImdAnalyzer}): {@code f2 - f1} and {@code f1 + f2}, then
+ * {@code (n-1)*f1 - (n-2)*f2} and {@code (n-1)*f2 - (n-2)*f1} for n = 3 .. 5 -
+ * and accumulates an LMS-style correction phasor per product:
  *
  * <ul>
  *   <li>the product's <b>phase-stable</b> averaged value comes straight from
@@ -69,19 +70,20 @@ import org.edgo.audio.measure.fft.FftResult;
  */
 public final class IntermodCompensation {
 
-    /** The correction grid as {@code (a, b)} of {@code a*f1 + b*f2}: per
-     *  sideband index n = 2 .. 5 the product {@code n*f1 - (n-1)*f2} below F1,
-     *  then {@code n*f2 - (n-1)*f1} above F2.  The n-th pair is of order
-     *  {@code 2n - 1}, and the analyzer de-rotates products only up to order
-     *  {@code max(5, harmonicCount + 1)} ({@link FftResult#imdProductA}): the
-     *  pairs of order 7 and 9 carry a phasor only from 6 and 8 harmonics on;
-     *  below that such a product has no frequency on the result and never
-     *  moves its correction. */
-    private static final int[][] SIDEBAND_PRODUCTS = {
+    /** The correction grid as {@code (a, b)} of {@code a*f1 + b*f2}, in the
+     *  IMD readout's order and naming (d2L, d2H, d3L .. d5H): {@code f2 - f1}
+     *  and {@code f1 + f2}, then per n = 3 .. 5 the product
+     *  {@code (n-1)*f1 - (n-2)*f2} below F1 and {@code (n-1)*f2 - (n-2)*f1}
+     *  above F2.  The n-th pair is of order {@code 2n - 3}, and the analyzer
+     *  de-rotates products only up to order {@code max(5, harmonicCount + 1)}
+     *  ({@link FftResult#imdProductA}): the d5 pair, of order 7, carries a
+     *  phasor only from 6 harmonics on; below that it has no frequency on the
+     *  result and never moves its correction. */
+    private static final int[][] IMD_PRODUCTS = {
+        { -1,  1 }, {  1,  1 },
         {  2, -1 }, { -1,  2 },
         {  3, -2 }, { -2,  3 },
         {  4, -3 }, { -3,  4 },
-        {  5, -4 }, { -4,  5 },
     };
 
     /** Per-product θ₁ / θ₂ integer multipliers (the grid), the accumulated
@@ -95,12 +97,12 @@ public final class IntermodCompensation {
     private final ToneLobeLift lobe = new ToneLobeLift();
 
     public IntermodCompensation() {
-        int products = SIDEBAND_PRODUCTS.length;
+        int products = IMD_PRODUCTS.length;
         this.coefA  = new int[products];
         this.coefB  = new int[products];
         for (int g = 0; g < products; g++) {
-            coefA[g] = SIDEBAND_PRODUCTS[g][0];
-            coefB[g] = SIDEBAND_PRODUCTS[g][1];
+            coefA[g] = IMD_PRODUCTS[g][0];
+            coefB[g] = IMD_PRODUCTS[g][1];
         }
         this.accRe   = new double[products];
         this.accIm   = new double[products];
@@ -164,14 +166,15 @@ public final class IntermodCompensation {
         }
     }
 
-    /** Per-product complex phasors with the grid coordinates, the frequency
-     *  each belongs to and how far each stood above its own local band top
-     *  (dB, {@link Double#NaN} when unknown).  Carries a frame's measurement
+    /** Per-product complex phasors with the grid coordinates - each product's
+     *  multiple of the first tone and of the second - the frequency each
+     *  belongs to and how far each stood above its own local band top (dB,
+     *  {@link Double#NaN} when unknown).  Carries a frame's measurement
      *  ({@link #measurePhasors}) and the measured plant
      *  ({@link #measurePlant}), whose unmeasured entries are
      *  {@link Double#NaN}. */
-    public record ProductPhasors(int[] coefA, int[] coefB, double[] re, double[] im, double[] hz,
-                                 double[] clearanceDb) {}
+    public record ProductPhasors(int[] toneOneMultiples, int[] toneTwoMultiples, double[] re, double[] im,
+                                 double[] hz, double[] clearanceDb) {}
 
     /**
      * The distortion products of one frame as complex phasors in the
