@@ -72,8 +72,9 @@ public final class ImdResult {
     public double f1Mag;
     public double f2Mag;
     /** F1 / F2 MEASURED level in dBFS (straight off the spectrum peak) - used for
-     *  the dBFS column, the spectrum markers and autoscale, so they stay on the
-     *  real peak even when {@link #f1Mag} is anchored to a manual fundamental. */
+     *  the dBFS column, the blue measured marker and autoscale, so they stay on
+     *  the real peak when {@link #f1Mag} is anchored to a manual fundamental
+     *  (the lobe lift and the red marker then stand on the anchored level). */
     public double f1DbFs;
     public double f2DbFs;
 

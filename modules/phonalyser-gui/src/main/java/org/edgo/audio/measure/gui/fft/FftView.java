@@ -2245,12 +2245,16 @@ public final class FftView extends AbstractFreqDomainView {
                              boolean logFreq) {
         // Aggregate every dot's (freq, post-cal dBFs) so the blue
         // pre-cal and red post-cal passes walk the same list.  Order:
-        // F1, F2, dnL[2..5], dnH[2..5].
+        // F1, F2, dnL[2..5], dnH[2..5].  The tones stand at their displayed
+        // level - each tone's share of the manual fundamental when one is
+        // set, where the lobe lift puts its lobe - the products at the level
+        // read off the spectrum; measuredDbFs keeps the tones' read level
+        // for the blue dot underneath.
         int count = 2 + 2 * (ImdResult.MAX_ORDER - 1);
         double[] hz   = new double[count];
         double[] dbFs = new double[count];
-        hz[0]   = imd.f1Hz;  dbFs[0] = imd.f1DbFs;
-        hz[1]   = imd.f2Hz;  dbFs[1] = imd.f2DbFs;
+        hz[0]   = imd.f1Hz;  dbFs[0] = dbFsOfMagnitude(imd.f1Mag);
+        hz[1]   = imd.f2Hz;  dbFs[1] = dbFsOfMagnitude(imd.f2Mag);
         int idx = 2;
         for (int k = 2; k <= ImdResult.MAX_ORDER; k++) {
             hz[idx]   = imd.dnLHz[k];
@@ -2260,6 +2264,9 @@ public final class FftView extends AbstractFreqDomainView {
             dbFs[idx] = imd.dnHDbFs[k];
             idx++;
         }
+        double[] measuredDbFs = dbFs.clone();
+        measuredDbFs[0] = imd.f1DbFs;
+        measuredDbFs[1] = imd.f2DbFs;
 
         // Blue "before-cal" dots first so the red post-cal dots sit on
         // top.  Only drawn when at least one calibration file is
@@ -2271,9 +2278,21 @@ public final class FftView extends AbstractFreqDomainView {
         if (!correctionStore.getEntries().isEmpty()) {
             gc.setBackground(color(ColorRole.BEFORE_CAL_DOT));
             for (int i = 0; i < count; i++) {
-                double preDbFs = dbFs[i] + calGainDbAt(r, hz[i]);
+                double preDbFs = measuredDbFs[i] + calGainDbAt(r, hz[i]);
                 plotDotAt(gc, plot, hz[i], preDbFs,
                         unit, freqMin, freqMax, magTop, magBot, logFreq);
+            }
+        } else if (Double.isFinite(r.fundamentalTrueDbFs)) {
+            // With a manual fundamental and no .frc cal the tone lobes are
+            // lifted to their shares of it and the red dots land there - so
+            // also drop a BLUE dot at each tone's MEASURED height, as the
+            // single-tone path does.
+            gc.setBackground(color(ColorRole.BEFORE_CAL_DOT));
+            for (int i = 0; i < 2; i++) {
+                if (dbFs[i] != measuredDbFs[i]) {
+                    plotDotAt(gc, plot, hz[i], measuredDbFs[i],
+                            unit, freqMin, freqMax, magTop, magBot, logFreq);
+                }
             }
         }
 
@@ -2297,9 +2316,9 @@ public final class FftView extends AbstractFreqDomainView {
         // strictly above their own dots so the dot itself is never
         // obscured.
         gc.setForeground(color(ColorRole.HARMONIC_DOT));
-        Point p1 = dotScreenPos(plot, imd.f1Hz, imd.f1DbFs, unit, freqMin, freqMax,
+        Point p1 = dotScreenPos(plot, imd.f1Hz, dbFs[0], unit, freqMin, freqMax,
                 magTop, magBot, logFreq);
-        Point p2 = dotScreenPos(plot, imd.f2Hz, imd.f2DbFs, unit, freqMin, freqMax,
+        Point p2 = dotScreenPos(plot, imd.f2Hz, dbFs[1], unit, freqMin, freqMax,
                 magTop, magBot, logFreq);
         if (p1 != null || p2 != null) {
             // Horizontal centring runs off the FRACTIONAL dot column and is
@@ -2536,33 +2555,7 @@ public final class FftView extends AbstractFreqDomainView {
         setTraceLineAttributes(gc, (float) prefs.getFftLineWidth(), SWT.LINE_SOLID);
         double binBw   = r.freqResolution;
         int n = r.amplitudeDbFs.length;
-        // Manual-fundamental: lift the fundamental's WHOLE main lobe to the user
-        // value - not just its peak bin (that left a narrow spike on the
-        // unlifted lobe) - PROPORTIONALLY above the local noise floor so the
-        // wings stay on the floor.  Lobe + floor read from the data via the
-        // shared ToneLobeLift; applied as a per-bin dBFS anchor so it works in
-        // every magnitude unit.
-        int    lobeLo = -1, lobeHi = -1;
-        double floorLin = 0.0, liftFactor = 1.0, peakMagLin = 0.0;
-        if (Double.isFinite(r.fundamentalTrueDbFs)
-                && Double.isFinite(r.fundamentalDbFs)
-                && Double.isFinite(r.fundamentalHzRefined)
-                && binBw > 0) {
-            int peak = (int) Math.round(r.fundamentalHzRefined / binBw);
-            int half = n - 1;
-            if (peak >= 1 && peak <= half) {
-                final double[] dbfs = r.amplitudeDbFs;
-                IntToDoubleFunction mag = k -> Math.pow(10.0, dbfs[k] / 20.0);
-                floorLin = LOBE.localFloor(mag, peak, half);
-                int[] edges = LOBE.lobeBins(mag, peak, half, floorLin);
-                lobeLo = edges[0];
-                lobeHi = edges[1];
-                peakMagLin = mag.applyAsDouble(peak);
-                double targetDbFs = r.fundamentalTrueDbFs;   // manual fundamental, already dBFS
-                liftFactor = Math.pow(10.0, (targetDbFs - dbfs[peak]) / 20.0);
-            }
-        }
-        double[] drawnDbFs = heldLinesLifted(r);
+        double[] drawnDbFs = toneLobesLifted(heldLinesLifted(r), r);
         int kFirst = Math.max(1,  (int) Math.floor(freqMin / binBw));
         int kLast  = Math.min(n - 1, (int) Math.ceil (freqMax / binBw));
         if (kLast <= kFirst) return;
@@ -2591,8 +2584,10 @@ public final class FftView extends AbstractFreqDomainView {
         // freqToX + the unit conversion on the two extremes of each pixel
         // column.  That cuts the transcendental count from one log10+pow
         // PER BIN (~1 M at fftSize 2 M - a 10-40 ms UI stall per rebuilt
-        // frame) to ~4 per pixel column.  Only the manual-fundamental
-        // lobe stretch stays per-bin - it spans a few thousand bins at most.
+        // frame) to ~4 per pixel column.  Only the lobe lifts (the tones to
+        // the manual fundamental, the held lines to their readout), applied
+        // to drawnDbFs beforehand, stay per-bin - they span a few thousand
+        // bins at most.
         ColumnBucketPainter painter = new ColumnBucketPainter(plot);
         int    curCol   = Integer.MIN_VALUE;          // column being accumulated
         // The TRUE fractional X of the bin that opened that column.  The column
@@ -2608,11 +2603,6 @@ public final class FftView extends AbstractFreqDomainView {
         for (int k = kPrev; k <= kNext; k++) {
             double f = k * binBw;
             double binDbFs = drawnDbFs[k];
-            if (lobeLo >= 0 && k >= lobeLo && k <= lobeHi) {
-                double m = Math.pow(10.0, binDbFs / 20.0);
-                double newMag = LOBE.stretch(m, floorLin, peakMagLin, liftFactor);
-                binDbFs = newMag > 1e-15 ? 20.0 * Math.log10(newMag) : -300.0;
-            }
             // Route by frequency, not pixel: on LOG scale freqToX clamps any
             // sub-freqMin bin to plot.x, so an x-based test would silently
             // add off-screen bins to column 0 with their own y values -
@@ -2686,9 +2676,41 @@ public final class FftView extends AbstractFreqDomainView {
                 || !(readoutDbFs > r.amplitudeDbFs[bin])) {
             return out;
         }
+        return liftLobeTo(out, r, bin, readoutDbFs);
+    }
+
+    /** {@code out} with the tone lobes lifted to the manual fundamental when
+     *  one is set, so each lobe meets its red dot: a single tone's lobe to the
+     *  manual level, a dual tone's two lobes each to its share of it - the
+     *  manual level split by the measured ratio, as the IMD readout splits
+     *  it.  The WHOLE main lobe is lifted, proportionally above the local
+     *  noise floor so the wings stay on the floor, not just the peak bin,
+     *  which left a narrow spike on the unlifted lobe.  Without a manual
+     *  fundamental, {@code out} as given. */
+    private double[] toneLobesLifted(double[] out, FftResult r) {
+        double binBw = r.freqResolution;
+        if (!Double.isFinite(r.fundamentalTrueDbFs) || !(binBw > 0)) return out;
+        ImdResult imd = r.imd;
+        if (imd == null) {
+            if (!Double.isFinite(r.fundamentalDbFs) || !Double.isFinite(r.fundamentalHzRefined)) {
+                return out;
+            }
+            return liftLobeTo(out, r, (int) Math.round(r.fundamentalHzRefined / binBw),
+                    r.fundamentalTrueDbFs);
+        }
+        out = liftLobeTo(out, r, (int) Math.round(imd.f1Hz / binBw), dbFsOfMagnitude(imd.f1Mag));
+        return liftLobeTo(out, r, (int) Math.round(imd.f2Hz / binBw), dbFsOfMagnitude(imd.f2Mag));
+    }
+
+    /** Lifts the lobe at {@code bin} in {@code out} to {@code targetDbFs}
+     *  with {@link #stretchLobe}, copying {@code r}'s spectrum first if
+     *  {@code out} still is it.  Returns the array to go on with. */
+    private double[] liftLobeTo(double[] out, FftResult r, int bin, double targetDbFs) {
+        int half = r.amplitudeDbFs.length - 1;
+        if (bin < 1 || bin > half || !Double.isFinite(targetDbFs)) return out;
         final double[] lifted = out == r.amplitudeDbFs ? out.clone() : out;
         stretchLobe(lifted, k -> Math.pow(10.0, lifted[k] / 20.0), bin, half,
-                Math.pow(10.0, (readoutDbFs - lifted[bin]) / 20.0));
+                Math.pow(10.0, (targetDbFs - lifted[bin]) / 20.0));
         return lifted;
     }
 
