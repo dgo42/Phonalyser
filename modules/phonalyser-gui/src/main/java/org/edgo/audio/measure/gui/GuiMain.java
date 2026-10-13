@@ -33,6 +33,7 @@ import org.edgo.audio.measure.cli.util.CliAppPaths;
 import org.edgo.audio.measure.common.AppPaths;
 import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.gui.automation.AutomationRunner;
+import org.edgo.audio.measure.gui.common.GuiUtil;
 import org.edgo.audio.measure.gui.helpviewer.HelpViewer;
 import org.edgo.audio.measure.gui.helpviewer.Versions;
 import org.edgo.audio.measure.gui.i18n.I18n;
@@ -64,6 +65,35 @@ public final class GuiMain {
     /** Process exit code for a scripted run that aborted or recorded a failed
      *  check - the only non-zero code this application produces. */
     private static final int AUTOMATION_FAILED_EXIT = 1;
+
+    /** The realtime heartbeat's delay to the next frame, ms: pace the next
+     *  frame as soon as possible (render time dominates).
+     *
+     *  <p>The heartbeat always re-arms at the minimum cadence; the pacing sits
+     *  in the view instead, where it can be selective.  The scope skips a
+     *  frame when the measured UI-thread load leaves the rest of the
+     *  application no room (async work and canvas paints run only once the
+     *  native event queue drains empty), while the FFT renders every result
+     *  it is handed. */
+    private static final int RENDER_FRAME_MS = 1;
+
+    /** Time constant of the UI-thread load, ns.  The load is measured in the
+     *  main loop, on the one thread that knows: everything between waking and
+     *  entering the next sleep is work this thread did - event dispatch plus
+     *  the heartbeat's render - and the sleep or nap itself is idle.  Both
+     *  intervals are folded into an exponentially weighted fraction with this
+     *  time constant, so one heavy frame does not swing it and a sustained
+     *  load reaches it within a few frames. */
+    private static final double LOAD_WINDOW_NANOS = 150_000_000.0;
+
+    /** The main loop's nap while GLFW is live, ms.  macOS GPU scope: the
+     *  floating GLFW child window's input callbacks fire only during
+     *  glfwPollEvents, which must run on this (main) thread - and we can't
+     *  block in Display.sleep() or that polling stops and the child goes
+     *  unresponsive while the scope is stopped.  So when GLFW is live we poll
+     *  + short-nap instead of sleeping.  On Windows / Linux (no GLFW) it stays
+     *  a blocking sleep, so an idle app draws no CPU. */
+    private static final int GLFW_IDLE_NAP_MS = 2;
 
     private GuiMain() {}
 
@@ -308,33 +338,17 @@ public final class GuiMain {
         // view depends on its own timer / async cadence and the two can't starve
         // each other (the FFT's single coalesced result hand-off otherwise sat a
         // beat behind the scope's repaint, hiding the first average and further
-        // updates until Record was toggled).  While a live view is updating, a
-        // no-op one-shot timer paces the next frame; when nothing is live no
-        // timer is armed and the loop blocks in sleep() until a real event, so an
-        // idle app stays cool.
+        // updates until Record was toggled).  While a live view is updating, or a
+        // marshalled runnable waits, a one-shot timer paces the next tick; when
+        // neither holds no timer is armed and the loop blocks in sleep() until a
+        // real event, so an idle app stays cool.
         // Self-re-arming heartbeat rather than a one-shot per iteration: a one-shot
         // timer is consumed (and then lost) when a nested OS modal loop runs - dragging
         // the floating measurement tool window is one - leaving the main loop blocked in
         // sleep() forever and the realtime view frozen.  A timer that re-arms ITSELF keeps
         // firing through the nested loop, so rendering continues during and after it.
-        // When no view is live the chain lapses and the loop blocks in sleep(), so an idle
-        // app stays cool.
-        final int RENDER_FRAME_MS = 1;   // pace the next frame as soon as possible (render time dominates)
-        // The heartbeat always re-arms at the minimum cadence; the pacing sits
-        // in the view instead, where it can be selective.  The scope skips a
-        // frame when the measured UI-thread load leaves the rest of the
-        // application no room (async work and canvas paints run only once the
-        // native event queue drains empty), while the FFT renders every result
-        // it is handed.
-        //
-        // The load is measured here, on the one thread that knows: everything
-        // between waking and entering the next sleep is work this thread did -
-        // event dispatch plus the heartbeat's render - and the sleep or nap
-        // itself is idle.  Both intervals are folded into an exponentially
-        // weighted fraction with a LOAD_WINDOW_NANOS time constant, so one
-        // heavy frame does not swing it and a sustained load reaches it within
-        // a few frames.
-        final double LOAD_WINDOW_NANOS = 150_000_000.0;
+        // When no view is live and no marshalled runnable waits, the chain lapses and the
+        // loop blocks in sleep(), so an idle app stays cool.
         final double[] uiLoad   = { 0.0 };
         final long[]   loadMark = { System.nanoTime() };
         // Folds one interval into the fraction: a busy interval samples 1, an
@@ -348,19 +362,24 @@ public final class GuiMain {
         heartbeat[0] = () -> {
             beating[0] = false;
             if (window.isDisposed()) return;
+            // Runnables marshalled to this thread run only once the native
+            // event queue is empty, and a frame that takes as long as the
+            // timer leaves the next tick's timer message always waiting.
+            // While any is waiting the tick skips its frame, dispatches one
+            // item - a native message, or a queued runnable when none is
+            // waiting - and re-arms: the queue drains one item per tick.
+            if (GuiUtil.pendingMarshals() > 0) {
+                beating[0] = true;
+                display.readAndDispatch();
+                display.timerExec(RENDER_FRAME_MS, heartbeat[0]);
+                return;
+            }
             if (window.renderRealtimeFrame(uiLoad[0])) {
                 beating[0] = true;
                 display.timerExec(RENDER_FRAME_MS, heartbeat[0]);
             }
         };
-        // macOS GPU scope: the floating GLFW child window's input callbacks fire only
-        // during glfwPollEvents, which must run on this (main) thread - and we can't
-        // block in Display.sleep() or that polling stops and the child goes
-        // unresponsive while the scope is stopped.  So when GLFW is live we poll +
-        // short-nap instead of sleeping.  On Windows / Linux (no GLFW) it stays a
-        // blocking sleep, so an idle app draws no CPU.
         final Glfw glfw = Glfw.instance();
-        final int GLFW_IDLE_NAP_MS = 2;
         while (!window.isDisposed()) {
             while (display.readAndDispatch()) {
                 if (window.isDisposed()) break;
@@ -369,7 +388,7 @@ public final class GuiMain {
             glfw.poll();
             if (!beating[0] && window.renderRealtimeFrame(uiLoad[0])) {   // a view went live -> start beating
                 beating[0] = true;
-                display.timerExec(RENDER_FRAME_MS, heartbeat[0]);
+               display.timerExec(RENDER_FRAME_MS, heartbeat[0]);
             }
             // Everything since the last wake was this thread working.
             long enterSleep = System.nanoTime();

@@ -18,6 +18,8 @@
 
 package org.edgo.audio.measure.gui.common;
 
+import java.util.concurrent.atomic.AtomicInteger;
+
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Shell;
 
@@ -38,6 +40,18 @@ public class GuiUtil {
     @Setter
     private volatile Shell mainShell;
 
+    /** Runnables {@link #marshal} posted to the UI thread that have not
+     *  started yet. */
+    private final AtomicInteger pending = new AtomicInteger();
+
+    /** The count of runnables {@link #marshal} posted to the UI thread that
+     *  have not started yet.  SWT runs posted runnables only once the native
+     *  event queue is empty; the main loop's render tick reads this to leave
+     *  it empty while any is waiting. */
+    public int pendingMarshals() {
+        return pending.get();
+    }
+
     /**
      * Marshals {@code r} onto the UI thread, gated on {@code context}:
      * nothing runs when the widget is already disposed - at submit time or by
@@ -53,7 +67,9 @@ public class GuiUtil {
             r.run();
             return;
         }
+        pending.incrementAndGet();
         display.asyncExec(() -> {
+            pending.decrementAndGet();
             if (context.isDisposed()) return;
             r.run();
         });
