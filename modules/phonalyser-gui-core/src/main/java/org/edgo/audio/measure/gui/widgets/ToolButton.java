@@ -49,6 +49,11 @@ import lombok.Setter;
  * cursor is {@link SWT#CURSOR_HAND}; set the tooltip with the inherited
  * {@code setToolTipText}.  Created {@code SWT.NO_BACKGROUND | SWT.TRANSPARENT} so the
  * plot shows through the corners.
+ *
+ * <p>A press with Shift held neither toggles nor switches a radio group: it only fires
+ * {@link SWT#Selection} with the press's {@code stateMask}, for a handler that gives
+ * Shift its own meaning.  {@link #setLinked(boolean) Linked} paints the inverted look
+ * in the frame colour.
  */
 public final class ToolButton extends TransparentComposite {
 
@@ -64,6 +69,8 @@ public final class ToolButton extends TransparentComposite {
     /** Latching toggle (keeps the pressed look) vs momentary push. */
     @Setter private boolean toggle;
     @Getter private boolean toggled;
+    /** Linked to another button - the inverted look in the frame colour. */
+    @Getter private boolean linked;
     private boolean pressed;         // mouse held down on the button
     /** Radio group NAME - same-named sibling {@code ToolButton}s (same parent) are
      *  mutually exclusive: clicking one selects it and clears the rest, and each change
@@ -78,7 +85,11 @@ public final class ToolButton extends TransparentComposite {
         addListener(SWT.MouseDown, e -> {
             if (!isEnabled()) return;   // GPU path forwards clicks here directly, past SWT's disabled-input filter
             pressed = true;
-            if (group != null) {
+            if ((e.stateMask & SWT.SHIFT) != 0) {
+                Event shifted = new Event();
+                shifted.stateMask = e.stateMask;
+                notifyListeners(SWT.Selection, shifted);   // Shift: no toggle, no radio switch
+            } else if (group != null) {
                 for (Control c : getParent().getChildren()) {   // radio: clear same-named siblings
                     if (c instanceof ToolButton b && group.equals(b.group)) {
                         b.setToggled(b == this);   // each setToggled fires Selection if it changed
@@ -122,16 +133,20 @@ public final class ToolButton extends TransparentComposite {
         // its action is unavailable (e.g. a measurement channel that's switched off).
         boolean enabled = isEnabled();
         boolean active = (toggled || pressed) && enabled;
+        // Linked fills with the frame colour - whether or not the button is enabled:
+        // the link is a state the button shows, not an action it offers.
+        boolean filled = active || linked;
+        Color fill = active ? fillColor : frameColor;
         Color disabled = enabled ? null : getDisplay().getSystemColor(SWT.COLOR_DARK_GRAY);
-        // Active label + border auto-contrast to absolute black/white by the fill's
+        // Filled label + border auto-contrast to absolute black/white by the fill's
         // brightness - theme-independent (the FFT's light bg and the scope's black bg alike).
-        Color contrast = active
-                ? getDisplay().getSystemColor(ColorUtil.isDark(fillColor) ? SWT.COLOR_WHITE : SWT.COLOR_BLACK)
+        Color contrast = filled
+                ? getDisplay().getSystemColor(ColorUtil.isDark(fill) ? SWT.COLOR_WHITE : SWT.COLOR_BLACK)
                 : null;
         p.setLineWidth(1);   // 1-px frame - the shared GPU painter keeps the previous stroke width
-        if (active) {
-            if (fillColor != null) {
-                p.setBackground(fillColor);
+        if (filled) {
+            if (fill != null) {
+                p.setBackground(fill);
                 p.fillRoundRectangle(x, y, rw, rh, CORNER_RADIUS, CORNER_RADIUS);
             }
             if (label != null) {   // outline label buttons; icon buttons invert via the dark variant
@@ -142,12 +157,12 @@ public final class ToolButton extends TransparentComposite {
             p.setForeground(disabled != null ? disabled : frameColor);
             p.drawRoundRectangle(x, y, rw, rh, CORNER_RADIUS, CORNER_RADIUS);
         }
-        Image icon = (active && darkIcon != null) ? darkIcon : lightIcon;
+        Image icon = (filled && darkIcon != null) ? darkIcon : lightIcon;
         if (icon != null && !icon.isDisposed()) {
             Rectangle ib = icon.getBounds();
             p.drawImage(icon, x + (w - ib.width) / 2, y + (h - ib.height) / 2);
         } else if (label != null) {
-            Color lc = active ? contrast : (disabled != null ? disabled : contentColor);
+            Color lc = filled ? contrast : (disabled != null ? disabled : contentColor);
             if (lc != null) {
                 p.setFont(getFont());   // the button's own font (e.g. the bold channel font)
                 p.setForeground(lc);
@@ -186,6 +201,12 @@ public final class ToolButton extends TransparentComposite {
 
     public void setDrawFrame(boolean v) {
         this.drawFrame = v;
+        redraw();
+    }
+
+    /** Shows or clears the linked look; fires nothing. */
+    public void setLinked(boolean v) {
+        this.linked = v;
         redraw();
     }
 
