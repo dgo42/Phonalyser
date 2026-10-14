@@ -3198,6 +3198,17 @@ public final class FftAnalyzerWorker {
 
     // ─── Lifecycle ──────────────────────────────────────────────────────────
 
+    /** Combines the capture's two inputs into {@code master} - the other one
+     *  folded into it as its slave - or separates them for {@code null}, on
+     *  the reader held now; {@link #start()} combines the reader it acquires
+     *  from the preference. */
+    public void setCombinedMaster(Channel master) {
+        SignalBufferReader rdr = reader;
+        if (rdr == null) return;
+        if (master != null) rdr.combine(master);
+        else                rdr.separate();
+    }
+
     /** Starts the analyser on a daemon worker thread.  Idempotent. */
     public synchronized void start() {
         if (running) return;
@@ -3209,6 +3220,8 @@ public final class FftAnalyzerWorker {
         // button.
         SignalBufferReader r = SharedCapture.instance().acquire();
         if (r == null) return;
+        Channel combined = Preferences.instance().getFftCombinedMaster();
+        if (combined != null) r.combine(combined);   // a fresh reader combines like the last one
         this.reader      = r;
         this.captureHeld = true;
         running = true;

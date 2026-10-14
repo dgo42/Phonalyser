@@ -50,6 +50,7 @@ import org.edgo.audio.measure.dsp.ToneLobe;
 import org.edgo.audio.measure.dsp.ToneLobeLift;
 import org.edgo.audio.measure.enums.AlignGenerator;
 import org.edgo.audio.measure.enums.Channel;
+import org.edgo.audio.measure.enums.FundamentalPhaseAlignment;
 import org.edgo.audio.measure.enums.GenChangeCause;
 import org.edgo.audio.measure.enums.MagnitudeUnit;
 import org.edgo.audio.measure.fft.FftAnalyzer;
@@ -550,6 +551,13 @@ public final class FftView extends AbstractFreqDomainView {
         rightBtn.addListener(SWT.Selection, e -> {
             if (rightBtn.isToggled()) viewPrefs.setFftChannel(Channel.R);
         });
+        // Combined channel: Shift on the other channel's button folds it into the
+        // selected one; a plain press on either button separates them again.
+        leftBtn.addListener(SWT.Selection,  e -> { if ((e.stateMask & SWT.SHIFT) != 0) connect(Channel.L); });
+        rightBtn.addListener(SWT.Selection, e -> { if ((e.stateMask & SWT.SHIFT) != 0) connect(Channel.R); });
+        leftBtn.addListener(SWT.MouseDown,  e -> { if ((e.stateMask & SWT.SHIFT) == 0) disconnect(); });
+        rightBtn.addListener(SWT.MouseDown, e -> { if ((e.stateMask & SWT.SHIFT) == 0) disconnect(); });
+        restoreCombinedMaster();   // the saved combined channel
         // Recolour the L/R buttons immediately when the channel colours change.
         bindChannelButtonFills(leftBtn, rightBtn);
         headerBar.spacer(2);
@@ -777,6 +785,7 @@ public final class FftView extends AbstractFreqDomainView {
         // Switching channel restarts the accumulation so it re-captures the new
         // channel from 0 - the L/R ToolButtons write the pref, the view reacts here.
         Bindings.onChange(this, viewPrefs.fftChannelProperty(),          v -> resetStatistics());
+        Bindings.onChange(this, viewPrefs.fftCombinedMasterProperty(),   this::applyCombinedMaster);
         // Distortion-table toggle: the external button follows the table's
         // visibility, then refresh the extracted shell + repaint.
         Bindings.onChange(this, viewPrefs.fftDistortionTableVisibleProperty(), v -> {
@@ -940,6 +949,60 @@ public final class FftView extends AbstractFreqDomainView {
         // they reach a frame, and the per-bin response is sampled for both -
         // so it is dropped here and rebuilt by the first frame after.
         calInv = null;
+    }
+
+    /** Combines the two inputs into the analysed channel, with {@code slave} -
+     *  the other channel - folded into it.  Writes the preference;
+     *  {@link #applyCombinedMaster} reacts. */
+    private void connect(Channel slave) {
+        Preferences p = Preferences.instance();
+        Channel master = p.getFftChannel();
+        if (slave != master) p.setFftCombinedMaster(master);
+    }
+
+    /** Separates the two inputs again; a no-op while they are separate. */
+    private void disconnect() {
+        Preferences.instance().setFftCombinedMaster(null);
+    }
+
+    /** Applies a change of the combined channel: the worker's reader combines
+     *  into {@code master} or separates, the slave's button shows the linked
+     *  look, and the FFT restarts from the new signal. */
+    private void applyCombinedMaster(Channel master) {
+        if (master != null) dropReferenceAlignment();
+        controller.setCombinedMaster(master);
+        showLinked(master);
+        resetStatistics();
+        redraw();
+    }
+
+    /** Shows the combined channel restored from the preferences; the worker
+     *  combines its reader from them at every start. */
+    private void restoreCombinedMaster() {
+        Channel master = Preferences.instance().getFftCombinedMaster();
+        if (master != null) dropReferenceAlignment();
+        showLinked(master);
+    }
+
+    /** Reference-channel alignment reads the second input, which a combined
+     *  channel delivers as 0 - falls back to none. */
+    private void dropReferenceAlignment() {
+        Preferences p = Preferences.instance();
+        if (p.getFftFundamentalPhaseAlignment() == FundamentalPhaseAlignment.REFERENCE_CHANNEL) {
+            p.setFftFundamentalPhaseAlignment(FundamentalPhaseAlignment.NONE);
+        }
+    }
+
+    /** The linked look on the slave's button - the one that is not
+     *  {@code master} - and on neither while separate; while combined the
+     *  tooltips name master and slave, while separate the usual ones stand. */
+    private void showLinked(Channel master) {
+        leftBtn.setLinked(master == Channel.R);
+        rightBtn.setLinked(master == Channel.L);
+        leftBtn.setToolTipText(I18n.t(master == null ? "fft.button.left.tooltip"
+                : master == Channel.L ? "common.channel.combined.leftMaster" : "common.channel.combined.leftSlave"));
+        rightBtn.setToolTipText(I18n.t(master == null ? "fft.button.right.tooltip"
+                : master == Channel.R ? "common.channel.combined.rightMaster" : "common.channel.combined.rightSlave"));
     }
 
     /** View-side companion of a statistics reset: drops the retained

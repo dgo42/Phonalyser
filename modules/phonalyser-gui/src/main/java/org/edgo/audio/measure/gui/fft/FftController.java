@@ -28,6 +28,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import org.edgo.audio.measure.common.FileVersions;
+import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
@@ -161,6 +162,12 @@ public final class FftController {
      *  handshake. */
     public void resultConsumed() {
         worker.uiGotResult();
+    }
+
+    /** Combines the capture's two inputs into {@code master}, or separates
+     *  them for {@code null} - see {@link FftAnalyzerWorker#setCombinedMaster}. */
+    public void setCombinedMaster(Channel master) {
+        worker.setCombinedMaster(master);
     }
 
     /** Relays a frequency-lock reset to the worker, which owns the loops -

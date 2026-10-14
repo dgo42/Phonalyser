@@ -35,6 +35,7 @@ import org.edgo.audio.measure.common.Constants;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
+import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.common.AbstractPane;
 import org.edgo.audio.measure.gui.common.AbstractTabControl;
 import org.edgo.audio.measure.gui.common.CalibrationDialog;
@@ -306,6 +307,12 @@ public final class FftPane extends AbstractPane {
                     new PredistortionWizardDialog(group.getShell(), wizardController, view, correctionStore,
                             worker).buildAndShow());
             wizardButton.setData("helpAnchor", "fft.html#fft-predistortion");
+            // The wizard measures the coherent average's phases, which an
+            // incoherent average does not carry: available only under
+            // coherent averaging.
+            Preferences prefs = Preferences.instance();
+            wizardButton.setEnabled(prefs.isFftCoherentAveraging());
+            Bindings.onChange(wizardButton, prefs.fftCoherentAveragingProperty(), wizardButton::setEnabled);
         }
 
         recordButton = createActionButton(toolbarRow, SWT.TOGGLE);

@@ -515,6 +515,16 @@ public final class FftTabControl extends AbstractTabControl {
         phaseAlignCombo.setToolTipText(I18n.t("fft.settings.phaseAlign.tooltip"));
         Bindings.combo(phaseAlignCombo, prefs.fftFundamentalPhaseAlignmentProperty(),
                 FundamentalPhaseAlignment.values());
+        // Reference-channel alignment reads the second input, which a combined
+        // channel delivers as 0: while combined, picking it falls back to none.
+        // Runs after the binding's own Selection listener, so the property is
+        // set again only after its first notification has finished.
+        phaseAlignCombo.addListener(SWT.Selection, e -> {
+            if (prefs.getFftCombinedMaster() != null
+                    && prefs.getFftFundamentalPhaseAlignment() == FundamentalPhaseAlignment.REFERENCE_CHANNEL) {
+                prefs.setFftFundamentalPhaseAlignment(FundamentalPhaseAlignment.NONE);
+            }
+        });
 
         // The boolean knobs share their grid rows with the selectors so the tab
         // content stays as close to the typical FFT-pane height as it can (the
@@ -562,6 +572,12 @@ public final class FftTabControl extends AbstractTabControl {
         // to this same pref.
         Bindings.onChange(toolbarTabs, prefs.fftCoherentAveragingProperty(),
                 v -> toolbarTabs.refreshTab(TAB_FFT_SETTINGS));
+        // Phase alignment fixes the phases a coherent average adds; an
+        // incoherent one adds powers and carries no phase to align - the
+        // selector is off and the mode none while coherent averaging is off.
+        syncPhaseAlignEnabled(phaseAlignCombo, prefs.isFftCoherentAveraging());
+        Bindings.onChange(toolbarTabs, prefs.fftCoherentAveragingProperty(),
+                v -> syncPhaseAlignEnabled(phaseAlignCombo, v));
 
         // Log freq axis and the time-discontinuity gate share this last row -
         // each spans ONE column (not two) so no extra row is added (the tab must
@@ -602,6 +618,14 @@ public final class FftTabControl extends AbstractTabControl {
         if (alignGenCombo == null || alignGenCombo.isDisposed()) return;
         Preferences prefs = Preferences.instance();
         alignGenCombo.setEnabled(prefs.isGenSnapToFftBin() && prefs.isFftFundFromGenerator());
+    }
+
+    /** Enables the phase-alignment selector only under coherent averaging,
+     *  and sets the mode to none while it is off. */
+    private void syncPhaseAlignEnabled(Combo combo, boolean coherent) {
+        if (combo.isDisposed()) return;
+        combo.setEnabled(coherent);
+        if (!coherent) Preferences.instance().setFftFundamentalPhaseAlignment(FundamentalPhaseAlignment.NONE);
     }
 
     /** Two-way mirror for the index-mapped FFT-length combo and its
