@@ -329,7 +329,7 @@
         progress for each.</li>
     <li><b>Event-driven consumers.</b>  After each block lands in the ring,
         the session broadcasts a "new data" notification.  Scope repaints and
-        FFT analysis ticks ride on these notifications instead of timers, so
+        FFT analysis cycles ride on these notifications instead of timers, so
         the views are exactly as fast as the data - never faster, never
         lagging a polling interval behind.</li>
     <li><b>Conversion at the entrance.</b>  The session converts the raw

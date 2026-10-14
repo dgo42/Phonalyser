@@ -109,6 +109,27 @@
      <b>mandatory</b>: without it the harmonics never clear the fundamental's
      skirt and no stable correction can form.</p>
 
+  <p>The deeper reason the notch cannot be skipped: the correction loop can
+     only correct what the DAC produces - but it <em>measures</em> through the
+     ADC, and the ADC module (input amplifier and converter) generates
+     distortion of its own when driven with a full-level tone. Without the
+     notch that ADC distortion is mixed into every measurement, and the loop
+     tries to correct the DAC for distortion the DAC never made. It cannot even
+     settle at the ADC's own distortion level: with two distortion stages in
+     the chain and only one place to correct, every reading the loop acts on
+     carries both contributions at once, and the loop chases a target its own
+     corrections keep moving. Measured on a direct DAC -> ADC connection: the
+     chain reads 0.000038 % THD with no correction at all - and the best
+     correction the loop could find <em>raised</em> it to about 0.000068 %,
+     nearly double.</p>
+  <p>With the fundamental attenuated by the notch, the ADC may still produce
+     distortion - but it scales down with the attenuated signal to a level that
+     no longer influences the measurement at the target THD; what remains
+     visible is the DAC alone, and the loop can push the DAC's residual well
+     below what any direct connection allows. (A direct DAC -> ADC connection
+     only becomes usable at very small signal levels, where the ADC's
+     contribution vanishes - at the cost of signal-to-noise.)</p>
+
   <p>The network is the classic balanced twin-T: a low-pass T (R1-R2 with C3 to
      ground) in parallel with a high-pass T (C1-C2 with R3 to ground), sharing the
      ratios R3 = R/2 and C3 = 2C so the two paths cancel exactly at the null.</p>
@@ -454,10 +475,10 @@
      <code>HFT248D</code> at <code>87.5 %</code> overlap with <code>∞×</code>
      (unbounded) coherent averaging; bottom-centre <code>manF</code> marks the
      manual fundamental. The manual fundamental and the unbounded coherent
-     averaging are what the wizard forces - the fundamental for the drift reason
-     above, the averaging so each round can dig as deep as it needs. The window
-     is inherited from the FFT pane; this capture ran the wide HFT248D, while
-     <a href="#window">BH7 is the recommendation</a>.</p>
+     averaging are what the wizard forces - the fundamental for the drift
+     reason above, the averaging so each round can dig as deep as it needs.
+     The window is inherited from the FFT pane; this capture ran the wide
+     HFT248D, while <a href="#window">BH7 is the recommendation</a>.</p>
 
   <h3 id="depth">How many averages does a given THD level need?</h3>
   <p>A useful estimate. Coherent averaging lowers the per-bin noise floor (in
@@ -520,6 +541,24 @@
         residual and corrects again, converging round on round until you stop or
         a target THD is reached.</li>
   </ol>
+  <p><b>The loop measures its own plant.</b>  The frame every harmonic is read
+     in is set by the fundamental's phase minus the calibration's phase at
+     <i>f</i>₁ - and the notch that phase belongs to drifts after the
+     calibration was taken (see <a href="long-term-stabilisation.html">Theory ▸
+     Long-term average stabilisation</a>).  An error <i>e</i> in that
+     reference turns harmonic <i>h</i>'s reading by <i>h·e</i>, and a
+     correction built on a turned reading is applied that far off: with a full
+     step the loop converges only while <i>h·e</i> stays under about 60
+     degrees, and beyond that every round adds energy - a calibration an hour
+     old can be enough to make H5 and up diverge while H2 still converges.  So
+     the loop does not trust the reference.  From its own first step it fits,
+     per harmonic, the complex factor a correction appears with at the
+     analyser - the change of the reading between two rounds over the change
+     of the correction applied between them, ideally −1 - and every later
+     update passes through that factor's inverse.  The first correction is
+     taken blind, the second lands; a harmonic still within 15&nbsp;dB of the
+     floor keeps the ideal factor.  The log states the identified factors
+     after every round.</p>
   <p>The wizard's left column shows the live THD updating <em>within</em> a round,
      the averaging depth climbing, and the last round's figure; the convergence
      chart plots each round's residual on a log axis, spacing the markers along
@@ -545,13 +584,16 @@
      frequency it holds a magnitude <em>and</em> a phase, and that measured
      phase <em>is</em> the delay - written as a very precise rotation at each
      individual frequency instead of as one number of microseconds, so it also
-     captures everything the chain does that a single delay figure cannot, such
-     as the notch's own phase run. The loop divides every measured phasor - the
-     fundamental, each harmonic, in dual-tone each intermodulation product - by
-     that response interpolated at the phasor's exact frequency, de-embedding
+     captures everything the chain does that a single delay figure cannot,
+     such as the notch's own phase run. The loop divides every measured phasor -
+     the fundamental, each harmonic, in dual-tone each intermodulation product -
+     by that response interpolated at the phasor's exact frequency, de-embedding
      magnitude and phase together, so what it inverts is the converter's own
      distortion rather than the bench's answer to it. The stored correction file
      is written through the same de-embedding.</p>
+  <p>Whether the <em>target</em> THD is then reached is a separate question,
+     decided by the bench: the averages per round, the noise floor, and the
+     notch's attenuation and Q set the floor the loop can reach.</p>
 
   <h2 id="window">Window and overlap</h2>
   <p>The wizard recommends the <b>Blackman-Harris 7</b> (BH7) window. The
@@ -733,7 +775,10 @@
   <h2 id="bottom">Bottom line</h2>
   <ul>
     <li><b>A passive twin-T notch is mandatory</b> - it strips 40-80 dB of
-        fundamental so the ADC digitises the harmonics, not the tone.</li>
+        fundamental so the ADC digitises the harmonics, not the tone. Without
+        it the loop corrects the DAC for the ADC's distortion and lands near
+        <em>double</em> the uncorrected THD - two distortion stages, one place
+        to correct.</li>
     <li><b>The notch null drifts with component temperature</b>, and at a
         transmission zero a sub-hertz move wrecks the fundamental's measured depth
         and phase while barely touching the harmonics on the flank - so the
