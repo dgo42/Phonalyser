@@ -294,6 +294,8 @@ public final class Preferences {
     private final Property<String>  screenshotCommentFont = bound(null);
     /** Channel whose live samples drive the measurement table (auto-flipped to the other when this one is disabled). */
     private final Property<Channel> oscMeasurementChannel = bound(Channel.L);
+    /** The scope's combined channel: the master the two inputs are combined into, the other one folded in as its slave; null while they are separate. */
+    private final Property<Channel> oscCombinedMaster = bound(null);
     /** Toggles the measurement table's stats columns (avg/min/max/σ); the worker keeps computing them in the background regardless. */
     private final Property<Boolean> oscShowStats = bound(true);
     /** Master toggle for the measurement table overlay in the scope view -
@@ -523,6 +525,8 @@ public final class Preferences {
     private final Property<Boolean> fftManualFundEnabled = bound(false);
     /** Active analysis channel (L or R) - only one channel shown at a time. */
     private final Property<Channel> fftChannel = bound(Channel.L);
+    /** The FFT's combined channel: the master the two inputs are combined into, the other one folded in as its slave; null while they are separate. */
+    private final Property<Channel> fftCombinedMaster = bound(null);
     /** {@code MagnitudeUnit} enum name: {@code V}, {@code V_SQRT_HZ}, {@code DBV}, {@code DBFS}. */
     private final Property<MagnitudeUnit> fftMagUnit = bound(MagnitudeUnit.DBV);
     /** Unit the distortion table's absolute-level cells render in - independent of the
@@ -683,12 +687,16 @@ public final class Preferences {
      *  the other {@code tuneNotch*} dialog fields (the tune-notch capture channel is
      *  unaffected - only its output lane is gated). */
     private final Property<OutputChannels> tuneNotchOutputChannels = bound(OutputChannels.BOTH);
+    /** Notch tuning's combined channel: the master the two inputs are combined into, the other one folded in as its slave; null while they are separate. */
+    private final Property<Channel> tuneNotchCombinedMaster = bound(null);
 
     /** Whether the left-channel trace is visible on the view (toggle on the
      *  view's header).  L + R are independent toggles, not single-choice. */
     private final Property<Boolean> freqRespLeftVisible      = bound(true);
     /** Whether the right-channel trace is visible on the view. */
     private final Property<Boolean> freqRespRightVisible     = bound(false);
+    /** The frequency response's combined channel: the master the two inputs are combined into, the other one folded in as its slave; null while they are separate. */
+    private final Property<Channel> freqRespCombinedMaster   = bound(null);
     /** Whether the phase curve (right Y-axis ±180°) is painted. */
     private final Property<Boolean> freqRespPhaseVisible     = bound(false);
 
@@ -1508,6 +1516,9 @@ public final class Preferences {
     public Channel getFftChannel()             { return fftChannel.get(); }
     public void setFftChannel(Channel v)       { fftChannel.set(v); }
     public Property<Channel> fftChannelProperty() { return fftChannel; }
+    public Channel getFftCombinedMaster()      { return fftCombinedMaster.get(); }
+    public void setFftCombinedMaster(Channel v) { fftCombinedMaster.set(v); }
+    public Property<Channel> fftCombinedMasterProperty() { return fftCombinedMaster; }
 
     public MagnitudeUnit getFftMagUnit()    { return fftMagUnit.get(); }
     public void setFftMagUnit(MagnitudeUnit v) { fftMagUnit.set(v); }
@@ -1748,6 +1759,9 @@ public final class Preferences {
     public Channel getOscMeasurementChannel()  { return oscMeasurementChannel.get(); }
     public void setOscMeasurementChannel(Channel v) { oscMeasurementChannel.set(v); }
     public Property<Channel> oscMeasurementChannelProperty() { return oscMeasurementChannel; }
+    public Channel getOscCombinedMaster()  { return oscCombinedMaster.get(); }
+    public void setOscCombinedMaster(Channel v) { oscCombinedMaster.set(v); }
+    public Property<Channel> oscCombinedMasterProperty() { return oscCombinedMaster; }
 
     public boolean isOscShowStats()            { return oscShowStats.get(); }
     public void setOscShowStats(boolean v)     { oscShowStats.set(v); }
@@ -2002,6 +2016,8 @@ public final class Preferences {
     public OutputChannels getTuneNotchOutputChannels()       { return tuneNotchOutputChannels.get(); }
     public void setTuneNotchOutputChannels(OutputChannels v) { tuneNotchOutputChannels.set(v); }
     public Property<OutputChannels> tuneNotchOutputChannelsProperty() { return tuneNotchOutputChannels; }
+    public Channel getTuneNotchCombinedMaster()      { return tuneNotchCombinedMaster.get(); }
+    public void setTuneNotchCombinedMaster(Channel v) { tuneNotchCombinedMaster.set(v); }
 
     public double getFreqRespNyquistFraction() { return freqRespNyquistFraction.get(); }
     public void setFreqRespNyquistFraction(double v) { freqRespNyquistFraction.set(v); }
@@ -2098,6 +2114,10 @@ public final class Preferences {
     public boolean isFreqRespRightVisible()    { return freqRespRightVisible.get(); }
     public void setFreqRespRightVisible(boolean v) { freqRespRightVisible.set(v); }
     public Property<Boolean> freqRespRightVisibleProperty() { return freqRespRightVisible; }
+
+    public Channel getFreqRespCombinedMaster()      { return freqRespCombinedMaster.get(); }
+    public void setFreqRespCombinedMaster(Channel v) { freqRespCombinedMaster.set(v); }
+    public Property<Channel> freqRespCombinedMasterProperty() { return freqRespCombinedMaster; }
 
     public boolean isFreqRespPhaseVisible()    { return freqRespPhaseVisible.get(); }
     public void setFreqRespPhaseVisible(boolean v) { freqRespPhaseVisible.set(v); }
@@ -2259,6 +2279,7 @@ public final class Preferences {
         root.put("oscPersistenceMode",           oscPersistenceMode.get().name());
         root.put("oscPersistenceManualSeconds",  oscPersistenceManualSeconds.get());
         root.put("oscMeasurementChannel",        oscMeasurementChannel.get().name());
+        if (oscCombinedMaster.get() != null) root.put("oscCombinedMaster", oscCombinedMaster.get().name());
         root.put("oscShowStats",                 oscShowStats.get());
         root.put("oscShowMeasurementTable",      oscShowMeasurementTable.get());
         root.put("oscShowHistogram",             oscShowHistogram.get());
@@ -2375,6 +2396,7 @@ public final class Preferences {
         root.put("fftManualFundDbvDisplay",   fftManualFundDbvDisplay.get());
         root.put("fftManualFundEnabled",      fftManualFundEnabled.get());
         root.put("fftChannel",                fftChannel.get().name());
+        if (fftCombinedMaster.get() != null) root.put("fftCombinedMaster", fftCombinedMaster.get().name());
         root.put("fftMagUnit",                fftMagUnit.get().name());
         root.put("fftDistortionUnit",         fftDistortionUnit.get().name());
         root.put("fftDistortionTableVisible", fftDistortionTableVisible.get());
@@ -2424,12 +2446,14 @@ public final class Preferences {
         root.put("tuneNotchAmplitudeUnit",    tuneNotchAmplitude.get().unit());
         root.put("tuneNotchTargetHz",         tuneNotchTargetHz.get());
         root.put("tuneNotchOutputChannels",   tuneNotchOutputChannels.get().name());
+        if (tuneNotchCombinedMaster.get() != null) root.put("tuneNotchCombinedMaster", tuneNotchCombinedMaster.get().name());
         root.put("measureDelayAmplitude",     measureDelayAmplitude.get().value());
         root.put("measureDelayAmplitudeUnit", measureDelayAmplitude.get().unit());
         root.put("measureDelayOutputChannels", measureDelayOutputChannels.get().name());
         root.put("measureDelayInputChannel",  measureDelayInputChannel.get().name());
         root.put("freqRespLeftVisible",       freqRespLeftVisible.get());
         root.put("freqRespRightVisible",      freqRespRightVisible.get());
+        if (freqRespCombinedMaster.get() != null) root.put("freqRespCombinedMaster", freqRespCombinedMaster.get().name());
         root.put("freqRespPhaseVisible",      freqRespPhaseVisible.get());
         root.put("freqRespFreqMinHz",         freqRespFreqMinHz.get());
         root.put("freqRespFreqMaxHz",         freqRespFreqMaxHz.get());
@@ -2652,6 +2676,7 @@ public final class Preferences {
         if (root.get("oscPersistenceMode")           instanceof String s) oscPersistenceMode.set(enumOr(PersistenceMode.class, s, oscPersistenceMode.get()));
         if (root.get("oscPersistenceManualSeconds")  instanceof Number n) oscPersistenceManualSeconds.set(n.doubleValue());
         if (root.get("oscMeasurementChannel")        instanceof String s) oscMeasurementChannel.set(enumOr(Channel.class, s, oscMeasurementChannel.get()));
+        if (root.get("oscCombinedMaster")            instanceof String s) oscCombinedMaster.set(enumOr(Channel.class, s, null));
         if (root.get("oscShowStats")                 instanceof Boolean b) oscShowStats.set(b);
         if (root.get("oscShowMeasurementTable")      instanceof Boolean b) oscShowMeasurementTable.set(b);
         if (root.get("oscShowHistogram")             instanceof Boolean b) oscShowHistogram.set(b);
@@ -2772,6 +2797,7 @@ public final class Preferences {
         if (root.get("fftManualFundDbvDisplay")   instanceof Boolean b) fftManualFundDbvDisplay.set(b);
         if (root.get("fftManualFundEnabled")      instanceof Boolean b) fftManualFundEnabled.set(b);
         if (root.get("fftChannel")                instanceof String  s) fftChannel.set(enumOr(Channel.class, s, fftChannel.get()));
+        if (root.get("fftCombinedMaster")         instanceof String  s) fftCombinedMaster.set(enumOr(Channel.class, s, null));
         if (root.get("fftMagUnit")                instanceof String  s) fftMagUnit.set(enumOr(MagnitudeUnit.class, s, fftMagUnit.get()));
         if (root.get("fftDistortionUnit")         instanceof String  s) fftDistortionUnit.set(enumOr(MagnitudeUnit.class, s, fftDistortionUnit.get()));
         if (root.get("fftDistortionTableVisible") instanceof Boolean b) fftDistortionTableVisible.set(b);
@@ -2808,11 +2834,13 @@ public final class Preferences {
         readEntered(root, "tuneNotchAmplitude", tuneNotchAmplitude);
         if (root.get("tuneNotchTargetHz")         instanceof Number  n) tuneNotchTargetHz.set(n.doubleValue());
         if (root.get("tuneNotchOutputChannels")   instanceof String  s) tuneNotchOutputChannels.set(enumOr(OutputChannels.class, s, tuneNotchOutputChannels.get()));
+        if (root.get("tuneNotchCombinedMaster")   instanceof String  s) tuneNotchCombinedMaster.set(enumOr(Channel.class, s, null));
         readEntered(root, "measureDelayAmplitude", measureDelayAmplitude);
         if (root.get("measureDelayOutputChannels") instanceof String s) measureDelayOutputChannels.set(enumOr(OutputChannels.class, s, measureDelayOutputChannels.get()));
         if (root.get("measureDelayInputChannel")  instanceof String  s) measureDelayInputChannel.set(enumOr(Channel.class, s, measureDelayInputChannel.get()));
         if (root.get("freqRespLeftVisible")       instanceof Boolean b) freqRespLeftVisible.set(b);
         if (root.get("freqRespRightVisible")      instanceof Boolean b) freqRespRightVisible.set(b);
+        if (root.get("freqRespCombinedMaster")    instanceof String  s) freqRespCombinedMaster.set(enumOr(Channel.class, s, null));
         if (root.get("freqRespPhaseVisible")      instanceof Boolean b) freqRespPhaseVisible.set(b);
         if (root.get("freqRespFreqMinHz")         instanceof Number  n) freqRespFreqMinHz.set(n.doubleValue());
         if (root.get("freqRespFreqMaxHz")         instanceof Number  n) freqRespFreqMaxHz.set(n.doubleValue());

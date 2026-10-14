@@ -267,7 +267,7 @@ public final class ScopePane extends AbstractPane {
             glSurface.setRenderer(view);
             Control gl = glSurface.control();
             gl.addMouseListener(new MouseAdapter() {
-                @Override public void mouseDown(MouseEvent ev)        { view.pointerDown(ev.x, ev.y, ev.button); }
+                @Override public void mouseDown(MouseEvent ev)        { view.pointerDown(ev.x, ev.y, ev.button, ev.stateMask); }
                 @Override public void mouseUp(MouseEvent ev)          { view.pointerUp(); }
                 @Override public void mouseDoubleClick(MouseEvent ev) { view.pointerDoubleClick(ev.x, ev.y, ev.button); }
             });

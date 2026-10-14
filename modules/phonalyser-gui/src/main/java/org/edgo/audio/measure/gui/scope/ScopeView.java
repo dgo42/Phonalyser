@@ -669,6 +669,16 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         // just-disabled channel already lives in prepareMeasurementRows (not repeated).
         Bindings.onChange(this, prefs.oscLeftChannelEnabledProperty(),  en -> syncMeasurementChannelButtons());
         Bindings.onChange(this, prefs.oscRightChannelEnabledProperty(), en -> syncMeasurementChannelButtons());
+        // Combined channel: Shift on the other channel's button folds it into the
+        // selected one; a plain press on either button, or switching either
+        // channel off, separates them again.
+        leftBtn.addListener(SWT.Selection,  e -> { if ((e.stateMask & SWT.SHIFT) != 0) connect(Channel.L); });
+        rightBtn.addListener(SWT.Selection, e -> { if ((e.stateMask & SWT.SHIFT) != 0) connect(Channel.R); });
+        leftBtn.addListener(SWT.MouseDown,  e -> { if ((e.stateMask & SWT.SHIFT) == 0) disconnect(); });
+        rightBtn.addListener(SWT.MouseDown, e -> { if ((e.stateMask & SWT.SHIFT) == 0) disconnect(); });
+        Bindings.onChange(this, prefs.oscLeftChannelEnabledProperty(),  en -> { if (!en) disconnect(); });
+        Bindings.onChange(this, prefs.oscRightChannelEnabledProperty(), en -> { if (!en) disconnect(); });
+        Bindings.onChange(this, prefs.oscCombinedMasterProperty(), this::applyCombinedMaster);
         autoSetupBtn.addListener(SWT.Selection, e -> MessageBus.instance().publish(Events.SCOPE_AUTO_SETUP));
         histogramBtn.addListener(SWT.Selection, e ->
                 prefs.setOscShowHistogram(histogramBtn.isToggled()));
@@ -708,11 +718,12 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         });
         syncScopeButtons();       // apply the initial signal-gated visibility
         syncMeasurementChannelButtons();   // grey the L/R selector for any channel that starts off
+        restoreCombinedMaster();           // the saved combined channel, if both channels are on
 
         setBackground(color(ColorRole.BACKGROUND));
         addPaintListener(this::onPaint);
         addMouseListener(new MouseAdapter() {
-            @Override public void mouseDown(MouseEvent ev)        { pointerDown(ev.x, ev.y, ev.button); }
+            @Override public void mouseDown(MouseEvent ev)        { pointerDown(ev.x, ev.y, ev.button, ev.stateMask); }
             @Override public void mouseUp(MouseEvent ev)          { pointerUp(); }
             @Override public void mouseDoubleClick(MouseEvent ev) { pointerDoubleClick(ev.x, ev.y, ev.button); }
         });
@@ -751,6 +762,8 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
 
     private void setBuffer(SignalBufferReader reader, boolean resetMeasurements) {
         this.reader = reader;
+        Channel combined = Preferences.instance().getOscCombinedMaster();
+        if (reader != null && combined != null) reader.combine(combined);
         measWorker.setBuffer(reader);
         syncScopeButtons();   // signal presence changed -> re-evaluate the gated buttons
         // Always reset the per-paint trigger / cap-rate state.  On a FREEZE this is
@@ -1535,6 +1548,56 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         Preferences p = Preferences.instance();
         leftBtn.setEnabled(p.isOscLeftChannelEnabled());
         rightBtn.setEnabled(p.isOscRightChannelEnabled());
+    }
+
+    /** Combines the two inputs into the selected measurement channel, with
+     *  {@code slave} - the other channel - folded into it; only while both
+     *  channels are enabled.  Writes the preference;
+     *  {@link #applyCombinedMaster} reacts. */
+    private void connect(Channel slave) {
+        Preferences p = Preferences.instance();
+        Channel master = p.getOscMeasurementChannel();
+        if (slave == master || !p.isOscLeftChannelEnabled() || !p.isOscRightChannelEnabled()) return;
+        p.setOscCombinedMaster(master);
+    }
+
+    /** Separates the two inputs again; a no-op while they are separate. */
+    private void disconnect() {
+        Preferences.instance().setOscCombinedMaster(null);
+    }
+
+    /** Applies a change of the combined channel: the reader combines into
+     *  {@code master} or separates, the slave's button shows the linked look,
+     *  and the measurement history restarts as on a channel switch. */
+    private void applyCombinedMaster(Channel master) {
+        if (reader != null) {
+            if (master != null) reader.combine(master);
+            else                reader.separate();
+        }
+        showLinked(master);
+        clearMeasurementHistory();
+        redraw();
+    }
+
+    /** Shows the combined channel restored from the preferences - dropped
+     *  when either channel starts switched off; readers pick it up in
+     *  {@link #setBuffer(SignalBufferReader, boolean)}. */
+    private void restoreCombinedMaster() {
+        Preferences p = Preferences.instance();
+        if (!p.isOscLeftChannelEnabled() || !p.isOscRightChannelEnabled()) p.setOscCombinedMaster(null);
+        showLinked(p.getOscCombinedMaster());
+    }
+
+    /** The linked look on the slave's button - the one that is not
+     *  {@code master} - and on neither while separate; while combined the
+     *  tooltips name master and slave, while separate the usual ones stand. */
+    private void showLinked(Channel master) {
+        leftBtn.setLinked(master == Channel.R);
+        rightBtn.setLinked(master == Channel.L);
+        leftBtn.setToolTipText(I18n.t(master == null ? "scope.stats.left.tooltip"
+                : master == Channel.L ? "common.channel.combined.leftMaster" : "common.channel.combined.leftSlave"));
+        rightBtn.setToolTipText(I18n.t(master == null ? "scope.stats.right.tooltip"
+                : master == Channel.R ? "common.channel.combined.rightMaster" : "common.channel.combined.rightSlave"));
     }
 
     /** Brings the {@link #measurementWindow} into sync with the current
@@ -2473,12 +2536,15 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      *  rect-zoom selection drag (which also focuses the view).  Public so the
      *  GPU path's GL canvas can forward to it (this view is hidden then;
      *  coordinates are canvas-local and the hit-test bounds were laid out at
-     *  the canvas size). */
-    public void pointerDown(int x, int y, int button) {
+     *  the canvas size).  {@code stateMask} - the press's modifier keys - is
+     *  handed on to a header button, whose Shift press has its own meaning. */
+    public void pointerDown(int x, int y, int button, int stateMask) {
         if (button != 1) return;
         ToolButton hb = headerButtonAt(x, y);   // GPU path: GL-drawn buttons forward here
         if (hb != null) {
-            hb.notifyListeners(SWT.MouseDown, new Event());
+            Event press = new Event();
+            press.stateMask = stateMask;
+            hb.notifyListeners(SWT.MouseDown, press);
             pressedHeaderButton = hb;
             redraw();
             return;
