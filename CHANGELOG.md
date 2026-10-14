@@ -43,8 +43,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   noise. A new FFT-settings selector gives the average a drift-free time base:
   Reference channel reads the tone a second time on the channel not being
   analysed, fed from the DAC output through a pad at least 60 dB below the
-  fundamental; Periodical sweep interrupts the tone now and then and
-  re-measures the notch with a short looping log sweep. Because the alignment
+  fundamental; Pilot tone generates a second line at an odd multiple of half
+  the fundamental and reads it in the same frame as the fundamental, where its
+  phase gives the fundamental's drift. Because the alignment
   tracks the drift alone and everything absolute comes from the loaded .frc
   calibration, starting a recording in either mode asks for confirmation when
   that calibration is missing or older than ten minutes. The Mains suppression
@@ -143,7 +144,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Long tooltips wrap** - every long tooltip carries explicit line breaks, in
   every language, desktop and web.
 - **A failing FFT analysis pass names itself in the log** instead of vanishing
-  with its tick.
+  with its analysis cycle.
 - **Tune-notch could not start when the two converters are configured
   differently.** Each converter now opens in its own configured format; the
   analysis stays on the input rate, the band caps at the lower of the two
@@ -157,7 +158,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Closing the pre-distortion wizard costs nothing unless it ran.** Merely
   opening the dialog used to wipe a deep average; after a run without Apply,
   the correction configured before the window opened is re-applied.
-- **A glitch caught one tick late no longer stays in the average.**
+- **A glitch caught one analysis cycle late no longer stays in the average.**
 - **The oscilloscope's sine-fit residual no longer drifts over long slices.**
   Desktop and web alike.
 - **FFT markers sit exactly on the trace** - the constant half-pixel offset
@@ -218,7 +219,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   writes for OK, when the session exists to send them on.
 - **A coherent average without a tone stalled at the 24th frame.** With the
   generator off the fundamental refine pinned on a noise peak, the lock
-  collapsed and the analysis ran millions of lines per tick; a refine beyond
+  collapsed and the analysis ran millions of lines per cycle; a refine beyond
   half a bin is discarded and re-anchored now.
 - **Rectangle and triangle duty are whole samples of the period.** At 0.25 %
   of a 384-sample period the one high sample vanished whenever the phase
