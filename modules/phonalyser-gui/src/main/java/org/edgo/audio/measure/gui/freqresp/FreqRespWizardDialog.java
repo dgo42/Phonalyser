@@ -294,6 +294,8 @@ public final class FreqRespWizardDialog {
         double totalSec = leadInSec
                         + prefs.getFreqRespDurationSec()
                         + 0.5;
+        // Read once: the capture and the deconvolution must agree on it.
+        Channel combined = prefs.getFreqRespCombinedMaster();
         openProgressDialog(totalSec, leadInSec, swept[0], swept[1]);
         MessageBus.instance().publish(Events.FREQRESP_MEASUREMENT_STARTED);
         // Marshal capture-progress to the UI thread so the progress dialog's
@@ -327,6 +329,7 @@ public final class FreqRespWizardDialog {
                         .adcFsVoltageRmsLeft(adc.fsRms(Channel.L))
                         .adcFsVoltageRmsRight(adc.fsRms(Channel.R))
                         .applyCalibration(!directLeg)  // page 2 divides out the page-1 transfer
+                        .combinedMaster(combined)
                         .captureProgress(progress)
                         // As in FreqRespAnalyzerWorker: the sweep leg belongs to
                         // whichever backend is active, and a remote bench renders
@@ -334,7 +337,8 @@ public final class FreqRespWizardDialog {
                         .stereoCaptureProvider(StereoCaptureProvider.forSweep(playbackRate,
                                 swept[0], swept[1],
                                 prefs.getFreqRespDurationSec(), leadInSec,
-                                sweepAmplitudeVrms, dac.peakVolts(Channel.L), dac.peakVolts(Channel.R)))
+                                sweepAmplitudeVrms, dac.peakVolts(Channel.L), dac.peakVolts(Channel.R),
+                                combined))
                         .build();
                 StereoFreqRespResult r = new FreqRespAnalyzer(cfg).run(null, null);
                 GuiUtil.marshal(dialog, () -> onMeasurementDone(directLeg, r, null));

@@ -205,18 +205,35 @@ public final class FreqRespAnalyzer {
         // = false), matching the Tune-notch wizard: the bin-aligned grid already
         // gives a leakage-free trace, and SG would round the bottom off deep,
         // narrow features (e.g. a notch null read shallow).
-        CompletableFuture<FreqRespCalibration> calLFut = CompletableFuture.supplyAsync(
-                () -> FreqRespCalHelper.computeFromLogSweep(
-                        rec.left(), sweepRef, recLeadInSamples,
-                        cfg.getCaptureRateHz(), freqs, cfg.getAmplitudeVrms(),
-                        cfg.getAdcFsVoltageRmsLeft(), recFadeSamples, "L", false));
-        CompletableFuture<FreqRespCalibration> calRFut = CompletableFuture.supplyAsync(
-                () -> FreqRespCalHelper.computeFromLogSweep(
-                        rec.right(), sweepRef, recLeadInSamples,
-                        cfg.getCaptureRateHz(), freqs, cfg.getAmplitudeVrms(),
-                        cfg.getAdcFsVoltageRmsRight(), recFadeSamples, "R", false));
-        FreqRespCalibration calL = awaitOrFail(calLFut);
-        FreqRespCalibration calR = awaitOrFail(calRFut);
+        FreqRespCalibration calL;
+        FreqRespCalibration calR;
+        Channel combined = cfg.getCombinedMaster();
+        if (combined != null) {
+            // Combined: the slave's record is zeros, so the master alone is
+            // deconvolved - against its own ADC full scale, the level the
+            // combination keeps - and its response stands for both channels.
+            boolean leftMaster = combined == Channel.L;
+            FreqRespCalibration cal = FreqRespCalHelper.computeFromLogSweep(
+                    leftMaster ? rec.left() : rec.right(), sweepRef, recLeadInSamples,
+                    cfg.getCaptureRateHz(), freqs, cfg.getAmplitudeVrms(),
+                    leftMaster ? cfg.getAdcFsVoltageRmsLeft() : cfg.getAdcFsVoltageRmsRight(),
+                    recFadeSamples, leftMaster ? "L" : "R", false);
+            calL = cal;
+            calR = cal;
+        } else {
+            CompletableFuture<FreqRespCalibration> calLFut = CompletableFuture.supplyAsync(
+                    () -> FreqRespCalHelper.computeFromLogSweep(
+                            rec.left(), sweepRef, recLeadInSamples,
+                            cfg.getCaptureRateHz(), freqs, cfg.getAmplitudeVrms(),
+                            cfg.getAdcFsVoltageRmsLeft(), recFadeSamples, "L", false));
+            CompletableFuture<FreqRespCalibration> calRFut = CompletableFuture.supplyAsync(
+                    () -> FreqRespCalHelper.computeFromLogSweep(
+                            rec.right(), sweepRef, recLeadInSamples,
+                            cfg.getCaptureRateHz(), freqs, cfg.getAmplitudeVrms(),
+                            cfg.getAdcFsVoltageRmsRight(), recFadeSamples, "R", false));
+            calL = awaitOrFail(calLFut);
+            calR = awaitOrFail(calRFut);
+        }
 
         // Loaded calibration is no longer divided in here - the result
         // carries the raw deconvolution.  Calibration is applied only

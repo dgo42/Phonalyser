@@ -20,6 +20,7 @@ package org.edgo.audio.measure.gui.freqresp;
 
 import org.edgo.audio.measure.sound.StereoSamples;
 import org.edgo.audio.measure.dsp.FreqRespCalHelper;
+import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.enums.OutputChannels;
 import org.edgo.audio.measure.fft.MathUtil;
@@ -93,8 +94,9 @@ public final class NotchSweepEngine implements AutoCloseable {
      *  decision; this engine only ever describes the loop as a
      *  {@link GeneratorRun} and drives the lane. */
     private final GeneratorLane lane = new GeneratorLane();
-    /** This session's cursor over the SHARED ring; null between sessions. */
-    private SignalBufferReader reader;
+    /** This session's cursor over the SHARED ring; null between sessions.
+     *  Volatile: set on the session's worker, combined from the UI thread. */
+    private volatile SignalBufferReader reader;
     /** This session's deconvolution reference: ONE loop period of the same
      *  chirp, rendered at the CAPTURE clock.  It has to be sampled there and
      *  not on the DAC's clock, because it is divided into a window that came
@@ -210,11 +212,14 @@ public final class NotchSweepEngine implements AutoCloseable {
      *
      * <p>{@code sweepSamples} and {@code fadeSamples} are CAPTURE samples - the
      * loop is one duration, and the DAC's own count for it is derived here.
+     * {@code combinedMaster} combines both inputs into that channel from the
+     * first sample, {@code null} leaves them separate - see
+     * {@link #setCombinedMaster}.
      */
     public void start(double f0, double f1, double ampVrms,
                       double dacFsVrmsLeft, double dacFsVrmsRight,
                       int sweepSamples, int fadeSamples,
-                      OutputChannels outputChannels) throws Exception {
+                      OutputChannels outputChannels, Channel combinedMaster) throws Exception {
         loopChannels = outputChannels;
         // Before anything is acquired: the same period on the output clock, or
         // a refusal that costs nothing.
@@ -229,6 +234,7 @@ public final class NotchSweepEngine implements AutoCloseable {
             if (reader == null) {
                 throw new IllegalStateException(SharedCapture.instance().getLastStartError());
             }
+            if (combinedMaster != null) reader.combine(combinedMaster);
             sessionStart = reader.getWritePos();
             // The ring carries the GRANTED input rate, and this loop's premise
             // is a power-of-two period AT THE ASKED RATE - refused before any
@@ -374,6 +380,17 @@ public final class NotchSweepEngine implements AutoCloseable {
             ref.setSweepFreqStart(f0);
             ref.setSweepFreqEnd(f1);
         }
+    }
+
+    /** Live combine change: this session's reader combines both inputs into
+     *  {@code master}, the other delivered as 0, or separates them for
+     *  {@code null}.  The next grabbed period reads the new state; a period
+     *  spanning the change is stale for one update.  No-op between sessions. */
+    public void setCombinedMaster(Channel master) {
+        SignalBufferReader r = reader;
+        if (r == null) return;
+        if (master != null) r.combine(master);
+        else                r.separate();
     }
 
     /** Live amplitude change WITHOUT restart: the new level goes straight to

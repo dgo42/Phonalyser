@@ -21,6 +21,7 @@ package org.edgo.audio.measure.gui.freqresp;
 import lombok.Builder;
 import lombok.Getter;
 import org.edgo.audio.measure.dsp.FreqRespCalHelper;
+import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.OutputChannels;
 import org.edgo.audio.measure.sound.StereoCaptureProgress;
 import org.edgo.audio.measure.sound.StereoSamples;
@@ -100,6 +101,13 @@ public final class FreqRespAnalyzerConfig {
      *  user hides the un-driven trace with the view's L/R toolbar buttons). */
     @Builder.Default
     private final OutputChannels outputChannels = OutputChannels.BOTH;
+
+    /** The channel the capture combines both inputs into, the other one folded
+     *  in as its slave, or {@code null} while they are separate.  Combined, the
+     *  slave's record is zeros: the master alone is deconvolved and its
+     *  response stands for both channels.  The capture provider has to be
+     *  built with the same value. */
+    private final Channel combinedMaster;
 
     /** When {@code true} and {@code FreqRespCorrectionStore.getCurrent()}
      *  is non-null, the analyzer divides each measured channel by the

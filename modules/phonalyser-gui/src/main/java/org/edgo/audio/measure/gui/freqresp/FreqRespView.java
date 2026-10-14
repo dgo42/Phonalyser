@@ -401,6 +401,14 @@ public final class FreqRespView extends AbstractFreqDomainView {
                 redraw();
             }
         });
+        // Combined channel: Shift on the other channel's button folds it into the
+        // shown one; a plain press on either button separates them again.
+        leftBtn.addListener(SWT.Selection,  e -> { if ((e.stateMask & SWT.SHIFT) != 0) connect(Channel.L); });
+        rightBtn.addListener(SWT.Selection, e -> { if ((e.stateMask & SWT.SHIFT) != 0) connect(Channel.R); });
+        leftBtn.addListener(SWT.MouseDown,  e -> { if ((e.stateMask & SWT.SHIFT) == 0) disconnect(); });
+        rightBtn.addListener(SWT.MouseDown, e -> { if ((e.stateMask & SWT.SHIFT) == 0) disconnect(); });
+        Bindings.onChange(this, prefs.freqRespCombinedMasterProperty(), this::showLinked);
+        showLinked(prefs.getFreqRespCombinedMaster());   // the saved combined channel
         // Recolour the L/R buttons immediately when the channel colours change.
         bindChannelButtonFills(leftBtn, rightBtn);
         phaseBtn.addListener(SWT.Selection, e -> {
@@ -952,6 +960,32 @@ public final class FreqRespView extends AbstractFreqDomainView {
         if (headerBar != null) {
             headerBar.setVisible(v);
         }
+    }
+
+    /** Combines the two inputs into the shown channel, with {@code slave} - the
+     *  other channel - folded into it.  Writes the preference; the next
+     *  measurement's capture combines from it, and {@link #showLinked} shows
+     *  it. */
+    private void connect(Channel slave) {
+        Channel master = prefs.isFreqRespLeftVisible() ? Channel.L : Channel.R;
+        if (slave != master) prefs.setFreqRespCombinedMaster(master);
+    }
+
+    /** Separates the two inputs again; a no-op while they are separate. */
+    private void disconnect() {
+        prefs.setFreqRespCombinedMaster(null);
+    }
+
+    /** The linked look on the slave's button - the one that is not
+     *  {@code master} - and on neither while separate; while combined the
+     *  tooltips name master and slave, while separate the usual ones stand. */
+    private void showLinked(Channel master) {
+        leftBtn.setLinked(master == Channel.R);
+        rightBtn.setLinked(master == Channel.L);
+        leftBtn.setToolTipText(I18n.t(master == null ? "freqResp.button.left.tooltip"
+                : master == Channel.L ? "common.channel.combined.leftMaster" : "common.channel.combined.leftSlave"));
+        rightBtn.setToolTipText(I18n.t(master == null ? "freqResp.button.right.tooltip"
+                : master == Channel.R ? "common.channel.combined.rightMaster" : "common.channel.combined.rightSlave"));
     }
 
     /** Keeps the header bar visible but exposes ONLY the L / R channel-select

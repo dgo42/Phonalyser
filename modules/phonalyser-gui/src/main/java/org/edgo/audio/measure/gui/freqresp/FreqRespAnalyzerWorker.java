@@ -232,6 +232,8 @@ public final class FreqRespAnalyzerWorker {
         // the same rule, so the two are one chirp.
         double[] swept = FreqRespConstants.sweptBandHz(prefs.getFreqRespStartHz(),
                 prefs.getFreqRespStopHz(), backend.getInputSampleRate(), playbackRate);
+        // Read once: the capture and the deconvolution must agree on it.
+        Channel combined = prefs.getFreqRespCombinedMaster();
         return FreqRespAnalyzerConfig.builder()
                 .outDevice(out)
                 .inDevice(in)
@@ -250,6 +252,7 @@ public final class FreqRespAnalyzerWorker {
                 .adcFsVoltageRmsLeft(adc.fsRms(Channel.L))
                 .adcFsVoltageRmsRight(adc.fsRms(Channel.R))
                 .outputChannels(prefs.getFreqRespOutputChannels())
+                .combinedMaster(combined)
                 .applyCalibration(prefs.isFreqRespApplyCalibration())
                 .captureProgress(activeProgress)
                 // The sweep leg belongs to whichever backend is active: a bench
@@ -260,7 +263,8 @@ public final class FreqRespAnalyzerWorker {
                 .stereoCaptureProvider(StereoCaptureProvider.forSweep(playbackRate,
                         swept[0], swept[1],
                         prefs.getFreqRespDurationSec(), leadInSec,
-                        sweepAmplitudeVrms, dac.peakVolts(Channel.L), dac.peakVolts(Channel.R)))
+                        sweepAmplitudeVrms, dac.peakVolts(Channel.L), dac.peakVolts(Channel.R),
+                        combined))
                 .build();
     }
 

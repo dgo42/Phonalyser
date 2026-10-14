@@ -22,6 +22,7 @@ import org.edgo.audio.measure.common.MemUtil;
 import org.edgo.audio.measure.dsp.FreqRespCalHelper;
 import org.edgo.audio.measure.sound.StereoCaptureProgress;
 import org.edgo.audio.measure.sound.StereoSamples;
+import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.OutputChannels;
 import org.edgo.audio.measure.generator.SignalGenerator;
 import org.edgo.audio.measure.gui.i18n.I18n;
@@ -130,10 +131,13 @@ public interface StereoCaptureProvider {
      * @param durationSec   the chirp's own length, excluding the lead-in
      * @param dacFsVoltageLeft  the left lane's DAC full scale the amplitude is scaled against
      * @param dacFsVoltageRight the same for the right lane
+     * @param combinedMaster    the channel the capture combines both inputs
+     *                          into, {@code null} while they are separate - the
+     *                          analyzer's config has to carry the same value
      */
     static StereoCaptureProvider forSweep(int playbackRateHz, double startHz, double stopHz,   // static-ok: interface factory - no instance exists to hang it on
             double durationSec, double leadInSec, double amplitudeVrms,
-            double dacFsVoltageLeft, double dacFsVoltageRight) {
+            double dacFsVoltageLeft, double dacFsVoltageRight, Channel combinedMaster) {
         int sweepSamples  = (int) Math.round(durationSec * playbackRateHz);
         int leadInSamples = (int) Math.round(leadInSec * playbackRateHz);
         int fadeSamples   = FreqRespCalHelper.sweepFadeSamples(sweepSamples);
@@ -159,7 +163,7 @@ public interface StereoCaptureProvider {
                 return new SweepCapture().run(startHz, stopHz, sweepSamples,
                         leadInSamples, fadeSamples, amplitudeVrms, dacFsVoltageLeft, dacFsVoltageRight,
                         captureRate, playRate, playBits, ditherBits, outputChannels,
-                        captureSec, cancelToken, progress);
+                        captureSec, cancelToken, progress, combinedMaster);
             }
         };
     }

@@ -43,6 +43,7 @@ import org.edgo.audio.measure.dsp.FreqRespCalHelper;
 import org.edgo.audio.measure.dsp.FreqRespCalibration;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.OutputChannels;
+import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.CorrectionStore;
@@ -270,6 +271,10 @@ public final class TuneNotchWizardDialog {
         // FreqResp is configured - force it off on the detached copy (the main pane's
         // freqRespPhaseVisible preference is untouched).
         prefs.setFreqRespPhaseVisible(false);
+        // Notch tuning keeps its own combined channel: the embedded view works
+        // on the copy's frequency-response one, seeded here and written back
+        // on close.
+        prefs.setFreqRespCombinedMaster(Preferences.instance().getTuneNotchCombinedMaster());
         // Resizable with the initial size as the minimum (same treatment as
         // the Preferences dialog) - the plot grabs the extra room; see the
         // setMinimumSize after pack().
@@ -428,6 +433,13 @@ public final class TuneNotchWizardDialog {
 
     private void buildChart() {
         view = new FreqRespView(content, correctionStore, true, prefs);
+        // The view's L/R presses combine or separate the inputs; the running
+        // session's reader follows live.  Owned by the dialog, so the listener
+        // goes with it.
+        Bindings.onChange(dialog, prefs.freqRespCombinedMasterProperty(), master -> {
+            NotchSweepEngine e = engine;
+            if (e != null) e.setCombinedMaster(master);
+        });
         // Expose ONLY the L/R channel-select buttons (default R visible, L
         // hidden via applySessionViewPrefs): both channels are measured, the
         // user toggles which trace shows.  The rest of the pane's controls stay
@@ -681,7 +693,7 @@ public final class TuneNotchWizardDialog {
             // close().  There is no per-sweep open/close or recording wait.
             double[] band = sweepBand(engine, curStartHz, curStopHz);
             engine.start(band[0], band[1], curAmpVrms, dacFsVrmsLeft, dacFsVrmsRight,
-                    sweepSamples, fadeSamples, curOutputChannels);
+                    sweepSamples, fadeSamples, curOutputChannels, prefs.getFreqRespCombinedMaster());
             awaitSettle(sweepSamples);
             if (!running) return;
 
@@ -799,10 +811,25 @@ public final class TuneNotchWizardDialog {
         if (!running) return;
         try {
             long decStart = System.nanoTime();
-            FreqRespCalibration calL = FreqRespCalHelper.computeFromLogSweep(
-                    window.left(),  sweepRef, 0, captureRate, freqs, ampVrms, adcFsVrmsLeft,  fade, "L", false);
-            FreqRespCalibration calR = FreqRespCalHelper.computeFromLogSweep(
-                    window.right(), sweepRef, 0, captureRate, freqs, ampVrms, adcFsVrmsRight, fade, "R", false);
+            FreqRespCalibration calL;
+            FreqRespCalibration calR;
+            Channel combined = prefs.getFreqRespCombinedMaster();
+            if (combined != null) {
+                // Combined: the slave's samples are zeros - the master alone is
+                // deconvolved, against its own full scale, and stands for both.
+                boolean leftMaster = combined == Channel.L;
+                FreqRespCalibration cal = FreqRespCalHelper.computeFromLogSweep(
+                        leftMaster ? window.left() : window.right(), sweepRef, 0, captureRate, freqs,
+                        ampVrms, leftMaster ? adcFsVrmsLeft : adcFsVrmsRight, fade,
+                        leftMaster ? "L" : "R", false);
+                calL = cal;
+                calR = cal;
+            } else {
+                calL = FreqRespCalHelper.computeFromLogSweep(
+                        window.left(),  sweepRef, 0, captureRate, freqs, ampVrms, adcFsVrmsLeft,  fade, "L", false);
+                calR = FreqRespCalHelper.computeFromLogSweep(
+                        window.right(), sweepRef, 0, captureRate, freqs, ampVrms, adcFsVrmsRight, fade, "R", false);
+            }
             long decMs = (System.nanoTime() - decStart) / 1_000_000L;
             if (log.isInfoEnabled()) {
                 log.info("TuneNotch update: grab {} ms, deconv {} ms", grabMs, decMs);
@@ -1063,6 +1090,7 @@ public final class TuneNotchWizardDialog {
         globPrefs.setTuneNotchAmplitude(prefs.getTuneNotchAmplitude());
         globPrefs.setTuneNotchTargetHz(prefs.getTuneNotchTargetHz());
         globPrefs.setTuneNotchOutputChannels(prefs.getTuneNotchOutputChannels());
+        globPrefs.setTuneNotchCombinedMaster(prefs.getFreqRespCombinedMaster());
         globPrefs.save();
     }
     // -------------------------------------------------------------------------

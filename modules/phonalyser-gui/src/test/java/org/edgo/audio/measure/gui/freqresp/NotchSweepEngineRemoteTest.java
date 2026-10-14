@@ -152,7 +152,7 @@ class NotchSweepEngineRemoteTest {
         engine = new NotchSweepEngine(RATE_HZ, RATE_HZ, BITS, DITHER_BITS);
 
         engine.start(F0, F1, AMPLITUDE_VRMS, DAC_FS_VRMS, DAC_FS_VRMS, SWEEP_SAMPLES, FADE_SAMPLES,
-                OutputChannels.BOTH);
+                OutputChannels.BOTH, null);
 
         assertEquals(GenSignalForm.LOG_SWEEP, server.firstArg("setForm"));
         assertEquals(Boolean.TRUE, server.firstArg("setSweepLoop"),
@@ -208,7 +208,7 @@ class NotchSweepEngineRemoteTest {
         engine = new NotchSweepEngine(RATE_HZ, PLAYBACK_RATE_HZ, PLAYBACK_BITS, DITHER_BITS);
 
         engine.start(F0, F1, AMPLITUDE_VRMS, DAC_FS_VRMS, DAC_FS_VRMS, SWEEP_SAMPLES, FADE_SAMPLES,
-                OutputChannels.BOTH);
+                OutputChannels.BOTH, null);
 
         assertEquals(PLAYBACK_RATE_HZ, server.firstArg("openGenerator"),
                 "the DAC is opened on the OUTPUT rate - the ADC's is none of its business");
@@ -240,7 +240,7 @@ class NotchSweepEngineRemoteTest {
                 INDIVISIBLE_PLAYBACK_RATE_HZ, PLAYBACK_BITS, DITHER_BITS)) {
             IllegalStateException failed = assertThrows(IllegalStateException.class,
                     () -> refused.start(F0, F1, AMPLITUDE_VRMS, DAC_FS_VRMS, DAC_FS_VRMS, SWEEP_SAMPLES,
-                            FADE_SAMPLES, OutputChannels.BOTH));
+                            FADE_SAMPLES, OutputChannels.BOTH, null));
 
             assertTrue(failed.getMessage().contains(String.valueOf(RATE_HZ))
                             && failed.getMessage().contains(
@@ -259,7 +259,7 @@ class NotchSweepEngineRemoteTest {
     void aBandChangeReachesTheServerAndTheReference() throws Exception {
         engine = new NotchSweepEngine(RATE_HZ, RATE_HZ, BITS, DITHER_BITS);
         engine.start(F0, F1, AMPLITUDE_VRMS, DAC_FS_VRMS, DAC_FS_VRMS, SWEEP_SAMPLES, FADE_SAMPLES,
-                OutputChannels.BOTH);
+                OutputChannels.BOTH, null);
         server.reset();
 
         engine.setBand(NEW_F0, NEW_F1);
@@ -282,7 +282,7 @@ class NotchSweepEngineRemoteTest {
     void aLaneGateChangeReopensTheServersLaneAndKeepsTheRingRunning() throws Exception {
         engine = new NotchSweepEngine(RATE_HZ, RATE_HZ, BITS, DITHER_BITS);
         engine.start(F0, F1, AMPLITUDE_VRMS, DAC_FS_VRMS, DAC_FS_VRMS, SWEEP_SAMPLES, FADE_SAMPLES,
-                OutputChannels.BOTH);
+                OutputChannels.BOTH, null);
         ServerGeneratorStub.ServerCapture capture = server.getLastCapture();
         server.reset();
 
@@ -325,7 +325,7 @@ class NotchSweepEngineRemoteTest {
     void aRefusedReopenSaysSoAndLeavesTheGateThatIsStillInForce() throws Exception {
         engine = new NotchSweepEngine(RATE_HZ, RATE_HZ, BITS, DITHER_BITS);
         engine.start(F0, F1, AMPLITUDE_VRMS, DAC_FS_VRMS, DAC_FS_VRMS, SWEEP_SAMPLES, FADE_SAMPLES,
-                OutputChannels.BOTH);
+                OutputChannels.BOTH, null);
         server.reset();
         server.setRefuseOpen(true);
 
@@ -361,7 +361,7 @@ class NotchSweepEngineRemoteTest {
         try (NotchSweepEngine refused = new NotchSweepEngine(RATE_HZ, RATE_HZ, BITS, DITHER_BITS)) {
                 IllegalStateException failed = assertThrows(IllegalStateException.class,
                         () -> refused.start(F0, F1, AMPLITUDE_VRMS, DAC_FS_VRMS, DAC_FS_VRMS, SWEEP_SAMPLES,
-                                FADE_SAMPLES, OutputChannels.BOTH));
+                                FADE_SAMPLES, OutputChannels.BOTH, null));
 
                 assertTrue(failed.getMessage().contains(String.valueOf(RATE_HZ * 2)),
                         "the refusal names what the bench granted - " + failed.getMessage());
@@ -384,7 +384,7 @@ class NotchSweepEngineRemoteTest {
         try (NotchSweepEngine refused = new NotchSweepEngine(RATE_HZ, RATE_HZ, BITS, DITHER_BITS)) {
                 IllegalStateException failed = assertThrows(IllegalStateException.class,
                         () -> refused.start(F0, F1, AMPLITUDE_VRMS, DAC_FS_VRMS, DAC_FS_VRMS, SWEEP_SAMPLES,
-                                FADE_SAMPLES, OutputChannels.BOTH));
+                                FADE_SAMPLES, OutputChannels.BOTH, null));
 
                 assertTrue(failed.getMessage().contains(String.valueOf(RATE_HZ * 2)),
                         failed.getMessage());

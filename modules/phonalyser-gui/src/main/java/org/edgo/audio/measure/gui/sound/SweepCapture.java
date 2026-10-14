@@ -21,6 +21,7 @@ package org.edgo.audio.measure.gui.sound;
 import java.util.function.BooleanSupplier;
 
 import org.edgo.audio.measure.dsp.FreqRespCalHelper;
+import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.enums.OutputChannels;
 import org.edgo.audio.measure.sound.StereoCaptureProgress;
@@ -86,6 +87,9 @@ public final class SweepCapture {
      * @param dacFsVoltageLeft  the left lane's DAC full scale the one amplitude
      *                          is rendered against
      * @param dacFsVoltageRight the same for the right lane
+     * @param combinedMaster    the channel the record combines both inputs
+     *                          into, the other delivered as 0; {@code null}
+     *                          records them as captured
      */
     public StereoSamples run(double startHz, double stopHz, int sweepSamples,
             int leadInSamples, int fadeSamples, double amplitudeVrms,
@@ -93,12 +97,13 @@ public final class SweepCapture {
             int captureRateHz, int playbackRateHz, int playbackBitDepth, int ditherBits,
             OutputChannels channels,
             int durationSec, BooleanSupplier cancelToken,
-            StereoCaptureProgress progress) throws Exception {
+            StereoCaptureProgress progress, Channel combinedMaster) throws Exception {
         SharedCapture capture = SharedCapture.instance();
         SignalBufferReader reader = capture.acquire();
         if (reader == null) {
             throw new IllegalStateException(capture.getLastStartError());
         }
+        if (combinedMaster != null) reader.combine(combinedMaster);
         try {
             // Marks recorded after this position are THIS sweep's; a stale one
             // from an earlier sweep on the same stream is never mistaken for it.
