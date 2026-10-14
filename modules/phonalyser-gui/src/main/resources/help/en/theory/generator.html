@@ -341,8 +341,8 @@
      the exact FFT bin centre - but the DAC and the ADC run on different
      crystal oscillators, so the <em>captured</em> frequency never exactly
      matches the commanded one.  With an alignment mode active, the FFT
-     view measures the actually-captured frequency each tick and sends back
-     a trim, which the generator applies through (1); the closed loop holds
+     view measures the actually-captured frequency in each analysis cycle
+     and sends back a trim, which the generator applies through (1); the closed loop holds
      the captured tone on its bin to better than <b>±0.05 ppm</b> (see the
      <a href="fft.html#ongrid">FFT chapter</a>).  The picohertz-class
      granularity behind (3) is what lets those corrections land without

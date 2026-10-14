@@ -220,7 +220,7 @@
         Der DAC und der ADC laufen auf <em>verschiedenen Quarzoszillatoren</em>,
         deren Frequenzen nie exakt übereinstimmen - ein präzise auf einen
         DAC-Takt-Bin ausgegebener Ton trifft auf dem ADC-Takt einige ppm daneben
-        ein. Die FLL schließt diese Schleife: bei jedem Tick misst der Analysator
+        ein. Die FLL schließt diese Schleife: in jedem Analysezyklus misst der Analysator
         die wahre erfasste Frequenz des Tons und trimmt das DDS fein, bis der
         erfasste Ton auf besser als <b>±0,05 ppm</b> auf dem Bin sitzt. (Die
         Trim-Kommandos werden mit exakter Transport-Buchführung ausgegeben - eine
@@ -635,9 +635,9 @@
      Pegel und -Prozente, THD, THD+N, SNR - aus dem <em>korrigierten</em> Spektrum
      neu berechnet, sodass die Tabelle die Zahlen des Geräts angibt, nicht die der
      Kette. Eine Feinheit: Bei einer tiefen Mittelung werden die blauen Punkte aus
-     der <em>fixierten</em> kohärenten Frequenz neu abgeleitet statt aus der bei
-     jedem Tick verwackelnden Einzeltick-Schätzung - andernfalls würde die
-     Kalibrierung bei jedem Tick bei einer leicht anderen Frequenz nachgeschlagen
+     der <em>fixierten</em> kohärenten Frequenz neu abgeleitet statt aus der
+     in jedem Analysezyklus verwackelnden Einzelzyklus-Schätzung - andernfalls würde die
+     Kalibrierung in jedem Zyklus bei einer leicht anderen Frequenz nachgeschlagen
      und die blauen Punkte würden auf einer steilen Kerbflanke sichtbar tanzen.</p>
 
   <h3 id="manual-fund">Den Grundton von Hand auf einer steilen Kerbe fixieren</h3>

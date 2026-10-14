@@ -215,8 +215,8 @@
         the DAC and the ADC run on <em>different crystal oscillators</em>,
         whose frequencies never agree exactly - a tone emitted precisely on
         a DAC-clock bin arrives a few ppm off on the ADC's clock. The FLL
-        closes that loop: each tick the analyser measures the tone's true
-        captured frequency, and fine-trims the DDS until the captured tone
+        closes that loop: in each analysis cycle the analyser measures the
+        tone's true captured frequency, and fine-trims the DDS until the captured tone
         sits on the bin to better than <b>±0.05 ppm</b>. (The trim commands
         are issued with exact transport bookkeeping - a correction is never
         re-issued until a measurement provably postdates the previous one's
@@ -609,9 +609,9 @@
      the <em>corrected</em> spectrum, so the table states the device's
      numbers, not the chain's. One subtlety: on a deep average the blue
      dots are re-derived from the <em>pinned</em> coherent frequency rather
-     than each tick's jittering single-tick estimate - otherwise the
-     calibration would be looked up at a slightly different frequency every
-     tick and the blue dots would visibly dance on a steep notch flank.</p>
+     than each analysis cycle's jittering single-cycle estimate - otherwise
+     the calibration would be looked up at a slightly different frequency
+     every cycle and the blue dots would visibly dance on a steep notch flank.</p>
 
   <h3 id="manual-fund">Pinning the fundamental by hand on a steep notch</h3>
   <p>The fundamental is the one level the notch calibration recovers least
