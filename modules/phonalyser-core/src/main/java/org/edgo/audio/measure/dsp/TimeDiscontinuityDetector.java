@@ -161,8 +161,8 @@ public final class TimeDiscontinuityDetector {
      * {@code double[]} twin of {@link #detect(float[], int, double)} for the FFT
      * worker, whose capture window stays in double precision to preserve the
      * measurement floor (converting a multi-million-sample window to float per
-     * tick would cost an allocation + copy for nothing).  Same model: sinusoid-
-     * recurrence prediction error vs the linear threshold
+     * analysis cycle would cost an allocation + copy for nothing).  Same
+     * model: sinusoid-recurrence prediction error vs the linear threshold
      * {@code REL_FACTOR·mean|error| + EVENT_FRACTION·amplitude}.
      */
     public boolean detect(double[] data, int n, double omega) {

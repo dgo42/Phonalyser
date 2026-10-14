@@ -44,7 +44,7 @@ import lombok.Getter;
  * Controller of the FFT pane: owns the {@link FftAnalyzerWorker}'s
  * recording lifecycle and the {@code .fft} spectrum file round-trip.  The generator
  * frequency-lock loops that publish {@link Events#GENERATOR_FREQ_TRIM} /
- * {@code _2} run in the worker, on every analysed tick; the controller
+ * {@code _2} run in the worker, on every analysis cycle; the controller
  * only relays their reset ({@link #resetFrequencyLock}).
  *
  * <p>The worker is constructor-injected - the pane builds it (the worker's
@@ -326,7 +326,8 @@ public final class FftController {
      * (Vrms &rarr; dBFS) and the high-pass / low-pass distortion band, then runs
      * {@link FftAnalyzer#recomputeStats}.  Called at load and whenever a THD
      * setting changes while a static (non-live) spectrum is displayed - the live
-     * worker re-reads these settings every tick, so only the static case needs it.
+     * worker re-reads these settings every analysis cycle, so only the static
+     * case needs it.
      */
     public void recomputeStaticResult(FftResult r) {
         Preferences prefs = Preferences.instance();

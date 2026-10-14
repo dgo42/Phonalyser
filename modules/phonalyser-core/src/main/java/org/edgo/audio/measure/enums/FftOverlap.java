@@ -65,12 +65,12 @@ public enum FftOverlap {
     }
 
     /** Frame spacing in samples at {@code fftSize} for a fixed overlap.  The
-     *  random mode has no single spacing - each hop is drawn per tick from
-     *  its own range - so asking it for one is a caller error. */
+     *  random mode has no single spacing - each hop is drawn per analysis
+     *  cycle from its own range - so asking it for one is a caller error. */
     public int hopSamples(int fftSize) {
         if (isRandom()) {
             throw new IllegalStateException(
-                    "Random overlap carries no fixed frame spacing - the hop is drawn per tick");
+                    "Random overlap carries no fixed frame spacing - the hop is drawn per analysis cycle");
         }
         return Math.max(1, (int) Math.round(fftSize * (1.0 - fraction)));
     }

@@ -45,8 +45,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p><b>Scope note:</b> a single {@code analyze()} buffer carries NO inter-frame
  * clock drift (the frames sit at exact sample offsets), so this isolates the
  * MEASUREMENT + intra-capture coherent averaging.  If the harmonics come out
- * stable here, the live drift is the cross-tick CLOCK, not the analysis math - a
- * useful thing to pin down deterministically.  A cross-tick (worker) harness
+ * stable here, the live drift is the cross-cycle CLOCK, not the analysis math -
+ * a useful thing to pin down deterministically.  A cross-cycle (worker) harness
  * with a simulated drifting offset is a separate, larger step.
  *
  * <p>Every generator/FFT knob is a {@code static final} constant below.

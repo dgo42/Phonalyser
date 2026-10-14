@@ -24,8 +24,8 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  * Pool of recycled {@link FftResult} slots.  {@link FftAnalyzer#analyze}
  * writes its four fftSize/2+1 spectrum arrays straight into a slot
  * (via {@link FftResult#ensureArrays}), so reusing slots eliminates
- * ~33 MB/tick (at fftSize 2 M) of humongous-object churn on the live
- * analysis path.
+ * ~33 MB per analysis cycle (at fftSize 2 M) of humongous-object churn on
+ * the live analysis path.
  *
  * <p><b>Ownership rule:</b> a slot leaves the pool via {@link #acquire}
  * and must be {@link #release}d exactly once - by whichever party

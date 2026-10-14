@@ -31,13 +31,13 @@ import lombok.Getter;
  * read".  That's fine for a consumer that always wants the most recent window
  * (the scope: "show me now") - it reads relative to {@code writePos} and can
  * never fall behind.  It is wrong for a consumer that needs a <b>gap-free,
- * contiguous</b> stream - the FFT cross-tick coherent accumulator, where every
+ * contiguous</b> stream - the FFT cross-cycle coherent accumulator, where every
  * frame's absolute sample offset must advance by an exact, uniform hop or the
  * de-rotation smears the fundamental into a sinc.  Reading "the latest N ending
- * at writePos" each tick can't give that: between ticks the window jumps by
- * however long the worker happened to sleep, and if the worker ever falls a
- * full ring behind, the oldest unread samples are silently overwritten and the
- * next read tears across a discontinuity (the audible/visible "glitch").
+ * at writePos" each analysis cycle can't give that: between cycles the window
+ * jumps by however long the worker happened to sleep, and if the worker ever
+ * falls a full ring behind, the oldest unread samples are silently overwritten
+ * and the next read tears across a discontinuity (the audible/visible "glitch").
  *
  * <p>This cursor holds <em>one consumer's</em> own absolute read position and
  * turns the ring into a wrapped FIFO for it: {@link #read} copies the next
@@ -253,8 +253,8 @@ public final class SignalBufferReader {
      * 4 M-point FFT at 48 kS/s spans 87 s of audio, far beyond any sane capture
      * ring, and demanding it in one contiguous read could only ever end in an
      * {@link #OVERRUN} - the cursor would have to stand still for longer than
-     * the ring holds.  Consuming each tick's share into the consumer's own
-     * buffer keeps the cursor right behind the writer instead.
+     * the ring holds.  Consuming each analysis cycle's share into the consumer's
+     * own buffer keeps the cursor right behind the writer instead.
      */
     public int read(int maxCount, double[] outLeft, double[] outRight, int outOffset) {
         long write = buffer.getWritePos();

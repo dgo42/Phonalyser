@@ -55,7 +55,7 @@ public final class DebugSwitches {
     public static final boolean SHOW_FFT_ANALYZE_TIME = Boolean.parseBoolean("false");
 
     /** DEBUG hard switch: trace the generator frequency-lock chain, one WARN
-     *  line per link per analysed tick - the loop inputs/outputs in
+     *  line per link per analysis cycle - the loop inputs/outputs in
      *  {@code FftAnalyzerWorker.applyFrequencyLock} (per-tone target, measured,
      *  correction, then {@code pub=} with the trim when one went out on that
      *  update or {@code held} when the correction did not move, plus gate
@@ -66,16 +66,16 @@ public final class DebugSwitches {
      *  doesn't move. */
     public static final boolean TRACE_FLL = Boolean.parseBoolean("true");
 
-    /** DEBUG hard switch: write a per-tick record of the coherent FFT
-     *  accumulator - one {@code fft-ticks-<timestamp>.csv} per accumulator
-     *  run in the application's log directory: every tick's de-rotation
-     *  inputs (absolute window position, intra-call step, elapsed-sample
-     *  delta, phase-lock correction, refined kappa, ramp slope theta) plus
-     *  the complex spectrum around the fundamental bin, fresh and
+    /** DEBUG hard switch: write a per-cycle record of the coherent FFT
+     *  accumulator - one {@code fft-cycles-<timestamp>.csv} per accumulator
+     *  run in the application's log directory: every analysis cycle's
+     *  de-rotation inputs (absolute window position, intra-call step,
+     *  elapsed-sample delta, phase-lock correction, refined kappa, ramp slope
+     *  theta) plus the complex spectrum around the fundamental bin, fresh and
      *  accumulated.  A measurement record for offline lobe analysis, not a
      *  log - a long run writes thousands of rows, hence a switch.
      *  {@code false} writes nothing. */
-    public static final boolean WRITE_FFT_TICK_STATS = Boolean.parseBoolean("false");
+    public static final boolean WRITE_FFT_CYCLE_STATS = Boolean.parseBoolean("false");
 
     /** DEBUG hard switch: trace what the fundamental's phase does to its
      *  harmonics across a coherent FFT average.  With it on, the worker logs
@@ -95,18 +95,18 @@ public final class DebugSwitches {
     public static final boolean TRACE_HARMONIC_PHASE = Boolean.parseBoolean("true");
 
     /** DEBUG hard switch: in the pilot-tone phase alignment, measure the
-     *  FUNDAMENTAL on the reference channel on every tick - the analyser's
-     *  windowed single-bin Goertzel of the opposite channel's window at the
-     *  fundamental's bin - and extend the per-tick phase excess line with
-     *  what it yields.  That channel carries the fundamental clear of the
+     *  FUNDAMENTAL on the reference channel on every analysis cycle - the
+     *  analyser's windowed single-bin Goertzel of the opposite channel's window
+     *  at the fundamental's bin - and extend the per-cycle phase excess line
+     *  with what it yields.  That channel carries the fundamental clear of the
      *  notch, so it is the control the pilot is held against: its phase
      *  change is the time base alone, and the pilot's own change less that
      *  change scaled by the ratio of the two bins is the pilot's deviation,
      *  expected to stand at zero.  The pilot is never read on the reference
      *  channel - a pilot read there is that channel's own converter path and
      *  says nothing about the notch.  Costs the reference mirror and one
-     *  Goertzel per tick.  Steers nothing: the frequency lock and the excess
-     *  stay as they are in that mode.  In the reference-channel alignment
+     *  Goertzel per analysis cycle.  Steers nothing: the frequency lock and the
+     *  excess stay as they are in that mode.  In the reference-channel alignment
      *  the same switch asks the generator for the pilot and reads it as the
      *  control of the reference's reading, the roles reversed, on the same
      *  trace line.  {@code false} measures nothing.  Needs

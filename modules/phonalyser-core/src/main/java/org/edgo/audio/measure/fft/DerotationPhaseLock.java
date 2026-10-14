@@ -21,36 +21,37 @@ package org.edgo.audio.measure.fft;
 import lombok.Getter;
 
 /**
- * Phase-locked tracker for the FFT cross-tick coherent de-rotation frequency.
+ * Phase-locked tracker for the FFT cross-cycle coherent de-rotation frequency.
  *
- * <p>Coherent cross-tick averaging sums each tick's spectrum after de-rotating
- * it back to a common time origin, using a fractional fundamental bin
- * {@code kappa}.  If {@code kappa} is even slightly wrong, the de-rotated
- * fundamental phase drifts linearly with the tick's sample offset, and summing
- * those progressively-misaligned frames smears the fundamental into a sinc and
- * shrinks its peak.  For a stable tone the magnitude is preserved iff
- * {@code kappa} is exact.
+ * <p>Coherent cross-cycle averaging sums each analysis cycle's spectrum after
+ * de-rotating it back to a common time origin, using a fractional fundamental
+ * bin {@code kappa}.  If {@code kappa} is even slightly wrong, the de-rotated
+ * fundamental phase drifts linearly with the analysis cycle's sample offset,
+ * and summing those progressively-misaligned frames smears the fundamental
+ * into a sinc and shrinks its peak.  For a stable tone the magnitude is
+ * preserved iff {@code kappa} is exact.
  *
  * <p>This tracks {@code kappa} with a <b>measure-then-correct</b> loop, which
- * is unconditionally stable (a naive per-tick PLL is not: the de-rotation uses
+ * is unconditionally stable (a naive per-cycle PLL is not: the de-rotation uses
  * the {@code kappa} it is adjusting, and the growing sample-offset lever arm
- * makes it diverge).  Over a short window of ticks {@code kappa} is held fixed
- * while the de-rotated fundamental phase is observed; the phase advances
- * linearly with sample offset at a slope {@code 2π·(κ_true − κ)/N}, so a slope
- * fit yields the error <em>directly</em> (independent of the absolute offset)
- * and one full correction nulls it.  When the residual per-tick drift stays
- * tiny for a few windows it declares {@link #isLocked() lock}; the caller then
- * freezes {@code kappa}, re-anchors the accumulator to "now", and accumulates
- * with the exact frequency.
+ * makes it diverge).  Over a short window of analysis cycles {@code kappa} is
+ * held fixed while the de-rotated fundamental phase is observed; the phase
+ * advances linearly with sample offset at a slope {@code 2π·(κ_true − κ)/N}, so
+ * a slope fit yields the error <em>directly</em> (independent of the absolute
+ * offset) and one full correction nulls it.  When the residual per-cycle drift
+ * stays tiny for a few windows it declares {@link #isLocked() lock}; the caller
+ * then freezes {@code kappa}, re-anchors the accumulator to "now", and
+ * accumulates with the exact frequency.
  *
- * <p>Per-tick phase change stays below π (the seed is within &lt;1 bin), so the
- * per-tick wrap is unambiguous.  Pure (no I/O / SWT) and unit-tested.
+ * <p>The phase change per analysis cycle stays below π (the seed is within &lt;1
+ * bin), so the wrap between analysis cycles is unambiguous.  Pure (no I/O / SWT)
+ * and unit-tested.
  */
 public final class DerotationPhaseLock {
 
     private final int    fftSize;
-    private final int    window;         // ticks per measurement window
-    private final double lockDriftRad;   // per-tick drift below which a window is "stable"
+    private final int    window;         // analysis cycles per measurement window
+    private final double lockDriftRad;   // per-cycle drift below which a window is "stable"
     private final int    lockWindows;    // consecutive stable windows to declare lock
     private final int    maxWindows;     // fallback: lock anyway after this many windows
 
@@ -62,19 +63,19 @@ public final class DerotationPhaseLock {
     private boolean hasPrev;
     private double  prevPhase;
     private long    prevDelta;
-    private double  sumDPhi;       // Σ of per-tick (unwrapped) phase change
-    private long    sumDDelta;     // Σ of per-tick sample-offset change
-    private int     count;         // contributing ticks this window
+    private double  sumDPhi;       // Σ of per-cycle (unwrapped) phase change
+    private long    sumDDelta;     // Σ of per-cycle sample-offset change
+    private int     count;         // contributing analysis cycles this window
     private int     stableWindows;
     private int     totalWindows;
 
     /**
      * @param fftSize       FFT length N.
      * @param seedKappa     initial fractional fundamental bin.
-     * @param window        ticks per measurement window (≥ 2).
-     * @param lockDriftRad  per-tick drift magnitude below which a window counts
-     *                      as stable.  Must be TIGHT: a tiny per-tick drift
-     *                      integrates to a large smear over hundreds of ticks,
+     * @param window        analysis cycles per measurement window (≥ 2).
+     * @param lockDriftRad  per-cycle drift magnitude below which a window counts
+     *                      as stable.  Must be TIGHT: a tiny per-cycle drift
+     *                      integrates to a large smear over hundreds of cycles,
      *                      so e.g. 0.001 rad - NOT 0.02 - is needed to force the
      *                      loop to correct the seed bias before locking.
      * @param lockWindows   consecutive stable windows required to declare lock.
@@ -114,8 +115,8 @@ public final class DerotationPhaseLock {
         if (count >= window && sumDDelta != 0) {
             totalWindows++;
             double slope       = sumDPhi / (double) sumDDelta;     // rad/sample
-            double perTickDrift = Math.abs(sumDPhi) / count;       // mean |Δφ| per tick
-            if (perTickDrift < lockDriftRad) {
+            double perCycleDrift = Math.abs(sumDPhi) / count;      // mean |Δφ| per analysis cycle
+            if (perCycleDrift < lockDriftRad) {
                 if (++stableWindows >= lockWindows) locked = true;
             } else {
                 stableWindows = 0;

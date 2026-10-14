@@ -31,7 +31,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  * the one frame at the buffer's start and takes the stated frame spacing for
  * its statistics, the fixed overlaps derive that spacing through
  * {@link FftOverlap#hopSamples}, and the random overlap has no derivable
- * spacing at all - its per-tick drawn hop enters as the stated step.
+ * spacing at all - its per-cycle drawn hop enters as the stated step.
  *
  * <p>Covers: the enum's spacing derivation (values and the random-mode
  * refusal), the geometry validation, bit-identity between the convenience

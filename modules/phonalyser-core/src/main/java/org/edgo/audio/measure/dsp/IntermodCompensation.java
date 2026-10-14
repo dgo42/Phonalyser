@@ -180,8 +180,8 @@ public final class IntermodCompensation {
      * The distortion products of one frame as complex phasors in the
      * accumulator's frame - the construction {@link #accumulate} adds in, and
      * the same one the probe differences to measure the plant, so both read a
-     * frame identically.  A product the analyzer did not publish this tick
-     * carries {@code (0, 0)} at frequency 0.
+     * frame identically.  A product the analyzer did not publish this
+     * analysis cycle carries {@code (0, 0)} at frequency 0.
      * The clearance is the product's raw level over the upper border of the
      * noise band beside its bin ({@link ToneLobeLift#lineFloor}), as
      * {@link HarmonicCompensation#measurePhasors} reads it for a harmonic;
@@ -334,7 +334,8 @@ public final class IntermodCompensation {
 
     /** Index of a b≠0 product in the analyzer's de-rotated grid (so the raw
      *  phasor at {@code rawPeak[i]} / bin at {@code imdProductBin[i]} can be
-     *  read), or {@code -1} when the analyzer didn't de-rotate it this tick. */
+     *  read), or {@code -1} when the analyzer didn't de-rotate it this
+     *  analysis cycle. */
     private int productIndex(FftResult r, int a, int b) {
         int[] pa = r.imdProductA, pb = r.imdProductB;
         if (pa == null) return -1;

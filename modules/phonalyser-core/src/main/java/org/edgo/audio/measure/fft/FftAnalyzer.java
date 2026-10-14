@@ -49,7 +49,8 @@ import lombok.extern.log4j.Log4j2;
 public class FftAnalyzer {
 
     /** Shared empty grid published on {@link FftResult} for non-dual-tone (or
-     *  non-de-rotated) ticks - avoids a per-tick allocation on the hot path. */
+     *  non-de-rotated) analysis cycles - avoids a per-cycle allocation on the
+     *  hot path. */
     private static final int[] NO_IMD_PRODUCTS = new int[0];
 
     /** Lower edge (Hz) of the no-hint fundamental search: DC ... this is ignored so
@@ -81,7 +82,7 @@ public class FftAnalyzer {
     private WindowType cachedWindowType;
     /** Coherent gain (mean) of {@link #cachedWindow} - cached alongside it
      *  so {@code analyze} doesn't re-sum the multi-million-entry table
-     *  every tick. */
+     *  every analysis cycle. */
     private double     cachedCohGain;
     /** Normalized equivalent noise bandwidth of {@link #cachedWindow} in bins,
      *  {@code N·Σw² / (Σw)²} (Hann: 1.5) - the factor by which one windowed
@@ -91,9 +92,10 @@ public class FftAnalyzer {
 
     /** Cached per-bin A-weighting table - entry k = {@link #aWeightPower}(k·freqRes)
      *  for {@link #cachedAweightFreqRes}.  The noise integrals in analyze() and
-     *  {@link #recomputeStats} consult it for every non-signal bin each tick;
-     *  without it that is ~halfSize sqrt evaluations per call for a curve that
-     *  only changes when the spectrum geometry (fftSize / sample rate) does. */
+     *  {@link #recomputeStats} consult it for every non-signal bin each analysis
+     *  cycle; without it that is ~halfSize sqrt evaluations per call for a
+     *  curve that only changes when the spectrum geometry (fftSize / sample rate)
+     *  does. */
     private double[]   cachedAweight;
     private double     cachedAweightFreqRes;
 
@@ -117,7 +119,7 @@ public class FftAnalyzer {
      *  bin of the analysis grid, so its position does not follow the
      *  fundamental's fractional one.  Pinning a bin here has three effects:
      *  the pilot gets its own member in the coherent de-rotation family at
-     *  that bin, so the frames of a tick sum without the residual a
+     *  that bin, so the frames of an analysis cycle sum without the residual a
      *  nearest-harmonic rotation would leave on it; the result carries the
      *  bin and the frequency it stands for; and the bin plus its window main
      *  lobe stay out of the noise, SNR and ENOB sums.
@@ -135,13 +137,13 @@ public class FftAnalyzer {
 
     /** Spectrum-only fast-path flag for the next {@code analyze}.  When set,
      *  {@code analyze} produces the averaged complex spectrum + dB magnitude +
-     *  fundamental / harmonic BIN positions, but SKIPS the throwaway per-tick
+     *  fundamental / harmonic BIN positions, but SKIPS the throwaway per-cycle
      *  THD / SNR / SINAD / noise-floor sweeps (including the two O(N log N)
-     *  noise sorts).  The live FFT view sets this while cross-tick averaging:
-     *  it discards the single-tick stats and re-derives them with
-     *  {@link #recomputeStats} on the accumulated spectrum (display ticks only),
-     *  so the per-tick computation is pure waste.  Leave {@code false} for
-     *  one-shot CLI / test callers and single-tick (non-averaging) display. */
+     *  noise sorts).  The live FFT view sets this while cross-cycle averaging:
+     *  it discards the single-cycle stats and re-derives them with
+     *  {@link #recomputeStats} on the accumulated spectrum (display cycles only),
+     *  so the per-cycle computation is pure waste.  Leave {@code false} for
+     *  one-shot CLI / test callers and single-cycle (non-averaging) display. */
     @Setter
     private boolean spectrumOnly = false;
 
@@ -542,7 +544,7 @@ public class FftAnalyzer {
      * <p>Writes the analysis into the supplied {@code outResult} slot instead
      * of allocating a fresh result: the slot's bin / harmonic arrays are
      * resized as needed ({@link FftResult#ensureArrays}) and then used
-     * directly as the analysis output buffers - no per-tick allocation for
+     * directly as the analysis output buffers - no per-cycle allocation for
      * the four fftSize/2+1-long spectrum arrays.  Returns {@code outResult}
      * for convenience.
      */
@@ -666,10 +668,10 @@ public class FftAnalyzer {
 
         // --- Pilot tones: the two bins the generator holds them on.  Written
         // on every call (NaN / -1 when a slot carries no pilot) so a recycled
-        // result slot cannot hand the next tick a pilot that is no longer
-        // there.  Nothing is measured at a pilot itself: it stands on a whole
-        // bin of this very grid, so its frequency is that bin times the bin
-        // width, whatever fractional position the fundamental holds.
+        // result slot cannot hand the next analysis cycle a pilot that is no
+        // longer there.  Nothing is measured at a pilot itself: it stands on a
+        // whole bin of this very grid, so its frequency is that bin times the
+        // bin width, whatever fractional position the fundamental holds.
         outResult.pilot1Bin = pilotBin1;
         outResult.pilot2Bin = pilotBin2;
         outResult.pilot1HzRefined = (pilotBin1 > 0) ? pilotBin1 * freqRes : Double.NaN;
@@ -692,7 +694,8 @@ public class FftAnalyzer {
         // as the product part of the coherent average's family
         // (CoherentAccumulator): each entry's hump turns by a·Φ1 + b·Φ2.
         // Default to "no products published": recycled result slots must not
-        // leak a previous dual-tone tick's grid into a single-tone tick.
+        // leak a previous dual-tone analysis cycle's grid into a single-tone
+        // analysis cycle.
         outResult.imdProductA   = NO_IMD_PRODUCTS;
         outResult.imdProductB   = NO_IMD_PRODUCTS;
         outResult.imdProductBin = NO_IMD_PRODUCTS;
@@ -728,7 +731,7 @@ public class FftAnalyzer {
         // re / im / amplDbFs / phaseDeg are stored in outResult and outlive
         // this call - but the pool guarantees outResult is owned exclusively
         // by this analysis until the worker publishes it.  Aliasing the
-        // slot's pre-sized arrays as locals avoids per-tick allocation of
+        // slot's pre-sized arrays as locals avoids per-cycle allocation of
         // four halfSize+1-long arrays.  amplLinear is purely local and
         // overwritten cell-by-cell below - safe to reuse from scratch.
         double[] outRe      = outResult.re;
@@ -826,18 +829,18 @@ public class FftAnalyzer {
                 amplLinear, amplDbFs, refLin,
                 harmonicCount, hBins, hHz, hDbFs, hLinear, hPct);
 
-        // --- Averaging fast-path: skip the per-tick THD / SNR / SINAD /
+        // --- Averaging fast-path: skip the per-cycle THD / SNR / SINAD /
         // noise-floor sweeps (including the two O(N log N) noise sorts).  While
-        // the live view is cross-tick averaging it throws these single-tick
+        // the live view is cross-cycle averaging it throws these single-cycle
         // stats away and re-derives them with recomputeStats() on the
-        // ACCUMULATED spectrum (display ticks only) - so computing them here ~3×
+        // ACCUMULATED spectrum (display cycles only) - so computing them here ~3×
         // per second is pure waste.  Everything recomputeStats() and the worker
         // actually read was already produced above: the averaged complex
         // spectrum (re/im), the dB magnitude (amplitudeDbFs - read by the
         // worker's tone-detect / overlay / dBV lift), and the fundamental +
         // harmonic BIN positions (recomputeStats reuses them, never re-finds).
         // The skipped scalars are neutralised so a recycled result slot cannot
-        // leak a previous tick's numbers if anything reads them before the
+        // leak a previous cycle's numbers if anything reads them before the
         // display rebuild.
         if (spectrumOnly) {
             outResult.fftSize                    = fftSize;
@@ -877,13 +880,13 @@ public class FftAnalyzer {
             outResult.fundamentalDynExclusionHz  = 0.0;
             // The intermodulation readout is a statistic too - re-derived with
             // the rest by recomputeStats(); a pooled slot must not republish a
-            // previous dual-tone tick's products.
+            // previous dual-tone analysis cycle's products.
             outResult.imd                        = null;
             outResult.preCorrectionPeaks         = null;
             // The reference channel's frequencies are the worker's to write
             // after this returns; cleared here for the same reason
-            // preCorrectionPeaks is - a pooled slot must not hand the next tick
-            // the previous one's numbers.
+            // preCorrectionPeaks is - a pooled slot must not hand the next
+            // analysis cycle the previous one's numbers.
             outResult.referenceFundamentalHzRefined  = Double.NaN;
             outResult.referenceFundamental2HzRefined = Double.NaN;
             outResult.captureRawPeaks();   // raw F + peak phasors for the DAC-predistortion de-embed
@@ -1063,8 +1066,9 @@ public class FftAnalyzer {
         deriveImd(outResult);
         // preCorrectionPeaks is owned by the worker (set after analyze
         // returns when calibration is loaded); reset here so a previous
-        // tick's value doesn't leak across pool slot recycle.  The reference
-        // channel's two frequencies are the worker's in exactly the same way.
+        // analysis cycle's value doesn't leak across pool slot recycle.  The
+        // reference channel's two frequencies are the worker's in exactly the
+        // same way.
         outResult.preCorrectionPeaks = null;
         outResult.referenceFundamentalHzRefined  = Double.NaN;
         outResult.referenceFundamental2HzRefined = Double.NaN;

@@ -40,15 +40,15 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * The generator frequency lock inside the FFT analyser worker: which ticks
- * feed the loop after a capture re-sync, and what a lock reset does while no
- * worker thread runs.
+ * The generator frequency lock inside the FFT analyser worker: which analysis
+ * cycles feed the loop after a capture re-sync, and what a lock reset does
+ * while no worker thread runs.
  *
  * <p>The re-sync is the worker's own discontinuity path, driven over a real
- * {@link SignalBufferReader}.  The ticks are the worker's loop step itself,
- * handed synthetic results: the step's inputs are the tick's result and three
+ * {@link SignalBufferReader}.  The cycles are the worker's loop step itself,
+ * handed synthetic results: the step's inputs are the cycle's result and three
  * capture positions, while a full analysis cycle would need a filled capture
- * ring, a real transform and the whole preference set of the tick's pipeline.
+ * ring, a real transform and the whole preference set of the cycle's pipeline.
  * The step, the re-sync path and the state they share are private - a
  * productive class is not widened to let a test in - so the harness goes
  * through reflection.  What the loop did is read off the real
@@ -66,25 +66,25 @@ class FftFrequencyLockGatingTest {
      *  the target where it is. */
     private static final int    TARGET_BIN     = 100;
     private static final double TARGET_HZ      = TARGET_BIN * SAMPLE_RATE / (double) FFT_SIZE;
-    /** The mistune every tick measures: a hundred times the loop's lock band,
-     *  and five hundred times inside its plausibility bound, so every tick
-     *  that reaches the loop corrects. */
+    /** The mistune every analysis cycle measures: a hundred times the loop's
+     *  lock band, and five hundred times inside its plausibility bound, so
+     *  every cycle that reaches the loop corrects. */
     private static final double MISTUNE_PPM    = 1.0;
     private static final double MEASURED_HZ    = TARGET_HZ * (1.0 + MISTUNE_PPM * 1.0e-6);
     private static final double FUND_DBFS      = -20.0;
     private static final double BUFFER_SECONDS = 1.0;
-    /** Window starts, samples.  A tick's reading reaches the loop on the tick
-     *  after it, so the loop's first update is the second tick's, under the
-     *  first tick's window start.  The readings fed after the re-sync stand
-     *  past the point from which that update's correction counts as arrived -
-     *  the second tick's write position plus the loop's 0.7 s drain guard,
-     *  38 720 samples here - so a reading that reaches the loop is a full
-     *  correction, not a hold in transit. */
-    private static final long   FIRST_TICK     = 0L;
-    private static final long   SECOND_TICK    = 1_024L;
-    private static final long   STORED_TICK    = 30_000L;
-    private static final long   SKIPPED_TICK   = 40_000L;
-    private static final long   FED_TICK       = 50_000L;
+    /** Window starts, samples.  An analysis cycle's reading reaches the loop
+     *  on the cycle after it, so the loop's first update is the second
+     *  cycle's, under the first cycle's window start.  The readings fed after
+     *  the re-sync stand past the point from which that update's correction
+     *  counts as arrived - the second cycle's write position plus the loop's
+     *  0.7 s drain guard, 38 720 samples here - so a reading that reaches the
+     *  loop is a full correction, not a hold in transit. */
+    private static final long   FIRST_CYCLE    = 0L;
+    private static final long   SECOND_CYCLE   = 1_024L;
+    private static final long   STORED_CYCLE   = 30_000L;
+    private static final long   SKIPPED_CYCLE  = 40_000L;
+    private static final long   FED_CYCLE      = 50_000L;
     /** A last-published correction no loop would produce: survives a reset
      *  that returns early, turns into NaN on one that goes through. */
     private static final double MARKER_HZ      = 0.5;
@@ -147,43 +147,43 @@ class FftFrequencyLockGatingTest {
     }
 
     /**
-     * A re-sync holds the loop for exactly one feed.  A tick's reading reaches
-     * the loop on the tick after it, and the re-sync drops the reading in
-     * hand: the first tick after it has nothing to feed, and the tick after
-     * that - the first that would feed the loop, every gate passed - is
-     * skipped and uses the hold up; the next one updates the loop again.  The
-     * loop itself is not reset by the re-sync: its correction stands through
-     * the skipped tick.
+     * A re-sync holds the loop for exactly one feed.  An analysis cycle's
+     * reading reaches the loop on the cycle after it, and the re-sync drops
+     * the reading in hand: the first cycle after it has nothing to feed, and
+     * the cycle after that - the first that would feed the loop, every gate
+     * passed - is skipped and uses the hold up; the next one updates the loop
+     * again.  The loop itself is not reset by the re-sync: its correction
+     * stands through the skipped cycle.
      */
     @Test
-    void theFirstTickThatWouldFeedTheLoopAfterAReSyncIsSkipped() throws Exception {
+    void theFirstCycleThatWouldFeedTheLoopAfterAReSyncIsSkipped() throws Exception {
         FftAnalyzerWorker worker = new FftAnalyzerWorker(null);   // headless
 
-        tick(worker, FIRST_TICK);
+        cycle(worker, FIRST_CYCLE);
         FrequencyAligner fll = loop(worker);
-        assertNotNull(fll, "a tick that passes every gate engages the loop");
-        assertEquals(-1L, lastUpdate(fll), "its reading is kept for the next tick");
-        tick(worker, SECOND_TICK);
-        assertEquals(FIRST_TICK, lastUpdate(fll), "which updates the loop with it");
+        assertNotNull(fll, "an analysis cycle that passes every gate engages the loop");
+        assertEquals(-1L, lastUpdate(fll), "its reading is kept for the next analysis cycle");
+        cycle(worker, SECOND_CYCLE);
+        assertEquals(FIRST_CYCLE, lastUpdate(fll), "which updates the loop with it");
         double corrected = fll.getCorrection();
         assertNotEquals(0.0, corrected, "a 1 ppm mistune is corrected in one step");
 
         call(worker, RESYNC, new SignalBufferReader(new DoubleSignalBuffer(SAMPLE_RATE, BUFFER_SECONDS)));
         assertTrue((Boolean) FieldUtils.readField(worker, HOLD, true), "the re-sync holds the loop");
 
-        tick(worker, STORED_TICK);
-        assertEquals(FIRST_TICK, lastUpdate(fll),
-                "the first tick after the re-sync has no reading to feed");
+        cycle(worker, STORED_CYCLE);
+        assertEquals(FIRST_CYCLE, lastUpdate(fll),
+                "the first analysis cycle after the re-sync has no reading to feed");
         assertTrue((Boolean) FieldUtils.readField(worker, HOLD, true), "and leaves the hold armed");
 
-        tick(worker, SKIPPED_TICK);
-        assertEquals(FIRST_TICK, lastUpdate(fll),
-                "the first tick that would feed the loop does not update it");
+        cycle(worker, SKIPPED_CYCLE);
+        assertEquals(FIRST_CYCLE, lastUpdate(fll),
+                "the first analysis cycle that would feed the loop does not update it");
         assertEquals(corrected, fll.getCorrection(), "nor move its correction");
         assertFalse((Boolean) FieldUtils.readField(worker, HOLD, true), "and it uses the hold up");
 
-        tick(worker, FED_TICK);
-        assertEquals(SKIPPED_TICK, lastUpdate(fll), "the next tick updates the loop");
+        cycle(worker, FED_CYCLE);
+        assertEquals(SKIPPED_CYCLE, lastUpdate(fll), "the next analysis cycle updates the loop");
         assertNotEquals(corrected, fll.getCorrection(),
                 "and the mistune it still measures moves the correction");
     }
@@ -207,7 +207,7 @@ class FftFrequencyLockGatingTest {
         assertEquals(MARKER_HZ, published(worker),
                 "no loop engaged: the reset returns ahead of the re-send and the reset event");
 
-        tick(worker, FIRST_TICK);
+        cycle(worker, FIRST_CYCLE);
         FieldUtils.writeField(worker, PUBLISHED, MARKER_HZ, true);
         worker.resetFrequencyLock();
         assertTrue(Double.isNaN(published(worker)),
@@ -217,11 +217,11 @@ class FftFrequencyLockGatingTest {
 
     // ── Drivers ────────────────────────────────────────────────────────────
 
-    /** One tick of the loop step with the analysis mode NONE, the analysed
-     *  channel measuring {@link #MEASURED_HZ} - the reading the worker's
-     *  analysed-tone memory holds for the tick - and the write position one
-     *  transform past the window's start. */
-    private void tick(FftAnalyzerWorker worker, long absStart) throws IllegalAccessException {
+    /** One analysis cycle of the loop step with the analysis mode NONE, the
+     *  analysed channel measuring {@link #MEASURED_HZ} - the reading the
+     *  worker's analysed-tone memory holds for the cycle - and the write
+     *  position one transform past the window's start. */
+    private void cycle(FftAnalyzerWorker worker, long absStart) throws IllegalAccessException {
         FftResult r = new FftResult();
         r.sampleRate           = SAMPLE_RATE;
         r.fftSize              = FFT_SIZE;

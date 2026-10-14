@@ -326,8 +326,8 @@ public final class ImdAnalyzer {
     /** In-place quickselect: partitions {@code a[0..len)} until the
      *  {@code k}-th smallest element sits at index {@code k}, and returns it.
      *  Same result as {@code sort(a)[k]} at O(n) expected instead of
-     *  O(n·log n) - the full sort dominated the IMD tick at large FFT
-     *  lengths.  Hoare partition with a median-of-three pivot, so the
+     *  O(n·log n) - the full sort dominated the IMD analysis cycle at large
+     *  FFT lengths.  Hoare partition with a median-of-three pivot, so the
      *  near-sorted spectra a stable noise floor produces don't degrade it. */
     private double selectKth(double[] a, int len, int k) {
         int lo = 0;

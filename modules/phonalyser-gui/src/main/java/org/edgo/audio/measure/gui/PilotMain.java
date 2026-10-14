@@ -29,13 +29,13 @@ import org.edgo.audio.measure.enums.WindowType;
  * Automatic pilot-tone frequency selection, run as a benchmark.
  *
  * <p>A pilot is a second generated tone whose phase the analysis reads on
- * every tick as a time-base reference beside a fundamental that sits in a
- * notch.  A frequency is admissible only while nothing the pilot produces -
- * the line itself, its harmonics, their Nyquist folds, its intermodulation
- * with the fundamental - can raise the fundamental's bin or a protected
- * harmonic's, and while nothing else can raise the pilot's own bin.  The
- * rules and their reasons are stated in the pilot-tone selection plan; this
- * class is their reference implementation and measures what they cost.
+ * every analysis cycle as a time-base reference beside a fundamental that
+ * sits in a notch.  A frequency is admissible only while nothing the pilot
+ * produces - the line itself, its harmonics, their Nyquist folds, its
+ * intermodulation with the fundamental - can raise the fundamental's bin or a
+ * protected harmonic's, and while nothing else can raise the pilot's own bin.
+ * The rules and their reasons are stated in the pilot-tone selection plan;
+ * this class is their reference implementation and measures what they cost.
  *
  * <p>Seven knock-out rules decide admissibility, four selection steps reduce
  * the admissible set to exactly one bin:

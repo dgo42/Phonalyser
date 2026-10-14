@@ -61,7 +61,7 @@ public class FftResult {
     /** FftOverlap used. */
     public FftOverlap overlap;
     /** The frame spacing (samples) the analysis actually used.  Under the
-     *  random overlap this is the tick's drawn hop - the enum carries no
+     *  random overlap this is the cycle's drawn hop - the enum carries no
      *  single fraction.  Provenance first (saved into spectrum files); the
      *  skirt look-ahead falls back to it only when {@link #overlap} is
      *  unknown.  0 for a spectrum whose spacing is unknown (a loaded
@@ -69,7 +69,7 @@ public class FftResult {
     public int stepSamples;
 
     // Single-sided spectrum, bins 0 ... fftSize/2.  Arrays are reused
-    // across analysis ticks via the pool; {@link #ensureArrays} grows
+    // across analysis cycles via the pool; {@link #ensureArrays} grows
     // them when the FFT length changes.
     public double[] amplitudeDbFs;
     public double[] phaseDeg;
@@ -147,12 +147,12 @@ public class FftResult {
      *  rejection, or {@link Double#NaN} when mains suppression is off / unlocked.
      *  The worker only TRACKS it; the actual notch correction is applied on the
      *  displayed frame in {@code FftView} (so it runs once per painted frame, not
-     *  per averaging tick), using a cached per-bin response keyed on this value. */
+     *  per averaging cycle), using a cached per-bin response keyed on this value. */
     public double mainsF0Hz = Double.NaN;
     /** Pinned coherent fundamental bin (κ) for the plot-time .frc "before-cal"
-     *  re-derive, or {@link Double#NaN} for a single (non-averaged) tick.  The
-     *  worker owns the accumulator and sets this; the UI's post-average pipeline
-     *  consumes it (non-NaN => averaging). */
+     *  re-derive, or {@link Double#NaN} for a single (non-averaged) analysis
+     *  cycle.  The worker owns the accumulator and sets this; the UI's
+     *  post-average pipeline consumes it (non-NaN => averaging). */
     public double coherentKappa = Double.NaN;
     /** Channel this result was analyzed for ({@code true} = left) - picks the
      *  left/right .frc calibration in the UI's post-average pipeline. */
@@ -229,7 +229,8 @@ public class FftResult {
     // {@code re}/{@code im} at each product bin (the same trustworthy phase
     // the per-tone harmonics enjoy via the single-reference de-rotation).
     // Empty when the signal isn't dual-tone or the per-product de-rotation
-    // wasn't engaged this tick (F1's own harmonics live in {@code harmonic*}).
+    // wasn't engaged this analysis cycle (F1's own harmonics live in
+    // {@code harmonic*}).
     public int[] imdProductA;
     public int[] imdProductB;
     public int[] imdProductBin;
@@ -297,10 +298,10 @@ public class FftResult {
      *  atomically together via {@code lastResult = r}.  Lives in
      *  Result rather than as a separate volatile field on the worker
      *  to avoid a tearing race where the view reads "new pre / old
-     *  r" and renders BLUE based on a future tick's cumulative data
-     *  while RED still reflects the current tick - visible as the
-     *  BLUE dot jumping every few ticks even when the cal lookup
-     *  itself is bit-stable.
+     *  r" and renders BLUE based on a future analysis cycle's
+     *  cumulative data while RED still reflects the current cycle -
+     *  visible as the BLUE dot jumping every few cycles even when the
+     *  cal lookup itself is bit-stable.
      *  Layout: {@code [0] = freqs[], [1] = dBFs[]} with index 0
      *  holding the fundamental and indices 1..harmonicCount holding
      *  H2..HN.  {@code null} when no calibration is loaded. */
@@ -355,7 +356,7 @@ public class FftResult {
      *  Called from {@link FftAnalyzer#analyze} before the bin
      *  arrays are written so the analyzer can use {@code re} /
      *  {@code im} / {@code amplitudeDbFs} / {@code phaseDeg}
-     *  directly as its output buffers - no per-tick allocation. */
+     *  directly as its output buffers - no per-cycle allocation. */
     public void ensureArrays(int binCount, int harmonicCount) {
         if (amplitudeDbFs == null || amplitudeDbFs.length != binCount) {
             amplitudeDbFs = new double[binCount];
@@ -402,7 +403,7 @@ public class FftResult {
      *  later in-place mutation of the source (e.g. cal cascade
      *  re-write on the worker thread) doesn't perturb the copy.
      *  Use when a consumer needs a stable snapshot decoupled from
-     *  the live worker tick - e.g. a screenshot, a frozen
+     *  the live worker analysis cycle - e.g. a screenshot, a frozen
      *  comparison reference, or a paint that may outlive the next
      *  worker write. */
     public FftResult deepCopy() {

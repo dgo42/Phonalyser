@@ -305,10 +305,10 @@ public abstract class SignalBuffer {
      * relative to the current write position.
      *
      * <p>The wakeup half of the ring: the writer {@code notifyAll}s on every
-     * append AND on {@link #finish}, so a blocked consumer starts its tick the
+     * append AND on {@link #finish}, so a blocked consumer starts its cycle the
      * moment its data really exists - and reacts to device death immediately -
      * instead of sleeping a rate-derived estimate.  The predicate re-check per
-     * batch costs nanoseconds; consumers still run their expensive tick once
+     * batch costs nanoseconds; consumers still run their expensive cycle once
      * per requested span.
      */
     public synchronized long awaitAvailable(long fromPos, int count, long maxWaitMs)

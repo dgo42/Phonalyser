@@ -36,27 +36,28 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Cross-tick harmonic-stability harness under a DRIFTING DAC↔ADC clock.
+ * Cross-cycle harmonic-stability harness under a DRIFTING DAC↔ADC clock.
  *
  * <p>Unlike {@code FftHarmonicStabilityTest} (a single long {@code analyze()} call),
- * this drives the <b>real</b> {@link FftAnalyzerWorker} cross-tick path - the one the
- * live FFT view actually uses: one frame per tick, accumulated across
- * ticks by {@code accumulateIntoForeverBuffer} with its type-1
+ * this drives the <b>real</b> {@link FftAnalyzerWorker} cross-cycle path - the one the
+ * live FFT view actually uses: one frame per analysis cycle, accumulated across
+ * cycles by {@code accumulateIntoForeverBuffer} with its type-1
  * phase-lock loop, then read back via the accumulator's overlay
  * + {@link FftAnalyzer#recomputeStats}.  Only the Thread/Display/MessageBus plumbing
  * is bypassed; the accumulator + PLL are the production code, reached through
  * reflection because both worker members are private.
  *
  * <p>The capture is a continuous tone+harmonics whose frequency <b>chirps</b> at a
- * configurable rate (the DAC↔ADC relative drift).  The worker de-rotates each tick by
- * the whole-spectrum time-shift ramp (phase proportional to bin index, anchored on the
- * refined κ); the PLL tracks the FUNDAMENTAL phase and its sample-domain correction
- * reaches every harmonic ×h through the ramp - so under a common-clock drift the
- * whole coherent set must hold flat over depth.  ({@code 10 ppb/min = 0.01 ppm/min}
- * is the real NZ2520SDA rig; higher rates exaggerate any residual to see a breakdown.)
+ * configurable rate (the DAC↔ADC relative drift).  The worker de-rotates each analysis
+ * cycle by the whole-spectrum time-shift ramp (phase proportional to bin index,
+ * anchored on the refined κ); the PLL tracks the FUNDAMENTAL phase and its
+ * sample-domain correction reaches every harmonic ×h through the ramp - so under a
+ * common-clock drift the whole coherent set must hold flat over depth.
+ * ({@code 10 ppb/min = 0.01 ppm/min} is the real NZ2520SDA rig; higher rates exaggerate
+ * any residual to see a breakdown.)
  */
 @Tag("exploratory")   // slow diagnostic harness - excluded from the normal build (see pom surefire)
-class FftCrossTickDriftTest {
+class FftCrossCycleDriftTest {
 
     private static final int        SAMPLE_RATE    = 384_000;
     private static final int        FFT_SIZE       = 65_536;
@@ -73,8 +74,8 @@ class FftCrossTickDriftTest {
     private static final double     NOISE_STD      = 3.0e-6;
     private static final long       SEED           = 20_260_604L;
 
-    private static final int        TICKS          = 1000;              // cross-tick captures
-    private static final int        READOUT_EVERY  = 100;               // read accumulated harmonics every N ticks
+    private static final int        CYCLES         = 1000;              // cross-cycle captures
+    private static final int        READOUT_EVERY  = 100;               // read accumulated harmonics every N analysis cycles
     /** Relative DAC↔ADC drift rate, ppm/min.  0.01 ppm/min = 10 ppb/min (the rig). */
     private static final double[]   DRIFT_PPM_PER_MIN = {0.0, 0.01, 1.0, 10.0};
 
@@ -86,7 +87,7 @@ class FftCrossTickDriftTest {
     private static final String ACCUMULATE  = "accumulateIntoForeverBuffer";
     private static final String ACCUMULATOR = "accumulator";
 
-    private static final Logger LOG = LogManager.getLogger("FftCrossTickDrift");
+    private static final Logger LOG = LogManager.getLogger("FftCrossCycleDrift");
 
     /** The one place this harness reaches into the worker, so a renamed
      *  member fails here and not at a dozen call sites. */
@@ -108,12 +109,12 @@ class FftCrossTickDriftTest {
     }
 
     @Test
-    void crossTickHarmonicDriftSweep() {
+    void crossCycleHarmonicDriftSweep() {
         int hop    = Math.max(1, (int) Math.round(FFT_SIZE * (1.0 - OVERLAP.fraction)));
-        int winLen = FFT_SIZE;                                          // one frame per tick (worker geometry)
-        int total  = (TICKS - 1) * hop + winLen;
-        LOG.info("=== CROSS-TICK DRIFT: real worker PLL | {} ticks x 1 frame | {} pt {} {} | {} Hz ===",
-                TICKS, FFT_SIZE, WINDOW, OVERLAP.label, FUND_HZ);
+        int winLen = FFT_SIZE;                                          // one frame per analysis cycle (worker geometry)
+        int total  = (CYCLES - 1) * hop + winLen;
+        LOG.info("=== CROSS-CYCLE DRIFT: real worker PLL | {} analysis cycles x 1 frame | {} pt {} {} | {} Hz ===",
+                CYCLES, FFT_SIZE, WINDOW, OVERLAP.label, FUND_HZ);
 
         for (double driftPpmMin : DRIFT_PPM_PER_MIN) {
             double driftPerSample = driftPpmMin * 1e-6 / 60.0 / SAMPLE_RATE;   // relative Δf per sample
@@ -134,7 +135,7 @@ class FftCrossTickDriftTest {
             // biased low at the start for harmonics near the per-bin floor.)
             long base = 0;
             FftResult r;
-            for (int t = 0; t < TICKS; t++) {
+            for (int t = 0; t < CYCLES; t++) {
                 System.arraycopy(sig, (int) base, win, 0, winLen);
                 analyzer.setSpectrumOnly(true);
                 analyzer.setMultiTone(false);
@@ -152,9 +153,9 @@ class FftCrossTickDriftTest {
                                 ? r.harmonicDbFs[i] : Double.NaN;
                         sb.append(String.format(" H%d=%.2f", i + 2, h));
                     }
-                    LOG.info(String.format("  tick %4d  frames=%6d  fund=%.2f |%s",
+                    LOG.info(String.format("  cycle %4d  frames=%6d  fund=%.2f |%s",
                             t + 1, worker.getAccumulatedFrames(), r.fundamentalDbFs, sb));
-                    if (t + 1 == TICKS) {
+                    if (t + 1 == CYCLES) {
                         assertEquals(FUND_DBFS, r.fundamentalDbFs, 1.0,
                                 "fundamental off its set level at " + driftPpmMin + " ppm/min");
                         // 3 dB: the weakest harmonics sit ~12 dB above the
@@ -173,19 +174,20 @@ class FftCrossTickDriftTest {
     }
 
     // ── Random overlap: variable hop through the same worker path ──────────
-    /** The fixed-hop sweep's geometry with each tick's hop drawn uniformly
-     *  from the random mode's own overlap range.  The de-rotation and the
-     *  accumulator PLL ride absolute sample positions, so the readouts must
-     *  hold the same levels as the fixed-hop sweep at the same depth - any
-     *  hop-dependent term shows here as a fundamental or harmonic decline. */
+    /** The fixed-hop sweep's geometry with each analysis cycle's hop drawn
+     *  uniformly from the random mode's own overlap range.  The de-rotation
+     *  and the accumulator PLL ride absolute sample positions, so the
+     *  readouts must hold the same levels as the fixed-hop sweep at the same
+     *  depth - any hop-dependent term shows here as a fundamental or harmonic
+     *  decline. */
     @Test
-    void crossTickRandomHopSweep() {
+    void crossCycleRandomHopSweep() {
         int minHop = FftOverlap.RAND.minHopSamples(FFT_SIZE);
         int maxHop = FftOverlap.RAND.maxHopSamples(FFT_SIZE);
-        int winLen = FFT_SIZE;                              // one frame per tick
-        int total  = (TICKS - 1) * maxHop + winLen;
-        LOG.info("=== CROSS-TICK RANDOM HOP: {} ticks x 1 frame | hop in [{}..{}] | {} pt {} | {} Hz ===",
-                TICKS, minHop, maxHop, FFT_SIZE, WINDOW, FUND_HZ);
+        int winLen = FFT_SIZE;                              // one frame per analysis cycle
+        int total  = (CYCLES - 1) * maxHop + winLen;
+        LOG.info("=== CROSS-CYCLE RANDOM HOP: {} analysis cycles x 1 frame | hop in [{}..{}] | {} pt {} | {} Hz ===",
+                CYCLES, minHop, maxHop, FFT_SIZE, WINDOW, FUND_HZ);
 
         for (double driftPpmMin : DRIFT_PPM_PER_MIN) {
             double driftPerSample = driftPpmMin * 1e-6 / 60.0 / SAMPLE_RATE;
@@ -198,7 +200,7 @@ class FftCrossTickDriftTest {
 
             long base = 0;
             FftResult r;
-            for (int t = 0; t < TICKS; t++) {
+            for (int t = 0; t < CYCLES; t++) {
                 // The worker's lattice draw: part boundaries of the mode's range.
                 int hop = minHop + (1 + hopDraw.nextInt(FftOverlap.RAND_HOP_STEPS))
                         * ((maxHop - minHop) / FftOverlap.RAND_HOP_STEPS);
@@ -220,7 +222,7 @@ class FftCrossTickDriftTest {
                                 ? r.harmonicDbFs[i] : Double.NaN;
                         sb.append(String.format(" H%d=%.2f", i + 2, h));
                     }
-                    LOG.info(String.format("  tick %4d  frames=%6d  fund=%.2f |%s",
+                    LOG.info(String.format("  cycle %4d  frames=%6d  fund=%.2f |%s",
                             t + 1, worker.getAccumulatedFrames(), r.fundamentalDbFs, sb));
                 }
                 base += hop;
@@ -235,10 +237,10 @@ class FftCrossTickDriftTest {
      *  common-clock drift rate.  Product levels are read straight from the
      *  accumulated spectrum (they aren't harmonics of one fundamental). */
     @Test
-    void crossTickImdDriftSweep() {
+    void crossCycleImdDriftSweep() {
         int hop    = Math.max(1, (int) Math.round(FFT_SIZE * (1.0 - OVERLAP.fraction)));
         int winLen = FFT_SIZE + hop;
-        int total  = (TICKS - 1) * hop + winLen;
+        int total  = (CYCLES - 1) * hop + winLen;
         double binHz = (double) SAMPLE_RATE / FFT_SIZE;
 
         // F1, F2 on-bin and well-separated (outside BH7's ±190-bin lobes); products clean.
@@ -250,7 +252,7 @@ class FftCrossTickDriftTest {
         double[] freqs = new double[bins.length];
         for (int i = 0; i < bins.length; i++) freqs[i] = bins[i] * binHz;
 
-        LOG.info("=== CROSS-TICK IMD DRIFT: F1={} Hz F2={} Hz (both −30 dBFS) | products read direct ===",
+        LOG.info("=== CROSS-CYCLE IMD DRIFT: F1={} Hz F2={} Hz (both −30 dBFS) | products read direct ===",
                 String.format("%.1f", freqs[0]), String.format("%.1f", freqs[1]));
 
         for (double driftPpmMin : new double[]{0.0, 10.0}) {
@@ -267,7 +269,7 @@ class FftCrossTickDriftTest {
             double[] early = new double[bins.length];
             long base = 0;
             FftResult r;
-            for (int t = 0; t < TICKS; t++) {
+            for (int t = 0; t < CYCLES; t++) {
                 System.arraycopy(sig, (int) base, win, 0, winLen);
                 analyzer.setSpectrumOnly(true);
                 analyzer.setMultiTone(true);
@@ -285,9 +287,9 @@ class FftCrossTickDriftTest {
                         if (t + 1 == READOUT_EVERY * 5) early[i] = lv;
                         if (i >= pFrom) sb.append(String.format("  %s=%.1f", lbl[i], lv));
                     }
-                    LOG.info(String.format("  tick %4d  frames=%6d |%s",
+                    LOG.info(String.format("  cycle %4d  frames=%6d |%s",
                             t + 1, worker.getAccumulatedFrames(), sb));
-                    if (t + 1 == TICKS) {
+                    if (t + 1 == CYCLES) {
                         // The pair pools nothing by design, so under a strongly
                         // exaggerated common-clock drift the difference products
                         // compound the fundamental loop's lag with the pinned
@@ -308,16 +310,16 @@ class FftCrossTickDriftTest {
         }
     }
 
-    /** Reproduces the live F2-sink: two EQUAL tones with F2/F1 ≈ 1.05 so the per-tick
+    /** Reproduces the live F2-sink: two EQUAL tones with F2/F1 ≈ 1.05 so the per-cycle
      *  single-tone analyze (seeded fundamental = F1, "get fundamental from generator")
      *  snaps F2 to {@code h = round(F2/F1) = 1} and de-rotates it as F1.  F2/F1 = 1.7 in
      *  the other test rounds to an integer-cycle error and stays clean - this one
      *  used to bite.  Reads F1 & F2 levels vs averaging depth. */
     @Test
-    void crossTickDualToneSinkRepro() {
+    void crossCycleDualToneSinkRepro() {
         int hop    = Math.max(1, (int) Math.round(FFT_SIZE * (1.0 - OVERLAP.fraction)));
         int winLen = FFT_SIZE + hop;
-        int total  = (TICKS - 1) * hop + winLen;
+        int total  = (CYCLES - 1) * hop + winLen;
         double binHz = (double) SAMPLE_RATE / FFT_SIZE;
         int    f1Bin = 8533, f2Bin = 9047;                   // ratio->h=1; Δ=514 -> 0.25·514=128.5 -> 180° cancel
         double[] freqs = { f1Bin * binHz, f2Bin * binHz };
@@ -335,14 +337,14 @@ class FftCrossTickDriftTest {
             LOG.info(String.format("--- drift = %.3f ppm/min ---", driftPpmMin));
             long base = 0;
             FftResult r;
-            for (int t = 0; t < TICKS; t++) {
+            for (int t = 0; t < CYCLES; t++) {
                 System.arraycopy(sig, (int) base, win, 0, winLen);
                 analyzer.setSpectrumOnly(true);
                 analyzer.setMultiTone(true);
                 analyzer.setSecondToneHintHz(freqs[1]);
                 r = analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, HARMONIC_COUNT,
                         WINDOW, OVERLAP, 0.0, 0.0, true, Double.NaN, false, freqs[0]);  // seed fund = F1
-                if (t == 0) {   // SINGLE-capture levels - before any cross-tick accumulation
+                if (t == 0) {   // SINGLE-capture levels - before any cross-cycle accumulation
                     LOG.info(String.format("    single capture (1 avg):  F1=%.2f  F2=%.2f  (F2-F1=%.2f dB)",
                             r.amplitudeDbFs[f1Bin], r.amplitudeDbFs[f2Bin],
                             r.amplitudeDbFs[f2Bin] - r.amplitudeDbFs[f1Bin]));
@@ -351,9 +353,9 @@ class FftCrossTickDriftTest {
                 if ((t + 1) % (READOUT_EVERY * 2) == 0) {
                     overlay(worker, r);
                     double f1 = r.amplitudeDbFs[f1Bin], f2 = r.amplitudeDbFs[f2Bin];
-                    LOG.info(String.format("  tick %4d  frames=%6d |  F1=%.2f  F2=%.2f  (F2-F1=%.2f dB)",
+                    LOG.info(String.format("  cycle %4d  frames=%6d |  F1=%.2f  F2=%.2f  (F2-F1=%.2f dB)",
                             t + 1, worker.getAccumulatedFrames(), f1, f2, f2 - f1));
-                    if (t + 1 == TICKS) {
+                    if (t + 1 == CYCLES) {
                         // Equal close-spaced tones must both survive the deep
                         // average - the historical defect cancelled F2 here.
                         assertTrue(Math.abs(f2 - f1) <= 2.0,
@@ -370,7 +372,7 @@ class FftCrossTickDriftTest {
      *  analysed.  Logs F1/F2 and the second-tone refine so we can see
      *  whether the dual-tone detection engaged. */
     @Test
-    void crossTickImd2M() {
+    void crossCycleImd2M() {
         final int FFT = 2_097_152;
         int winLen = FFT;
         double binHz = (double) SAMPLE_RATE / FFT;
@@ -402,7 +404,7 @@ class FftCrossTickDriftTest {
      *  Products at a·F1+b·F2 get snapped to the nearest F1-harmonic, so they cancel
      *  asymmetrically by their residual - set vs measured shows which sink. */
     @Test
-    void crossTickImdProducts2M() {
+    void crossCycleImdProducts2M() {
         final int FFT = 2_097_152;
         int winLen = FFT;
         double binHz = (double) SAMPLE_RATE / FFT;
@@ -430,21 +432,21 @@ class FftCrossTickDriftTest {
     }
 
     /** Off-bin twin tones carrying a shared relative-frequency WOBBLE
-     *  (δ(k)=A·sin, ~8-tick period - the residual an alignment loop leaves), products
-     *  synthesized as tones at a·F1+b·F2 (each inherits the same relative wobble).
-     *  Accumulated over many ticks; reads the COHERENT level's drift (tick 50 -> last),
-     *  which is the de-coherence the wobble induces as the type-1 PLL lags the moving
-     *  frequency.  The one-shot κ refine pins the tick-0 κ but cannot FOLLOW a moving
-     *  frequency, so a residual wobble stays visible here.  wobble=0 is the
-     *  constant-offset baseline (the PLL holds it flat). */
+     *  (δ(k)=A·sin, ~8-analysis-cycle period - the residual an alignment loop leaves),
+     *  products synthesized as tones at a·F1+b·F2 (each inherits the same relative
+     *  wobble).  Accumulated over many analysis cycles; reads the COHERENT level's
+     *  drift (cycle 50 -> last), which is the de-coherence the wobble induces as the
+     *  type-1 PLL lags the moving frequency.  The one-shot κ refine pins the cycle-0 κ
+     *  but cannot FOLLOW a moving frequency, so a residual wobble stays visible here.
+     *  wobble=0 is the constant-offset baseline (the PLL holds it flat). */
     @Test
-    void crossTickImdWobbleLock() {
+    void crossCycleImdWobbleLock() {
         int hop    = Math.max(1, (int) Math.round(FFT_SIZE * (1.0 - OVERLAP.fraction)));
         int winLen = FFT_SIZE + hop;
-        int ticks  = 400;
-        int total  = (ticks - 1) * hop + winLen;
+        int cycles = 400;
+        int total  = (cycles - 1) * hop + winLen;
         double binHz = (double) SAMPLE_RATE / FFT_SIZE;
-        double tau = 4.0 * hop;   // ~4-tick relative-frequency wobble correlation time
+        double tau = 4.0 * hop;   // ~4-analysis-cycle relative-frequency wobble correlation time
 
         // F1, F2 OFF-bin by a fractional bin; products at a·F1+b·F2 (also off-bin).
         double f1 = (1000 + 0.37) * binHz, f2 = (1700 + 0.29) * binHz;
@@ -454,9 +456,9 @@ class FftCrossTickDriftTest {
         int[] bins = new int[freqs.length];
         for (int i = 0; i < freqs.length; i++) bins[i] = (int) Math.round(freqs[i] / binHz);
 
-        LOG.info("=== CROSS-TICK IMD WOBBLE LOCK: F1={} F2={} off-bin, wobble τ~{} ticks, {} ticks ===",
+        LOG.info("=== CROSS-CYCLE IMD WOBBLE LOCK: F1={} F2={} off-bin, wobble τ~{} analysis cycles, {} cycles ===",
                 String.format("%.3f", f1), String.format("%.3f", f2),
-                String.format("%.0f", tau / hop), ticks);
+                String.format("%.0f", tau / hop), cycles);
 
         for (double wobblePpm : new double[]{0.0, 0.05, 0.5}) {
             double[] sig = synthesizeWobble(SEED, total, wobblePpm * 1e-6, tau, freqs, dbfs);
@@ -465,7 +467,7 @@ class FftCrossTickDriftTest {
             double[] win = new double[winLen];
             double[] early = new double[freqs.length], late = new double[freqs.length];
             long base = 0;
-            for (int t = 0; t < ticks; t++) {
+            for (int t = 0; t < cycles; t++) {
                 System.arraycopy(sig, (int) base, win, 0, winLen);
                 analyzer.setSpectrumOnly(true);
                 analyzer.setMultiTone(true);
@@ -473,7 +475,7 @@ class FftCrossTickDriftTest {
                 FftResult r = analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, HARMONIC_COUNT,
                         WINDOW, OVERLAP, 0.0, 0.0, true, Double.NaN, false, Double.NaN);
                 call(worker, ACCUMULATE, r, base, true, Integer.MAX_VALUE);
-                if (t == 50 || t == ticks - 1) {
+                if (t == 50 || t == cycles - 1) {
                     overlay(worker, r);
                     double[] dst = (t == 50) ? early : late;
                     for (int i = 0; i < freqs.length; i++) {
@@ -483,7 +485,7 @@ class FftCrossTickDriftTest {
                 }
                 base += hop;
             }
-            LOG.info(String.format("--- wobble = %.2f ppm  (tick 50 -> %d) ---", wobblePpm, ticks));
+            LOG.info(String.format("--- wobble = %.2f ppm  (cycle 50 -> %d) ---", wobblePpm, cycles));
             for (int i = 0; i < freqs.length; i++) {
                 LOG.info(String.format("  %-7s %8.2f -> %8.2f dBFS   (drift %+.2f)",
                         lbl[i], early[i], late[i], late[i] - early[i]));
@@ -493,15 +495,16 @@ class FftCrossTickDriftTest {
 
     /** An off-bin, unlocked line (a mains stand-in) among on-bin content: the
      *  whole-spectrum ramp rotates its bins by the BIN frequency, not the line's
-     *  own, so its tick phasors never align and the line must average DOWN while
-     *  the on-bin fundamental holds.  This is the seam-free replacement for the
-     *  region schemes whose boundaries printed a pedestal around such a line. */
+     *  own, so its analysis-cycle phasors never align and the line must average
+     *  DOWN while the on-bin fundamental holds.  This is the seam-free
+     *  replacement for the region schemes whose boundaries printed a pedestal
+     *  around such a line. */
     @Test
-    void crossTickOffBinLineDecays() {
+    void crossCycleOffBinLineDecays() {
         int hop    = Math.max(1, (int) Math.round(FFT_SIZE * (1.0 - OVERLAP.fraction)));
         int winLen = FFT_SIZE + hop;
-        int ticks  = 400;
-        int total  = (ticks - 1) * hop + winLen;
+        int cycles = 400;
+        int total  = (cycles - 1) * hop + winLen;
         double binHz = (double) SAMPLE_RATE / FFT_SIZE;
         int    fundBin = 1000, lineBin = 500;
         double[] freqs = { fundBin * binHz, (lineBin + 0.41) * binHz };   // line off-bin by 0.41
@@ -513,7 +516,7 @@ class FftCrossTickDriftTest {
         double[] win = new double[winLen];
         double fund0 = Double.NaN, line0 = Double.NaN, fundLate = Double.NaN, lineLate = Double.NaN;
         long base = 0;
-        for (int t = 0; t < ticks; t++) {
+        for (int t = 0; t < cycles; t++) {
             System.arraycopy(sig, (int) base, win, 0, winLen);
             analyzer.setSpectrumOnly(true);
             analyzer.setMultiTone(false);
@@ -525,15 +528,15 @@ class FftCrossTickDriftTest {
                 line0 = Math.max(r.amplitudeDbFs[lineBin], r.amplitudeDbFs[lineBin + 1]);
             }
             call(worker, ACCUMULATE, r, base, true, Integer.MAX_VALUE);
-            if (t == ticks - 1) {
+            if (t == cycles - 1) {
                 overlay(worker, r);
                 fundLate = r.amplitudeDbFs[fundBin];
                 lineLate = Math.max(r.amplitudeDbFs[lineBin], r.amplitudeDbFs[lineBin + 1]);
             }
             base += hop;
         }
-        LOG.info(String.format("=== OFF-BIN LINE DECAY: fund %.2f -> %.2f dBFS, line %.2f -> %.2f dBFS over %d ticks ===",
-                fund0, fundLate, line0, lineLate, ticks));
+        LOG.info(String.format("=== OFF-BIN LINE DECAY: fund %.2f -> %.2f dBFS, line %.2f -> %.2f dBFS over %d analysis cycles ===",
+                fund0, fundLate, line0, lineLate, cycles));
         assertEquals(fund0, fundLate, 1.0, "on-bin fundamental must hold through the deep average");
         assertTrue(lineLate <= line0 - 10.0,
                 "off-bin line must average down; was " + String.format("%.2f -> %.2f", line0, lineLate));
@@ -589,7 +592,7 @@ class FftCrossTickDriftTest {
      *  stationary std {@code wobbleAmp} and correlation time {@code tauSamples}, the
      *  bounded residual a NOISY alignment loop leaves around its target.  Unlike a
      *  clean sinusoid (whose lag averages out), a random walk de-correlates the phase,
-     *  so it actually de-coheres the cross-tick sum when the loop can't follow it.
+     *  so it actually de-coheres the cross-cycle sum when the loop can't follow it.
      *  Phase integrated per sample: φ_i(k)=w_i·(k+Σδ) - every tone (and the product
      *  tones) wobbles by the SAME relative amount, as a shared DAC↔ADC clock would. */
     private static double[] synthesizeWobble(long seed, int n, double wobbleAmp, double tauSamples,

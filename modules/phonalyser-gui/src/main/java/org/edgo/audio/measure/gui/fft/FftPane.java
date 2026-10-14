@@ -425,7 +425,7 @@ public final class FftPane extends AbstractPane {
     /** Forces the scrollbar thumb / position and the view to refresh
      *  from the current Preferences.  Needed by the screenshot path
      *  because the offscreen pane's controller never runs an analysis
-     *  tick - the usual {@code onAnalysisPublished} pipeline that
+     *  cycle - the usual {@code onAnalysisPublished} pipeline that
      *  drives {@link #syncFftPan()} doesn't fire there.
      *  Call after {@code controller.setLastResult} and
      *  {@code setTabsCollapsed} so the snapshot is fully laid out. */

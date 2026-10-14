@@ -669,7 +669,7 @@ public final class PreferencesDialog {
         Bindings.stepFieldInt(fftDotDiameterSel, edit.fftHarmonicDotDiameterProperty());
 
         // Multi-tone detect threshold (dB below the strongest peak): for
-        // cross-tick coherent averaging a spectral peak is treated as a separate
+        // cross-cycle coherent averaging a spectral peak is treated as a separate
         // tone only if within this many dB of the strongest.  Lower it so a
         // tone's harmonics / IMD products aren't taken as independent tones
         // (which would route the average onto the per-tone multi-tone path).

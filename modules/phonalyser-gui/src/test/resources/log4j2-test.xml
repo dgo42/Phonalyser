@@ -27,9 +27,9 @@
               fileName="${sys:app.log.dir:-target/test-logs}/fft-harmonic-stability.log" append="false">
             <PatternLayout pattern="%d{HH:mm:ss.SSS} %msg%n"/>
         </File>
-        <!-- Independent log for the cross-tick drift test, overwritten each run. -->
-        <File name="FftCrossTickDriftFile"
-              fileName="${sys:app.log.dir:-target/test-logs}/fft-cross-tick-drift.log" append="false">
+        <!-- Independent log for the cross-cycle drift test, overwritten each run. -->
+        <File name="FftCrossCycleDriftFile"
+              fileName="${sys:app.log.dir:-target/test-logs}/fft-cross-cycle-drift.log" append="false">
             <PatternLayout pattern="%d{HH:mm:ss.SSS} %msg%n"/>
         </File>
         <!-- Independent log for the FLL transport-delay sweep, overwritten each run. -->
@@ -44,8 +44,8 @@
             <AppenderRef ref="FftHarmonicStabilityFile"/>
             <AppenderRef ref="Console"/>
         </Logger>
-        <Logger name="FftCrossTickDrift" level="INFO" additivity="false">
-            <AppenderRef ref="FftCrossTickDriftFile"/>
+        <Logger name="FftCrossCycleDrift" level="INFO" additivity="false">
+            <AppenderRef ref="FftCrossCycleDriftFile"/>
             <AppenderRef ref="Console"/>
         </Logger>
         <Logger name="FllTransport" level="INFO" additivity="false">

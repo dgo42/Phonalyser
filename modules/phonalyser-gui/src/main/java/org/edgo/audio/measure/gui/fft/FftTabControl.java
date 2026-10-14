@@ -434,7 +434,8 @@ public final class FftTabControl extends AbstractTabControl {
         overlapCombo.setToolTipText(I18n.t("fft.settings.overlap.tooltip"));
         Bindings.combo(overlapCombo, prefs.fftOverlapProperty(), FftOverlap.values());
         // Overlap only changes the hop, not the spectrum/accumulator - refresh
-        // the tab tile but DON'T reset the average; the worker adapts next tick.
+        // the tab tile but DON'T reset the average; the worker adapts next
+        // analysis cycle.
         Bindings.onChange(toolbarTabs, prefs.fftOverlapProperty(),
                 v -> toolbarTabs.refreshTab(TAB_FFT_SETTINGS));
 

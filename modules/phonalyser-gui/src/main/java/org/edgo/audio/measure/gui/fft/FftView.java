@@ -355,8 +355,9 @@ public final class FftView extends AbstractFreqDomainView {
             tableModeIsImd = prefs.getGenSignalForm().isDualTone();
             // Mode just flipped (THD ↔ IMD): refresh the extracted window's
             // title + size.  It's set at create time and on form-change, but
-            // tableModeIsImd only updates here - one tick later - so without
-            // this the title keeps the old mode (e.g. "IMD" while showing THD).
+            // tableModeIsImd only updates here - one analysis cycle later - so
+            // without this the title keeps the old mode (e.g. "IMD" while
+            // showing THD).
             if (tableModeIsImd != prevTableModeIsImd) syncExternalShell();
             // Flag the new result; the main event loop's realtime render tick
             // repaints it (see renderRealtimeFrame) instead of painting inline,
@@ -370,8 +371,8 @@ public final class FftView extends AbstractFreqDomainView {
      *  ({@code fft.warning.overrun}), a signal discontinuity
      *  ({@code fft.warning.discontinuity}) or a remote bench's own confessed loss
      *  ({@code fft.warning.netGap}).  Raises a PERSISTENT blinking banner
-     *  (no fixed timer): the worker emits no result on a re-sync tick and
-     *  re-anchors, so the next FFT result is the first fully-reloaded window -
+     *  (no fixed timer): the worker emits no result on a re-sync analysis cycle
+     *  and re-anchors, so the next FFT result is the first fully-reloaded window -
      *  whereupon {@link #onResultReady}'s {@link #clearBannerIfStale()} drops it.
      *  Also cleared on a statistics reset and on Record stop.
      *
@@ -439,7 +440,7 @@ public final class FftView extends AbstractFreqDomainView {
 
     /** Latest published analysis result - a deep copy taken on the
      *  worker thread inside {@code publishResult} before it crossed
-     *  the bus.  {@code null} before the first successful tick.
+     *  the bus.  {@code null} before the first successful analysis cycle.
      *  Mutating this snapshot is safe: the worker no longer holds a
      *  reference, so paint code and the pane's Save-CSV / screenshot
      *  paths can read or even mutate it without coordinating with the
@@ -724,10 +725,10 @@ public final class FftView extends AbstractFreqDomainView {
                 // What the analyser says is inside the average, shown as it
                 // stands: the window length once a moving average has filled
                 // it, climbing without limit under "forever".
-                // The cross-tick accumulator math (forever mode) makes
-                // each displayed tick contribute additional SNR depth -
+                // The cross-cycle accumulator math (forever mode) makes each
+                // displayed analysis cycle contribute additional SNR depth -
                 // the actual frames-averaged depth is roughly 2× the
-                // displayed N because each forever tick contributes
+                // displayed N because each forever cycle contributes
                 // ~2 FFT frames to the running sum.
                 int n = getAveragesInWindow();
                 String ns = I18n.t("fft.avgCount.label", String.valueOf(n));
@@ -760,9 +761,9 @@ public final class FftView extends AbstractFreqDomainView {
         // Paint-on-result: subscribe to FFT_RESULT_AVAILABLE (published
         // by the worker on the UI thread after each analysis) and force
         // the paint to fire synchronously rather than letting SWT
-        // coalesce multiple per-tick redraws into one delayed paint.
-        // At typical analysis cadences (1-5 ticks per second) the
-        // per-tick paint cost is well under the hop interval, so
+        // coalesce multiple per-cycle redraws into one delayed paint.
+        // At typical analysis cadences (1-5 analysis cycles per second) the
+        // per-cycle paint cost is well under the hop interval, so
         // blocking the UI thread for this paint is negligible.
         MessageBus bus = MessageBus.instance();
         bus.subscribe(Events.FFT_RESULT_AVAILABLE, onResultReady);
@@ -823,7 +824,7 @@ public final class FftView extends AbstractFreqDomainView {
         Bindings.onChange(this, viewPrefs.fftLogFreqAxisProperty(),      v -> redraw());
         // THD settings (HP/LP distortion band, manual fundamental, max harmonics):
         // repaint, and for a displayed STATIC spectrum re-apply them + recompute
-        // (the live worker already re-reads them every tick).
+        // (the live worker already re-reads them every analysis cycle).
         Bindings.onChange(this, viewPrefs.fftDistMinEnabledProperty(),    v -> onThdSettingChanged());
         Bindings.onChange(this, viewPrefs.fftDistMinHzProperty(),         v -> onThdSettingChanged());
         Bindings.onChange(this, viewPrefs.fftDistMaxEnabledProperty(),    v -> onThdSettingChanged());
@@ -1081,13 +1082,14 @@ public final class FftView extends AbstractFreqDomainView {
         //    after step 3 - because the readouts they start from are the ones
         //    that recompute produces: while averaging, the analysis carries no
         //    statistics at all, so a level read before the recompute is whatever
-        //    an earlier tick left behind and lands the dot anywhere.  The
-        //    measured level is therefore the recomputed post-cal level plus the
-        //    cascade's gain at the tone's own bin - what the correction took off
-        //    that bin, added back.  The cal is looked up at the PINNED coherent
-        //    fundamental bin: the single-tick fundamentalHzRefined jitters and
-        //    dances the lookup point.  A single tick keeps the step-2 snapshot,
-        //    which is the raw spectrum's own readouts, taken before the divide.
+        //    an earlier analysis cycle left behind and lands the dot anywhere.
+        //    The measured level is therefore the recomputed post-cal level plus
+        //    the cascade's gain at the tone's own bin - what the correction took
+        //    off that bin, added back.  The cal is looked up at the PINNED
+        //    coherent fundamental bin: the single-cycle fundamentalHzRefined
+        //    jitters and dances the lookup point.  A single analysis cycle keeps
+        //    the step-2 snapshot, which is the raw spectrum's own readouts,
+        //    taken before the divide.
         if (calibrated && accumulated) {
             int hc = r.harmonicCount;
             double[] preFreqs = new double[1 + hc];
@@ -1203,7 +1205,7 @@ public final class FftView extends AbstractFreqDomainView {
     /** A THD setting (HP/LP band, manual fundamental, max harmonics) changed.
      *  For a displayed STATIC spectrum (not a live capture) re-apply the settings
      *  and recompute its THD / harmonics, then repaint.  During live capture the
-     *  worker re-reads these every tick, so this only repaints. */
+     *  worker re-reads these every analysis cycle, so this only repaints. */
     private void onThdSettingChanged() {
         if (isDisposed()) return;
         if (lastResult != null && !controller.isRecording()) {
@@ -1767,9 +1769,9 @@ public final class FftView extends AbstractFreqDomainView {
 
         // "Before-cal" dots - painted FIRST so the corrected (red)
         // dots sit on top.  Pulled from the SAME r snapshot used for
-        // the post-cal dots so both share one tick's harmonicHz
+        // the post-cal dots so both share one analysis cycle's harmonicHz
         // values - the snapshot was deep-copied at publish time, so
-        // BLUE and RED can never end up from different ticks.
+        // BLUE and RED can never end up from different cycles.
         double[][] before = r.preCorrectionPeaks;
         if (before != null && before.length == 2
                 && before[0] != null && before[1] != null) {

@@ -83,25 +83,25 @@ import lombok.extern.log4j.Log4j2;
 @Log4j2
 public final class FftAnalyzerWorker {
 
-    /** Idle tick when there's no buffer / not enough fresh samples. */
-    private static final int IDLE_TICK_MS = 250;
+    /** Idle analysis cycle when there's no buffer / not enough fresh samples. */
+    private static final int IDLE_CYCLE_MS = 250;
     /** Maximum sleep between analysis attempts. */
     private static final int MAX_SLEEP_MS = 250;
-    /** Per-tick display throttle: the cross-tick accumulator runs every tick, but
-     *  the O(N) display rebuild (overlay + recomputeStats + dBV lift + deep-copy
-     *  publish) is gated to AT MOST one per {@code DISPLAY_MIN_NANOS} when caught
-     *  up, and SKIPPED while the capture backlog is high so the worker catches up
-     *  instead of overrunning - but never deferred past {@code DISPLAY_MAX_NANOS}
-     *  so the view can't freeze. */
+    /** Per-cycle display throttle: the cross-cycle accumulator runs every analysis
+     *  cycle, but the O(N) display rebuild (overlay + recomputeStats + dBV lift +
+     *  deep-copy publish) is gated to AT MOST one per {@code DISPLAY_MIN_NANOS} when
+     *  caught up, and SKIPPED while the capture backlog is high so the worker
+     *  catches up instead of overrunning - but never deferred past
+     *  {@code DISPLAY_MAX_NANOS} so the view can't freeze. */
     private static final long DISPLAY_MIN_NANOS =  40_000_000L;   // ≤25 Hz refresh when keeping up
     private static final long DISPLAY_MAX_NANOS = 500_000_000L;   // ≥2 Hz even while behind
-    /** Mains-comb re-track cadence in analysis ticks.  The tracker's lock
-     *  is an EWMA with ≈33-detection memory, so tracking every Nth tick
+    /** Mains-comb re-track cadence in analysis cycles.  The tracker's lock
+     *  is an EWMA with ≈33-detection memory, so tracking every Nth cycle
      *  changes the smoothed lock negligibly while freeing the ~208
-     *  Goertzel sweeps (30-80 ms at large fftSize) from most ticks -
+     *  Goertzel sweeps (30-80 ms at large fftSize) from most cycles -
      *  budget that 93.75 % overlap at 1 M needs to stay under its 170 ms
      *  hop. */
-    private static final int MAINS_TRACK_TICK_INTERVAL = 5;
+    private static final int MAINS_TRACK_CYCLE_INTERVAL = 5;
     /** Lowest harmonic ORDER the analysis always evaluates, whatever the
      *  preference states: the ladder H2 to H9 the distortion readouts are
      *  built on.  The count handed to the analysis is one less - it counts
@@ -131,12 +131,12 @@ public final class FftAnalyzerWorker {
     private boolean captureHeld;
     private final    AtomicBoolean      paused = new AtomicBoolean(false);
     /** Armed by a change of the generated signal - the bus event the average
-     *  restarts on - and consumed on the worker's thread at the next tick: the
+     *  restarts on - and consumed on the worker's thread at the next cycle: the
      *  alignment starts afresh, with a new reference baseline and the pilot
      *  elected again.  A tone that changed has a new phase through the notch,
      *  so an excess taken on the old tone would be applied to the new one. */
     private final    AtomicBoolean      alignRestartPending = new AtomicBoolean(false);
-    /** Bumped by every {@link #resetStatistics()}.  An analysis tick stamps
+    /** Bumped by every {@link #resetStatistics()}.  An analysis cycle stamps
      *  the epoch at its start and discards its result when a reset landed
      *  while it was assembling / analysing: such a window straddles the
      *  signal change - accumulating it would poison the freshly cleared
@@ -144,9 +144,9 @@ public final class FftAnalyzerWorker {
      *  trim (enough to drag the live generator far off-frequency). */
     private final    AtomicLong         resetEpoch = new AtomicLong();
     /** Set by {@link #resetStatistics()} while the worker runs; consumed at
-     *  the top of the next tick, where the worker itself wipes the
+     *  the top of the next analysis cycle, where the worker itself wipes the
      *  accumulator / mains tracking.  Those structures are worker-owned and
-     *  not thread-safe - wiping them from the resetting thread mid-tick can
+     *  not thread-safe - wiping them from the resetting thread mid-cycle can
      *  NPE the accumulate loops or leave the detector half-reset. */
     private final    AtomicBoolean      resetPending = new AtomicBoolean();
     /** Companion to {@link #resetPending} for resets caused by a change of
@@ -158,27 +158,27 @@ public final class FftAnalyzerWorker {
     /** Samples still to discard after a signal-change re-anchor
      *  (worker-thread only). */
     private long drainSkipRemaining;
-    /** Sample count the NEXT inter-tick wait is for, set by
+    /** Sample count the NEXT inter-cycle wait is for, set by
      *  {@link #doAnalysis}'s data-driven wait sites and consumed by
      *  {@link #workerLoop}: the loop then BLOCKS on the ring
      *  ({@link SignalBufferReader#awaitAvailable}) until that many fresh
      *  samples exist - waking exactly when the next span is ready, and
      *  instantly on capture death - instead of sleeping a rate-derived
-     *  estimate.  {@code 0} = the wait is time-driven (idle tick).
+     *  estimate.  {@code 0} = the wait is time-driven (idle cycle).
      *  Worker-thread only. */
     private int awaitSamplesNext;
-    /** Ticks since the mains comb was last re-tracked (worker-thread
-     *  only); see {@link #MAINS_TRACK_TICK_INTERVAL}. */
-    private int  mainsTrackTick;
+    /** Analysis cycles since the mains comb was last re-tracked (worker-thread
+     *  only); see {@link #MAINS_TRACK_CYCLE_INTERVAL}. */
+    private int  mainsTrackCycle;
     /** Single-slot, coalescing handoff of the latest result to the UI thread.
-     *  The worker overwrites it every tick (newest wins) and posts ONE drain
+     *  The worker overwrites it every cycle (newest wins) and posts ONE drain
      *  runnable only on the empty->full transition, so the SWT asyncExec queue
      *  never accumulates more than one multi-MB spectrum however far the UI
-     *  repaint falls behind the (parallelized, fast) per-tick production. */
+     *  repaint falls behind the (parallelized, fast) per-cycle production. */
     private final AtomicReference<FftResult> latestForUi = new AtomicReference<>();
     /** Recycled {@link FftResult} slots.  A slot is acquired at the top of
-     *  a tick and released exactly once - on every discard path, on a
-     *  coalesce overwrite in {@link #publishResult}, or after the
+     *  an analysis cycle and released exactly once - on every discard path,
+     *  on a coalesce overwrite in {@link #publishResult}, or after the
      *  synchronous bus dispatch in the drain runnable (subscribers
      *  deep-copy what they keep, so the slot is free once {@code publish}
      *  returns).  In steady state at most 3 slots circulate (one being
@@ -217,8 +217,8 @@ public final class FftAnalyzerWorker {
 
     // ─── Contiguous sliding analysis window ─────────────────────────────────
     /** The selected channel's contiguous analysis window, slid forward one
-     *  hop per tick by pulling fresh samples from {@link #reader} (a consuming
-     *  FIFO cursor).  Retained across ticks - the overlap region - so overlap
+     *  hop per cycle by pulling fresh samples from {@link #reader} (a consuming
+     *  FIFO cursor).  Retained across cycles - the overlap region - so overlap
      *  works WITHOUT re-reading the ring.  {@link #winValid} marks it as
      *  holding a full {@code needed}-sample contiguous block; a window-size /
      *  channel change or a capture overrun invalidates it and it is rebuilt
@@ -236,21 +236,21 @@ public final class FftAnalyzerWorker {
     private volatile boolean winValid;
     /** Samples of the pending window / hop already gathered into
      *  {@link #winBuf} / {@link #hopBuf}.  A span is collected across as many
-     *  ticks as it takes - it may be far longer than the capture ring - so
-     *  these count the progress through it; both are cleared together with
-     *  {@link #winValid} by {@link #invalidateWindow()}, because a rebuild must
-     *  never splice samples from either side of a re-anchor.  Worker-thread
-     *  only; volatile for the UI's next-frame progress readout. */
+     *  analysis cycles as it takes - it may be far longer than the capture
+     *  ring - so these count the progress through it; both are cleared
+     *  together with {@link #winValid} by {@link #invalidateWindow()}, because
+     *  a rebuild must never splice samples from either side of a re-anchor.
+     *  Worker-thread only; volatile for the UI's next-frame progress readout. */
     private volatile int winFill;
     private volatile int hopFill;
     /** Set on (re)start / reset; the worker re-anchors {@link #reader} to the
-     *  latest sample on its next tick so the window rebuilds from fresh data
+     *  latest sample on its next cycle so the window rebuilds from fresh data
      *  (no stale pre-reset samples leak in).  Re-anchoring on the worker thread
      *  keeps the cursor single-owner even though resets arrive from others. */
     private volatile boolean reAnchorPending = true;
-    /** Reusable per-tick scratch: {@code analyzeBuf} is the analysis copy (the
+    /** Reusable per-cycle scratch: {@code analyzeBuf} is the analysis copy (the
      *  comb / FFT window mutate it in place, so it must not be {@link #winBuf}),
-     *  {@code hopBuf} stages the fresh hop pulled from the reader each tick.
+     *  {@code hopBuf} stages the fresh hop pulled from the reader each cycle.
      *  {@code hopBuf} is sized to the LARGEST possible hop of the current
      *  configuration and only its first {@link #pendingHopSamples} entries are
      *  in use - a random-mode hop change must never resize it mid-gather,
@@ -288,11 +288,11 @@ public final class FftAnalyzerWorker {
      *  mode that keeps no mirror: the trace reads the mirror, it steers
      *  nothing. */
     private boolean  refMirrorForTrace;
-    /** The hop the window slides by next - drawn per tick in the random
+    /** The hop the window slides by next - drawn per analysis cycle in the random
      *  overlap mode, constant otherwise.  FROZEN while its gather is in
      *  flight: it is redrawn only after the slide it sizes has completed.
      *  It is also the spacing between the analysis buffer's two frames, so
-     *  the second frame of one tick is exactly the first frame of the next
+     *  the second frame of one cycle is exactly the first frame of the next
      *  and the raw-frame cache keeps hitting.  Volatile for the UI's
      *  next-frame progress readout. */
     private volatile int pendingHopSamples;
@@ -321,7 +321,7 @@ public final class FftAnalyzerWorker {
     private Thread worker;
 
     // Perf instrumentation for DebugSwitches.SHOW_FFT_ANALYZE_TIME - two
-    // nanoTime marks splitting a tick's latency into its two legs.
+    // nanoTime marks splitting an analysis cycle's latency into its two legs.
     /** Set at the top of {@code doAnalysis()}; logged against it at the end of
      *  the analysis ("1. FFT analyze took") - the pure worker-thread compute time. */
     private long startAnalyze;
@@ -336,7 +336,7 @@ public final class FftAnalyzerWorker {
     private volatile long accumConfigFingerprint = Long.MIN_VALUE;
     /** {@link Events#GENERATOR_SIGNAL_CHANGED}: a changed tone ends the
      *  alignment's collection, consumed by the worker's own thread at the next
-     *  tick (see {@link #alignRestartPending}).  An FLL trim is a sub-Hz
+     *  cycle (see {@link #alignRestartPending}).  An FLL trim is a sub-Hz
      *  alignment of the generator with the FFT bin grid, under which the
      *  averaging KEEPS running so the lock converges. */
     private final Consumer<GenChangeCause> alignRestartOnGenChange = cause -> {
@@ -347,9 +347,9 @@ public final class FftAnalyzerWorker {
      *  mode decides what the time base is, so nothing measured under the old
      *  one may be applied under the new.  Entering the pilot mode elects a
      *  pilot and asks the generator for it; leaving it is answered by the
-     *  take-down the tick makes itself.  Written on the thread that changes
-     *  the setting and consumed by the worker's own at the next tick, like a
-     *  changed tone. */
+     *  take-down the analysis cycle makes itself.  Written on the thread that
+     *  changes the setting and consumed by the worker's own at the next cycle,
+     *  like a changed tone. */
     private final Consumer<FundamentalPhaseAlignment> alignModeChanged =
             mode -> alignRestartPending.set(true);
     /** The pilot lines' level (dBV) and the margin (dB) a line must hold over
@@ -373,15 +373,15 @@ public final class FftAnalyzerWorker {
      *  generator for its pair and clears it. */
     private boolean  emittedPairPending = true;
 
-    // ─── Cross-tick accumulator (forever-mode only) ────────────────────────
-    /** Absolute sample-stream position of the first contributing tick's
-     *  frame-0 (= its {@code samplesAbsStart}).  Every subsequent tick's
-     *  spectrum is phase-rotated by the time delta from this reference
-     *  to keep tones coherent across ticks. */
+    // ─── Cross-cycle accumulator (forever-mode only) ───────────────────────
+    /** Absolute sample-stream position of the first contributing analysis
+     *  cycle's frame-0 (= its {@code samplesAbsStart}).  Every subsequent
+     *  cycle's spectrum is phase-rotated by the time delta from this reference
+     *  to keep tones coherent across analysis cycles. */
     private long    accumRefSampleStart;
-    /** The tones' reference phases on the reference tick, radians, or
-     *  {@link Double#NaN} where that tick read none - {@link #referenceTone1Rad}
-     *  and {@link #referenceTone2Rad} as they stood then: a tick's rotation is
+    /** The tones' reference phases on the reference analysis cycle, radians, or
+     *  {@link Double#NaN} where that cycle read none - {@link #referenceTone1Rad}
+     *  and {@link #referenceTone2Rad} as they stood then: a cycle's rotation is
      *  its own reading less this one, in either aligning mode. */
     private double  accumRefTone1Rad = Double.NaN;
     private double  accumRefTone2Rad = Double.NaN;
@@ -397,35 +397,37 @@ public final class FftAnalyzerWorker {
      *  earlier time-domain Δⁿ test was removed entirely once this proved the
      *  better detector ({@code false} disables rejection altogether). */
     private static final boolean USE_SPECTRAL_DISCONTINUITY = true;
-    /** Frequency-domain running-median glitch / stall rejector, run per tick
-     *  on the freshly computed spectrum before it enters the cross-tick
-     *  (vector) average - where one bad block injects a large complex error. */
+    /** Frequency-domain running-median glitch / stall rejector, run per
+     *  analysis cycle on the freshly computed spectrum before it enters the
+     *  cross-cycle (vector) average - where one bad block injects a large
+     *  complex error. */
     private final SpectralDiscontinuityDetector spectralDetector = new SpectralDiscontinuityDetector();
     /** Time-domain discontinuity gate - the scope's glitch detector run on the
-     *  tick's raw window.  A splice/dropout breaks the sinusoid recurrence
-     *  decades above the noise floor even when its spectral footprint slips
-     *  under the frequency-domain gates (and vice versa), so the scope trigger
-     *  and the FFT rejection agree on what counts as a damaged block. */
+     *  analysis cycle's raw window.  A splice/dropout breaks the sinusoid
+     *  recurrence decades above the noise floor even when its spectral
+     *  footprint slips under the frequency-domain gates (and vice versa), so the
+     *  scope trigger and the FFT rejection agree on what counts as a damaged
+     *  block. */
     private static final boolean USE_TIME_DISCONTINUITY = true;
     private final TimeDiscontinuityDetector timeDetector = new TimeDiscontinuityDetector();
-    /** Ticks BEFORE a detected discontinuity whose contribution is REMOVED
-     *  from the accumulator when a gate fires.  The preceding tick's window
-     *  shares nearly all samples with the detecting one, so the event usually
-     *  sits at its window-taper EDGE - attenuated below the gate thresholds
-     *  but still poisoning the average.  The last this-many accepted ticks
-     *  are kept subtractable in {@link #prevTickRe}; the rejected tick itself
-     *  never enters the accumulator, so the total loss per event is this
-     *  constant plus the detecting tick. */
-    private static final int DISCONTINUITY_DROP_TICKS = 1;
-    /** Ring of the last {@link #DISCONTINUITY_DROP_TICKS} accepted ticks'
+    /** Analysis cycles BEFORE a detected discontinuity whose contribution is
+     *  REMOVED from the accumulator when a gate fires.  The preceding cycle's
+     *  window shares nearly all samples with the detecting one, so the event
+     *  usually sits at its window-taper EDGE - attenuated below the gate
+     *  thresholds but still poisoning the average.  The last this-many
+     *  accepted cycles are kept subtractable in {@link #prevCycleRe}; the
+     *  rejected cycle itself never enters the accumulator, so the total loss
+     *  per event is this constant plus the detecting cycle. */
+    private static final int DISCONTINUITY_DROP_CYCLES = 1;
+    /** Ring of the last {@link #DISCONTINUITY_DROP_CYCLES} accepted cycles'
      *  contributions EXACTLY as added (rotation and weight applied), so a
      *  gate firing can subtract them back out.  Coherent: re/im; incoherent:
      *  power.  Sized like the accumulator at restart. */
-    private double[][] prevTickRe, prevTickIm, prevTickPow;
-    private int[]      prevTickWeight;
+    private double[][] prevCycleRe, prevCycleIm, prevCyclePow;
+    private int[]      prevCycleWeight;
     /** Slots of the ring currently valid (cleared by a subtraction, a restart
      *  and a reset), and the next slot to write. */
-    private int prevTickCount, prevTickPos;
+    private int prevCycleCount, prevCyclePos;
     /** Debug overlay: the last gate-REJECTED block's pre-average spectrum (dBFs),
      *  held so {@code FftView} can show what tripped a gate (rejected blocks never
      *  otherwise reach the display). */
@@ -433,10 +435,10 @@ public final class FftAnalyzerWorker {
     /** Debug overlay: the gate verdict (which gate fired + values) for that same
      *  last rejected block. */
     private volatile SpectralDiscontinuityDetector.Gates lastRejectGates;
-    /** Per-tick diagnostic record of the coherent accumulator (a DISABLED
-     *  no-op while {@link DebugSwitches#WRITE_FFT_TICK_STATS} is off);
+    /** Per-cycle diagnostic record of the coherent accumulator (a DISABLED
+     *  no-op while {@link DebugSwitches#WRITE_FFT_CYCLE_STATS} is off);
      *  replaced at every accumulator restart so each run gets its own file. */
-    private FftTickStatsWriter tickStats = new FftTickStatsWriter();
+    private FftCycleStatsWriter cycleStats = new FftCycleStatsWriter();
     /** Tracking of the counted advance.  Once the accumulator has re-pinned κ
      *  from the phase slope, the turned-back fundamental phase should be
      *  constant; a residual of the pin lets it slowly ramp, and a re-sync (the
@@ -463,29 +465,29 @@ public final class FftAnalyzerWorker {
      *  of the ±π wrap is dropped for the cycle - folded to the wrong side it
      *  would pull the pooled offset instead of refining it. */
     private static final double FORK_WRAP_GUARD_RAD = Math.PI / 2.0;
-    /** Previous tick's averaging mode, for deciding when to reset the cross-tick
-     *  accumulator: the averaging mode flip, a ring↔infinite switch, or a
-     *  smaller ring (a larger ring keeps the depth). */
+    /** Previous analysis cycle's averaging mode, for deciding when to reset
+     *  the cross-cycle accumulator: the averaging mode flip, a ring↔infinite
+     *  switch, or a smaller ring (a larger ring keeps the depth). */
     private boolean lastAccumulate;
     private boolean lastForeverMode;
     private int     lastRingN = -1;
-    /** Mains-suppression mode the previous ANALYSED tick ran under, for spotting
-     *  a mid-run switch; {@code null} only until the first analysed tick of the
+    /** Mains-suppression mode the previous ANALYSED cycle ran under, for spotting
+     *  a mid-run switch; {@code null} only until the first analysed cycle of the
      *  process.  Nothing clears it on stop / start, so a mode changed while
-     *  stopped is seen as a switch on the first tick of the next session - where
+     *  stopped is seen as a switch on the first cycle of the next session - where
      *  it is a no-op, {@link #start} having already invalidated the window and
      *  cleared the cache.  Worker-thread only. */
     private MainsSuppression lastMainsMode;
 
     // ─── Fundamental phase alignment ───────────────────────────────────────
-    /** The fundamental's phase excess for the NEXT accumulated tick, in
+    /** The fundamental's phase excess for the NEXT accumulated analysis cycle, in
      *  radians: how far the analysed channel's fundamental phase stands from
      *  the drift-free time base the selected alignment mode supplies.  Zero in
      *  mode {@link FundamentalPhaseAlignment#NONE}.  Behind a notch filter the
      *  centre frequency drifts thermally and the phase response at the centre
      *  is steep, so the fundamental - and only it - moves; the tracking loop
      *  has one phase input and would charge that move to the time base, where
-     *  it lands on harmonic h multiplied by h.  Set once per tick before
+     *  it lands on harmonic h multiplied by h.  Set once per cycle before
      *  {@link #accumulateIntoForeverBuffer} and consumed there at exactly two
      *  points. */
     private double pendingPhiF;
@@ -493,21 +495,22 @@ public final class FftAnalyzerWorker {
      *  collection accumulates unaligned (phiF held at zero).  Re-evaluated at
      *  every accumulator restart. */
     private boolean phaseAlignRefused;
-    /** True for a tick whose alignment has no measurement of its own: the
-     *  pilots have not settled a correction yet - the collection's opening
-     *  frames, or the frames after lost samples until a new one is decided
-     *  and confirmed.  Such a tick is NOT accumulated - its excess is the last
-     *  settled one held, which stands still while the notch drifts on - and is
-     *  not published either, so the view keeps the last averaged spectrum. */
+    /** True for an analysis cycle whose alignment has no measurement of its
+     *  own: the pilots have not settled a correction yet - the collection's
+     *  opening frames, or the frames after lost samples until a new one is
+     *  decided and confirmed.  Such a cycle is NOT accumulated - its excess
+     *  is the last settled one held, which stands still while the notch
+     *  drifts on - and is not published either, so the view keeps the last
+     *  averaged spectrum. */
     private boolean phaseAlignUnsettled;
-    /** The advance the pair settled on for THIS tick, samples since the
-     *  collection's first read frame, or {@link Double#NaN} where the pair
+    /** The advance the pair settled on for THIS analysis cycle, samples since
+     *  the collection's first read frame, or {@link Double#NaN} where the pair
      *  has nothing settled.  Measured from the two pilot lines, so it carries
      *  neither the capture's count of the samples nor the phase of the
      *  fundamental.  The tones' excess is derived from it; the accumulator's
      *  rotation runs on {@link #referenceTone1Rad}. */
     private double pilotAdvanceSamples = Double.NaN;
-    /** Each tone's reference phase on THIS tick's frame, radians at the
+    /** Each tone's reference phase on THIS analysis cycle's frame, radians at the
      *  window's start - a reading of the tone as the generator emitted it,
      *  clear of the notch - or {@link Double#NaN} where the aligning mode in
      *  force read none.  Mode {@link FundamentalPhaseAlignment#REFERENCE_CHANNEL}:
@@ -515,31 +518,32 @@ public final class FftAnalyzerWorker {
      *  pinned, of F2.  Mode {@link FundamentalPhaseAlignment#PILOT_TONE}: the
      *  first pilot's phase less the second's for F1 - the two lines stand one
      *  fundamental apart, so their difference turns exactly as the fundamental
-     *  does - and nothing for F2.  A tone's change between two ticks IS the
-     *  turn the advance between them gives that tone, and it is what the
-     *  accumulator turns the frame by.  Kept as a phase and not in samples:
-     *  every harmonic and every product owes a whole-number combination of
-     *  these two turns, so no whole period has to be counted and none can be
-     *  miscounted. */
+     *  does - and nothing for F2.  A tone's change between two analysis
+     *  cycles IS the turn the advance between them gives that tone, and it is
+     *  what the accumulator turns the frame by.  Kept as a phase and not in
+     *  samples: every harmonic and every product owes a whole-number
+     *  combination of these two turns, so no whole period has to be counted
+     *  and none can be miscounted. */
     private double referenceTone1Rad = Double.NaN;
     private double referenceTone2Rad = Double.NaN;
     /** True while the operator has been told that the alignment is deciding.
-     *  Raised on the first unsettled tick of a stretch so the notice is posted
-     *  once, dropped on the first settled tick; the banner itself goes when a
-     *  published frame reaches the view, or on a reset or a stop. */
+     *  Raised on the first unsettled analysis cycle of a stretch so the
+     *  notice is posted once, dropped on the first settled cycle; the banner
+     *  itself goes when a published frame reaches the view, or on a reset or
+     *  a stop. */
     private boolean phaseAlignBannerUp;
     /** One refusal notice per collection: cleared by {@link #start()}, set by
      *  the first publish, so a run that restarts its accumulator repeatedly
      *  does not raise the operator's dialog again and again. */
     private boolean phaseAlignRefusalPublished;
-    /** Accumulated ticks since {@link #start()}, counting only the ticks that
-     *  actually computed a reference phase - the cadence of the live readout
-     *  below. */
-    private int phaseAlignTicks;
-    /** Ticks between two live readouts of the analysed-to-reference ratio.
-     *  Frequent enough to show a feed degrading during a long average, rare
-     *  enough to cost nothing per tick. */
-    private static final int PHASE_ALIGN_READOUT_TICKS = 100;
+    /** Accumulated analysis cycles since {@link #start()}, counting only the
+     *  cycles that actually computed a reference phase - the cadence of the
+     *  live readout below. */
+    private int phaseAlignCycles;
+    /** Analysis cycles between two live readouts of the analysed-to-reference
+     *  ratio.  Frequent enough to show a feed degrading during a long average,
+     *  rare enough to cost nothing per cycle. */
+    private static final int PHASE_ALIGN_READOUT_CYCLES = 100;
     /** Half-width, in bins, of the neighbourhood the reference bin's local
      *  floor is taken from, and the half-width of the fundamental's own lobe
      *  excluded from it - a windowed tone spreads over a few bins, which would
@@ -572,7 +576,7 @@ public final class FftAnalyzerWorker {
     public record PilotLost(double fundamentalHz) {}
 
     /** How long {@link #stop()} waits for the worker thread to leave its
-     *  tick, in milliseconds; the teardown goes on once it has elapsed. */
+     *  cycle, in milliseconds; the teardown goes on once it has elapsed. */
     private static final long STOP_JOIN_MS = 3_000;
 
     // ─── Pilot tone ─────────────────────────────────────────────────────────
@@ -610,11 +614,11 @@ public final class FftAnalyzerWorker {
     private double pilotRawRef1   = Double.NaN;
     private double pilotRawRef2   = Double.NaN;
     /** Set on the second frame in a row without a pilot reading, consumed by
-     *  the tick loop: that frame is discarded and the capture re-anchored
-     *  through the discontinuity path.  The discard is what makes the warning
-     *  banner stand - a frame that still published its own result would reach
-     *  the view right after the banner and clear it as stale - and the next
-     *  reading starts from the reloaded window. */
+     *  the analysis-cycle loop: that frame is discarded and the capture
+     *  re-anchored through the discontinuity path.  The discard is what makes
+     *  the warning banner stand - a frame that still published its own result
+     *  would reach the view right after the banner and clear it as stale - and
+     *  the next reading starts from the reloaded window. */
     private boolean pilotResyncPending;
     /** Whether the collection's first read frame has been taken: its phases
      *  are the zero every later frame is measured against, and it yields no
@@ -637,7 +641,7 @@ public final class FftAnalyzerWorker {
      *  without a pilot line takes its value from the trend instead. */
     private double excessF1Rad;
     private double excessF2Rad;
-    /** The SECOND tone's phase excess for the NEXT accumulated tick, radians
+    /** The SECOND tone's phase excess for the NEXT accumulated analysis cycle, radians
      *  - the companion of {@link #pendingPhiF}.  A notch's phase response at
      *  F2 is not the one it has at F1, so the two tones carry their own
      *  numbers: the (0,1) member of the product grid, F2 itself, turns by
@@ -782,9 +786,10 @@ public final class FftAnalyzerWorker {
      *  (~0.005 ppm) and below the raw clock offset (~1.5 ppm). */
     private static final double ALIGN_DONE_PPM  = 0.1;
     /** Magnitude-drift threshold (dB): a fundamental whose level moved by
-     *  more than this between the first fed tick after a lock reset and the
-     *  aligned tick means the running average still carries pre-alignment
-     *  frames at a depressed level - worth suggesting a statistics reset. */
+     *  more than this between the first fed analysis cycle after a lock reset
+     *  and the aligned cycle means the running average still carries
+     *  pre-alignment frames at a depressed level - worth suggesting a
+     *  statistics reset. */
     private static final double ALIGN_DRIFT_DB  = 0.1;
     /** Frequency-lock loops: {@link #fll} tracks the SINE / dual-tone
      *  tone-1 correction; {@link #fll2} tracks dual-tone tone-2.  The pilot
@@ -821,11 +826,12 @@ public final class FftAnalyzerWorker {
      *  {@link #onSignalDiscontinuity} (which the pilot-missing re-sync goes
      *  through as well) and the {@link #reAnchorPending} re-anchor - and
      *  tested and cleared only by {@link #applyFrequencyLock}, after every
-     *  other gate of the tick has passed: the first tick that would feed a
-     *  loop after a re-sync is skipped.  That is the accumulator's one-shot
-     *  realign tick where a realign runs, and the first accumulated tick
-     *  where none does.  The loops themselves are not reset - the elapsed
-     *  capture time reaches them through the next window's absolute start. */
+     *  other gate of the analysis cycle has passed: the first cycle that would
+     *  feed a loop after a re-sync is skipped.  That is the accumulator's
+     *  one-shot realign cycle where a realign runs, and the first accumulated
+     *  cycle where none does.  The loops themselves are not reset - the
+     *  elapsed capture time reaches them through the next window's absolute
+     *  start. */
     private boolean fllResyncHold;
     /** One analysis cycle's reading for the frequency lock, kept for one
      *  cycle: the tones' measured frequencies (tone 2 NaN in single tone),
@@ -868,9 +874,9 @@ public final class FftAnalyzerWorker {
     private final ArrayDeque<FllSample> fllAverage1 = new ArrayDeque<>();
     private final ArrayDeque<FllSample> fllAverage2 = new ArrayDeque<>();
     /** Magnitude-drift watch state - armed by a lock reset (generator change /
-     *  align-on / record stop), baselined from the first tick that reaches
-     *  the watch, resolved one-shot when the loop(s) report aligned.  See
-     *  {@link #ALIGN_DRIFT_DB}. */
+     *  align-on / record stop), baselined from the first analysis cycle that
+     *  reaches the watch, resolved one-shot when the loop(s) report aligned.
+     *  See {@link #ALIGN_DRIFT_DB}. */
     private boolean alignWatchArmed;
     private boolean alignWatchBaselined;
     private double  alignWatchBaseF1Db;
@@ -909,7 +915,7 @@ public final class FftAnalyzerWorker {
         return mainsTimeFilter;
     }
 
-    /** Drops the cross-tick accumulator.  Safe to call from any thread -
+    /** Drops the cross-cycle accumulator.  Safe to call from any thread -
      *  arrays are reassigned, not cleared in place. */
     private void resetAccumulator() {
         accumulator.reset();
@@ -917,8 +923,8 @@ public final class FftAnalyzerWorker {
         spectralDetector.reset();   // the median reference restarts with the average
         lastRejectBlockDbFs = null;
         lastRejectGates     = null;
-        prevTickCount = 0;
-        tickStats.close();          // the diagnostic record ends with the run it describes
+        prevCycleCount = 0;
+        cycleStats.close();         // the diagnostic record ends with the run it describes
         // The pilot's reading goes with the accumulator: each tone's excess is
         // its drift since the average's first frame, so the zeros, the
         // baselines and the averages start over with the average they serve.
@@ -935,7 +941,7 @@ public final class FftAnalyzerWorker {
     }
 
     /** Drops the analysis window AND whatever had been gathered towards the
-     *  next one, so the next tick starts collecting from the current cursor
+     *  next one, so the next cycle starts collecting from the current cursor
      *  position: a partially filled span kept across a re-anchor would splice
      *  samples from before and after the break into one frame. */
     private void invalidateWindow() {
@@ -949,7 +955,7 @@ public final class FftAnalyzerWorker {
      *  contiguous span it was about to read had already been overwritten.  This
      *  is a COVERAGE gap, not corrupted data - the absolute sample positions are
      *  still correct ({@code writePos} counts every delivered sample), so the
-     *  cross-tick de-rotation absorbs the gap (it de-rotates by the true sample
+     *  cross-cycle de-rotation absorbs the gap (it de-rotates by the true sample
      *  delta) and the running average stays valid.  So just start the next FFT
      *  window fresh from "now"; do NOT restart averaging.  Worker-thread only
      *  (it advances the cursor). */
@@ -996,12 +1002,12 @@ public final class FftAnalyzerWorker {
     /** Recovery for a detected in-window signal discontinuity - the same re-sync
      *  as a ring overrun: discard the glitched window, re-anchor to "now" and
      *  rebuild, KEEP the running average (the de-rotation absorbs the coverage
-     *  gap and the cross-tick gap recovery corrects any post-glitch phase step).
+     *  gap and the cross-cycle gap recovery corrects any post-glitch phase step).
      *  Worker-thread only. */
     private void onSignalDiscontinuity(SignalBufferReader reader) {
         invalidateWindow();
         reader.seekToLatest();
-        // Reuses the drain-skip: the next tick consumes + discards this span
+        // Reuses the drain-skip: the next cycle consumes + discards this span
         // before rebuilding the window (max keeps a larger pending drain).
         drainSkipRemaining = Math.max(drainSkipRemaining,
                 (long) Math.ceil(POST_GLITCH_SKIP_SEC * reader.getSampleRate()));
@@ -1042,9 +1048,9 @@ public final class FftAnalyzerWorker {
      *         {@link Integer#MAX_VALUE} for an unbounded cumulative mean
      *         (forever mode); a finite N turns the running sum into an
      *         exponential window of N frames (α = weight/N).
-     *  @return {@code true} if this tick was accumulated; {@code false} while
+     *  @return {@code true} if this cycle was accumulated; {@code false} while
      *         the phase lock is still converging (the caller should then show
-     *         the live single-tick spectrum, not the accumulator). */
+     *         the live single-cycle spectrum, not the accumulator). */
     private boolean accumulateIntoForeverBuffer(FftResult r,
                                                 long samplesAbsStart,
                                                 boolean coherent,
@@ -1071,15 +1077,15 @@ public final class FftAnalyzerWorker {
             // and the noise bandwidth the collection is pinned to.
             accumulator.bandGeometry(r.freqResolution, r.windowNenbwBins);
             accumIntFundBinRounded = Math.max(1, (int) Math.round(kFrac));
-            prevTickRe     = coherent ? new double[DISCONTINUITY_DROP_TICKS][N] : null;
-            prevTickIm     = coherent ? new double[DISCONTINUITY_DROP_TICKS][N] : null;
-            prevTickPow    = coherent ? null : new double[DISCONTINUITY_DROP_TICKS][N];
-            prevTickWeight = new int[DISCONTINUITY_DROP_TICKS];
-            prevTickCount  = 0;
-            prevTickPos    = 0;
+            prevCycleRe     = coherent ? new double[DISCONTINUITY_DROP_CYCLES][N] : null;
+            prevCycleIm     = coherent ? new double[DISCONTINUITY_DROP_CYCLES][N] : null;
+            prevCyclePow    = coherent ? null : new double[DISCONTINUITY_DROP_CYCLES][N];
+            prevCycleWeight = new int[DISCONTINUITY_DROP_CYCLES];
+            prevCycleCount  = 0;
+            prevCyclePos    = 0;
             accumRefSampleStart    = samplesAbsStart;
-            // The aligning mode's reading on the tick that becomes the
-            // reference - the tones' reference phases: every later tick's
+            // The aligning mode's reading on the analysis cycle that becomes the
+            // reference - the tones' reference phases: every later cycle's
             // rotation is its own reading less this one, so the accumulator
             // turns by a turn that was MEASURED rather than by the count the
             // capture kept.
@@ -1091,27 +1097,27 @@ public final class FftAnalyzerWorker {
             pilotRawRef2           = pilotRawPhase2;
             accumDroppedSamples    = 0.0;
             gapRecoverPending      = false;
-            tickStats.close();
-            tickStats = (coherent && DebugSwitches.WRITE_FFT_TICK_STATS)
-                    ? new FftTickStatsWriter(AppPaths.instance().getLogsDir(),
+            cycleStats.close();
+            cycleStats = (coherent && DebugSwitches.WRITE_FFT_CYCLE_STATS)
+                    ? new FftCycleStatsWriter(AppPaths.instance().getLogsDir(),
                             fftSize, r.sampleRate, r.freqResolution)
-                    : new FftTickStatsWriter();
+                    : new FftCycleStatsWriter();
             if (log.isInfoEnabled()) {
-                log.info("FFT cross-tick de-rotation: every bin in proportion to its frequency, "
+                log.info("FFT cross-cycle de-rotation: every bin in proportion to its frequency, "
                         + "the humps of the coherent family (harmonic ladder{}) by their lines' "
                         + "angles - κ re-pinned from the phase slope + phase-lock loop",
                         kappa2 > 0.0 ? " + dual pair/product grid" : "");
             }
             // The reference feed is re-qualified whenever the average starts
-            // anew - at the first tick of a collection and after any change
+            // anew - at the first cycle of a collection and after any change
             // that drops the accumulator - so a feed that is missing now can
             // still carry the next run.
             checkPhaseAlignStart(r, halfSize);
         }
-        // The tones' phase excesses for THIS tick.  Zero in mode NONE and for
-        // as long as the reference feed stands refused; F1's enters at exactly
-        // two points - the tracking loop's fundamental phase below, and the
-        // fundamental's hump in the accumulator - and F2's at the two that
+        // The tones' phase excesses for THIS analysis cycle.  Zero in mode NONE
+        // and for as long as the reference feed stands refused; F1's enters at
+        // exactly two points - the tracking loop's fundamental phase below, and
+        // the fundamental's hump in the accumulator - and F2's at the two that
         // answer them for the second tone: its own hump, and the fork pool's
         // reading of its bin.  Nowhere else.
         final double phiF  = phaseAlignRefused ? 0.0 : pendingPhiF;
@@ -1148,9 +1154,9 @@ public final class FftAnalyzerWorker {
         // the live view whenever the signal no longer had a fundamental (coherent
         // only - incoherent has no such guard).  A missing fundamental must NEVER
         // stall averaging or the view (it only hides the THD/IMD table), so every
-        // tick is now accumulated and published; the phase-track loop below
-        // re-aligns when a tone returns.
-        // Bounded (ring) window: before adding this tick, scale the running sum
+        // analysis cycle is now accumulated and published; the phase-track
+        // loop below re-aligns when a tone returns.
+        // Bounded (ring) window: before adding this cycle, scale the running sum
         // down so the effective depth holds at targetN frames.  This makes the
         // running sum an exponential window (α = weight/targetN); forever mode
         // passes targetN = MAX_VALUE and never scales (true cumulative mean).
@@ -1162,23 +1168,23 @@ public final class FftAnalyzerWorker {
             // The subtractable ring holds contributions AS ADDED - once the
             // sum is scaled, they must scale with it or a later subtraction
             // over-removes.
-            for (int s = 0; s < prevTickCount; s++) {
-                int slot = Math.floorMod(prevTickPos - 1 - s, DISCONTINUITY_DROP_TICKS);
-                if (coherent && prevTickRe != null) {
-                    double[] pr = prevTickRe[slot], pi = prevTickIm[slot];
+            for (int s = 0; s < prevCycleCount; s++) {
+                int slot = Math.floorMod(prevCyclePos - 1 - s, DISCONTINUITY_DROP_CYCLES);
+                if (coherent && prevCycleRe != null) {
+                    double[] pr = prevCycleRe[slot], pi = prevCycleIm[slot];
                     for (int k = 0; k < N; k++) { pr[k] *= scale; pi[k] *= scale; }
-                } else if (prevTickPow != null) {
-                    double[] pp = prevTickPow[slot];
+                } else if (prevCyclePow != null) {
+                    double[] pp = prevCyclePow[slot];
                     for (int k = 0; k < N; k++) pp[k] *= scale;
                 }
             }
         }
-        // Claim this tick's slot in the subtractable ring; the accumulator
+        // Claim this cycle's slot in the subtractable ring; the accumulator
         // fills it with the contribution exactly as accumulated.
-        final int prevSlot = prevTickPos;
-        prevTickPos = (prevTickPos + 1) % DISCONTINUITY_DROP_TICKS;
-        if (prevTickCount < DISCONTINUITY_DROP_TICKS) prevTickCount++;
-        prevTickWeight[prevSlot] = weight;
+        final int prevSlot = prevCyclePos;
+        prevCyclePos = (prevCyclePos + 1) % DISCONTINUITY_DROP_CYCLES;
+        if (prevCycleCount < DISCONTINUITY_DROP_CYCLES) prevCycleCount++;
+        prevCycleWeight[prevSlot] = weight;
         if (coherent) {
             int k0 = pinnedFundBin(halfSize);
             if (k0 > 0 && accumulator.isKappaRefined() && !measuredGeometry) {
@@ -1190,7 +1196,7 @@ public final class FftAnalyzerWorker {
                 // error lands on harmonic h multiplied by h instead.  And
                 // not before the accumulator has closed its κ measurement:
                 // until then the slope of this very phase is re-pinning κ.
-                // Continuous phase-tracking loop on the cross-tick spectrum.
+                // Continuous phase-tracking loop on the cross-cycle spectrum.
                 // Instead of trusting a frozen pinned κ - whose residual
                 // error ramps the de-rotated phase and slowly
                 // vector-cancels the fundamental - measure the running
@@ -1198,8 +1204,8 @@ public final class FftAnalyzerWorker {
                 // √N-averaged true reference; the accumulator turns bin k0
                 // by the same angle as obsPhase, so the two compare directly)
                 // and fold a FRACTION of it back into the de-rotation every
-                // tick.  PHASE_TRACK_GAIN < 1 is the loop filter: it
-                // averages out the per-tick phase noise that would otherwise
+                // analysis cycle.  PHASE_TRACK_GAIN < 1 is the loop filter: it
+                // averages out the per-cycle phase noise that would otherwise
                 // random-walk if folded whole.  The steady estimate is the
                 // FORK - pooled from every strong family line, not the
                 // fundamental alone (see forkPooledOffset) - so behind a
@@ -1249,14 +1255,14 @@ public final class FftAnalyzerWorker {
                     new FrameTurns(delta, phi2, phiF, phiF2,
                             pilotTurn(pilotRawPhase1, pilotRawRef1),
                             pilotTurn(pilotRawPhase2, pilotRawRef2)),
-                    prevTickRe[prevSlot], prevTickIm[prevSlot]);
+                    prevCycleRe[prevSlot], prevCycleIm[prevSlot]);
             // A re-sync during the κ measurement is absorbed by the
             // measurement's own re-anchor; the one-shot realign the loop would
             // otherwise open with is dropped when the measurement closes, so
             // the loop starts tracking instead of folding a whole residual
             // read against an average the re-sync already crossed.
             if (!refinedBefore && accumulator.isKappaRefined()) gapRecoverPending = false;
-            tickStats.tick(r, samplesAbsStart, delta, accumDroppedSamples,
+            cycleStats.cycle(r, samplesAbsStart, delta, accumDroppedSamples,
                     accumulator.getKappa(), k0, accumulator.fundamentalAngle(delta),
                     accumulator.getSumRe(), accumulator.getSumIm(),
                     (int) Math.round(accumulator.getFrames()));
@@ -1274,7 +1280,7 @@ public final class FftAnalyzerWorker {
                 // carries -phiF from its hump's rotation, so taking it out again
                 // here would count it twice.  This is the line that says whether
                 // the harmonics of a LONG average hold together, which no
-                // single-tick reading can show.  It also carries the chain's
+                // single-cycle reading can show.  It also carries the chain's
                 // phase at the fundamental, which turns the harmonics' relations
                 // into the generator's correction phases: the emitted fundamental
                 // the accumulator holds is the pilot pair's difference on the
@@ -1299,7 +1305,7 @@ public final class FftAnalyzerWorker {
         } else {
             // The incoherent result holds the frame's magnitude in re and 0
             // in im; the accumulator sums its power either way.
-            accumulator.addPower(r.re, r.im, weight, prevTickPow[prevSlot]);
+            accumulator.addPower(r.re, r.im, weight, prevCyclePow[prevSlot]);
         }
         return true;
     }
@@ -1336,29 +1342,29 @@ public final class FftAnalyzerWorker {
     }
 
     /** Removes the subtractable ring's held contributions - the last accepted
-     *  tick(s) - from the accumulator.  The retroactive half of discontinuity
+     *  cycle(s) - from the accumulator.  The retroactive half of discontinuity
      *  rejection: the window(s) BEFORE the detecting one shared nearly all of
      *  its samples, with the event attenuated at their taper edge below the
      *  gate thresholds, so their contribution is poisoned although no gate
      *  fired on them. */
-    private void subtractPreviousTicks() {
-        if (prevTickCount <= 0 || !accumulator.isStarted()) return;
+    private void subtractPreviousCycles() {
+        if (prevCycleCount <= 0 || !accumulator.isStarted()) return;
         int removedFrames = 0;
-        for (int s = 0; s < prevTickCount; s++) {
-            int slot = Math.floorMod(prevTickPos - 1 - s, DISCONTINUITY_DROP_TICKS);
-            if (accumulator.isCoherent() && prevTickRe != null) {
-                accumulator.remove(prevTickRe[slot], prevTickIm[slot], prevTickWeight[slot]);
-            } else if (!accumulator.isCoherent() && prevTickPow != null) {
-                accumulator.removePower(prevTickPow[slot], prevTickWeight[slot]);
+        for (int s = 0; s < prevCycleCount; s++) {
+            int slot = Math.floorMod(prevCyclePos - 1 - s, DISCONTINUITY_DROP_CYCLES);
+            if (accumulator.isCoherent() && prevCycleRe != null) {
+                accumulator.remove(prevCycleRe[slot], prevCycleIm[slot], prevCycleWeight[slot]);
+            } else if (!accumulator.isCoherent() && prevCyclePow != null) {
+                accumulator.removePower(prevCyclePow[slot], prevCycleWeight[slot]);
             }
-            removedFrames += prevTickWeight[slot];
+            removedFrames += prevCycleWeight[slot];
         }
         if (log.isInfoEnabled()) {
-            log.info("Discontinuity: the previous {} tick(s) ({} frames) removed from the "
+            log.info("Discontinuity: the previous {} analysis cycle(s) ({} frames) removed from the "
                     + "accumulator - the event sat at their window edge, under the gates",
-                    prevTickCount, removedFrames);
+                    prevCycleCount, removedFrames);
         }
-        prevTickCount = 0;
+        prevCycleCount = 0;
     }
 
     /** Highest harmonic the phase trace reports.  The ladder H2 to H9 is the
@@ -1374,8 +1380,8 @@ public final class FftAnalyzerWorker {
      * One line of the harmonic phase trace (see
      * {@link DebugSwitches#TRACE_HARMONIC_PHASE}): for h = 2 to
      * {@link #TRACE_MAX_HARMONIC}, the phase of harmonic h measured against h
-     * times the fundamental's own phase, in degrees, read from THIS tick's
-     * spectrum at the harmonics' bins.
+     * times the fundamental's own phase, in degrees, read from THIS analysis
+     * cycle's spectrum at the harmonics' bins.
      *
      * <p>Why that relation.  A pure time shift of the whole capture turns
      * harmonic h by h times what it turns the fundamental by, so the relation
@@ -1388,12 +1394,12 @@ public final class FftAnalyzerWorker {
      * claim of the phase alignment, readable in a log.
      *
      * <p>The same reading serves two spectra, which is why the arrays arrive as
-     * parameters: this tick's own, where the excess is taken out to show the
+     * parameters: this cycle's own, where the excess is taken out to show the
      * relations standing still, and the ACCUMULATOR as it stands after this
-     * tick was added, where no excess is taken out because the accumulated
+     * cycle was added, where no excess is taken out because the accumulated
      * fundamental already carries it through the family rotation.  The
      * accumulator's line is the one that says whether a long average keeps its
-     * harmonics, which a per-tick reading cannot tell.
+     * harmonics, which a per-cycle reading cannot tell.
      *
      * @param re       real parts to read, indexed by bin
      * @param im       imaginary parts to read, indexed by bin
@@ -1488,16 +1494,16 @@ public final class FftAnalyzerWorker {
         }
     }
 
-    /** This tick's FUNDAMENTAL phase excess for the selected alignment mode,
-     *  in radians - the notch's phase against the collection's own start in
-     *  both aligning modes: measured against the reference channel per tick
-     *  and taken against the first tick's value, or measured from the tone's
-     *  own turn less the turn the advance the pilot pair resolved explains;
-     *  zero when no alignment runs or the mode's own reference is not
-     *  available this tick.  The second tone's excess is written to
-     *  {@link #pendingPhiF2} on the same pass, there being one reading of the
-     *  frame for both. */
-    private double tickPhiF(FundamentalPhaseAlignment mode, FftResult r, boolean coherent) {
+    /** This analysis cycle's FUNDAMENTAL phase excess for the selected
+     *  alignment mode, in radians - the notch's phase against the collection's
+     *  own start in both aligning modes: measured against the reference
+     *  channel per cycle and taken against the first cycle's value, or
+     *  measured from the tone's own turn less the turn the advance the pilot
+     *  pair resolved explains; zero when no alignment runs or the mode's own
+     *  reference is not available this cycle.  The second tone's excess is
+     *  written to {@link #pendingPhiF2} on the same pass, there being one
+     *  reading of the frame for both. */
+    private double cyclePhiF(FundamentalPhaseAlignment mode, FftResult r, boolean coherent) {
         switch (mode) {
             case REFERENCE_CHANNEL:
                 return referencePhiF(r, coherent);
@@ -1590,8 +1596,8 @@ public final class FftAnalyzerWorker {
      *
      * <p>Also carries the live readout of the feed: the analysed-to-reference
      * ratio and the raw phase difference, every
-     * {@link #PHASE_ALIGN_READOUT_TICKS} accumulated ticks.  Zero while the
-     * reference window is not available.
+     * {@link #PHASE_ALIGN_READOUT_CYCLES} accumulated analysis cycles.  Zero
+     * while the reference window is not available.
      */
     private double referencePhiF(FftResult r, boolean coherent) {
         int k0 = readAlignmentFrame(FundamentalPhaseAlignment.REFERENCE_CHANNEL, r, coherent);
@@ -1599,10 +1605,10 @@ public final class FftAnalyzerWorker {
         pendingPhiF2 = pilotRef2FirstTaken ? wrapTurn(pilotRef2ValueRad) : 0.0;
         double excess = wrapTurn(pilotRefValueRad);
         traceExcess(excess);
-        phaseAlignTicks++;
-        if (phaseAlignTicks % PHASE_ALIGN_READOUT_TICKS == 0 && log.isInfoEnabled()) {
-            log.info("FFT phase alignment, tick {}: analysed/reference at bin {} = {} dB, {} deg",
-                    phaseAlignTicks, k0,
+        phaseAlignCycles++;
+        if (phaseAlignCycles % PHASE_ALIGN_READOUT_CYCLES == 0 && log.isInfoEnabled()) {
+            log.info("FFT phase alignment, cycle {}: analysed/reference at bin {} = {} dB, {} deg",
+                    phaseAlignCycles, k0,
                     String.format("%.2f", referenceFeedDb),
                     String.format("%.2f", Math.toDegrees(Math.IEEEremainder(
                             pilotRefFirstRad + pilotRefChangeRad, 2.0 * Math.PI))));
@@ -1736,8 +1742,9 @@ public final class FftAnalyzerWorker {
         // A bin carries its line when its power stands the pilot-margin
         // preference over the median power of its neighbourhood, the lobe
         // left out of that median - the floor recipe of the reference feed
-        // check, here on the analysed frame's own raw bins and per tick.  The
-        // same margins give the pair its reading noise for this frame.
+        // check, here on the analysed frame's own raw bins and per analysis
+        // cycle.  The same margins give the pair its reading noise for this
+        // frame.
         double  margin1 = analysedPilotMarginDb(r, pilotReader1.getBin(), halfSize);
         double  margin2 = pilotReader2 == null ? Double.POSITIVE_INFINITY
                 : analysedPilotMarginDb(r, pilotReader2.getBin(), halfSize);
@@ -1769,8 +1776,8 @@ public final class FftAnalyzerWorker {
         // phase less the second's turns between two frames exactly as the
         // emitted fundamental does: the frame's reference phase, the reading
         // the reference channel gives in its own mode.  Stated on the
-        // collection's first read frame as on every later one, so the tick
-        // that becomes the accumulator's reference holds it.
+        // collection's first read frame as on every later one, so the analysis
+        // cycle that becomes the accumulator's reference holds it.
         if (steersByPair(mode)) referenceTone1Rad = wrapTurn(raw1 - raw2);
         if (!pilotFirstTaken) {
             // The collection's first read frame is the zero everything after
@@ -1802,8 +1809,8 @@ public final class FftAnalyzerWorker {
         // that frame alone.
         // A frame the pair has not settled a correction for carries the last
         // settled drift, which stands still while the notch does not.  It is
-        // good enough to show and not good enough to average on, so the tick
-        // is kept out of the accumulator altogether.
+        // good enough to show and not good enough to average on, so the analysis
+        // cycle is kept out of the accumulator altogether.
         phaseAlignUnsettled = !advance.settled();
         // The advance the pair settled on, since the collection's first read
         // frame: what the tones' excess is counted against.  The accumulator's
@@ -1944,7 +1951,7 @@ public final class FftAnalyzerWorker {
      * <p>The second re-syncs the capture through the path a detected
      * discontinuity takes: two frames in a row without a time base is what a
      * gap in the stream looks like from here.  The re-sync itself belongs to
-     * the tick loop, which discards this frame with it - see
+     * the analysis-cycle loop, which discards this frame with it - see
      * {@link #pilotResyncPending} - so the window is re-anchored and reloaded
      * before the next reading.
      *
@@ -1970,9 +1977,10 @@ public final class FftAnalyzerWorker {
         traceTurns2     = 0;
         traceRigidRad   = 0.0;
         if (pilotMissingFrames == 2) {
-            // The tick loop does the re-sync: this frame has to be DISCARDED
-            // with it, and a frame that still published its own result would
-            // reach the view right after the warning banner and clear it.
+            // The analysis-cycle loop does the re-sync: this frame has to be
+            // DISCARDED with it, and a frame that still published its own
+            // result would reach the view right after the warning banner and
+            // clear it.
             pilotResyncPending = true;
             return;
         }
@@ -2011,11 +2019,11 @@ public final class FftAnalyzerWorker {
      *  and the reference values stay unset.
      *
      *  <p>In mode REFERENCE_CHANNEL the mirror's own tone phases are handed
-     *  on as well: their change from tick to tick is the turn the advance
-     *  gives each tone, which the accumulator turns the frame by.  In the
-     *  pilot mode the mirror is the control of the pair's reading, and a
-     *  reading taken to observe must not change what is measured, so nothing
-     *  is handed on there. */
+     *  on as well: their change from one analysis cycle to the next is the
+     *  turn the advance gives each tone, which the accumulator turns the frame
+     *  by.  In the pilot mode the mirror is the control of the pair's reading,
+     *  and a reading taken to observe must not change what is measured, so
+     *  nothing is handed on there. */
     private void readReferenceChange(FundamentalPhaseAlignment mode, FftResult r, int k0, int k1,
             double fundMag, double phiF, double phiF2) {
         traceRawRefRad    = Double.NaN;     // no mirror read yet on this frame
@@ -2322,12 +2330,13 @@ public final class FftAnalyzerWorker {
                 fundamentalAgainstReferenceRad - pilotDriftRad() - pilotRefOffsetRad, 2.0 * Math.PI);
     }
 
-    /** The bin the accumulator reads the fundamental at for THIS tick: its
-     *  pinned fundamental's whole bin while the accumulator is live for this
-     *  geometry, and otherwise the bin this tick is about to pin - the same
-     *  rule the restart block applies, so the reference phasor is taken at the
-     *  loop's bin even on the tick that pins it.  A bin that wandered with
-     *  the per-tick peak would compare two different frequencies' phases. */
+    /** The bin the accumulator reads the fundamental at for THIS analysis
+     *  cycle: its pinned fundamental's whole bin while the accumulator is live
+     *  for this geometry, and otherwise the bin this cycle is about to pin -
+     *  the same rule the restart block applies, so the reference phasor is
+     *  taken at the loop's bin even on the cycle that pins it.  A bin that
+     *  wandered with the per-cycle peak would compare two different
+     *  frequencies' phases. */
     private int phaseAlignBin(FftResult r, int halfSize, boolean coherent) {
         boolean live = accumulator.isStarted() && accumulator.getFftSize() == r.fftSize
                 && accumulator.isCoherent() == coherent && pinnedFundBin(halfSize) > 0;
@@ -2455,7 +2464,7 @@ public final class FftAnalyzerWorker {
      *  event goes through the UI thread's queue behind every trim already
      *  posted, so the reset is what the generator ends on. */
     private void resetFrequencyLockState() {
-        // Re-arm the magnitude-drift watch: the next fed tick baselines the
+        // Re-arm the magnitude-drift watch: the next fed cycle baselines the
         // fundamental level(s); the comparison fires once alignment settles.
         alignWatchArmed     = true;
         alignWatchBaselined = false;
@@ -2488,36 +2497,36 @@ public final class FftAnalyzerWorker {
     }
 
     /**
-     * The generator frequency lock, fed from the PREVIOUS tick's reading on
-     * the worker thread, and the trims it publishes.  Called once per
-     * analysed tick, settled or not, after the accumulate step and before
-     * the unsettled return and the display throttle - so every tick that
+     * The generator frequency lock, fed from the PREVIOUS analysis cycle's
+     * reading on the worker thread, and the trims it publishes.  Called once
+     * per analysed cycle, settled or not, after the accumulate step and before
+     * the unsettled return and the display throttle - so every cycle that
      * gets here passed both discontinuity gates on a full post-seek window
-     * with the drain finished.  This tick's
+     * with the drain finished.  This cycle's
      * own reading is kept for the next call ({@link #pendingFllReading}): a
      * discontinuity sitting at a window's edge is found by the gates only on
-     * the tick after it, so a tick passing them is what clears the reading
+     * the cycle after it, so a cycle passing them is what clears the reading
      * before it.
      *
      * <p>Gated, in this order: a reset that landed while this window was
-     * analysed (the tick's epoch); in mode PILOT_TONE with a pilot elected, a
-     * tick whose pilot reading lost a line - the frame is disturbed; the
+     * analysed (the cycle's epoch); in mode PILOT_TONE with a pilot elected, a
+     * cycle whose pilot reading lost a line - the frame is disturbed; the
      * three prerequisite prefs (snap-to-bin, fund-from-gen, align mode) and
-     * the generator actively emitting - a tick refused by any of these drops
+     * the generator actively emitting - a cycle refused by any of these drops
      * the pending reading as well; then, on the pending reading, per tone
      * the target, a finite measurement and the plausibility bound.  Last,
-     * the first tick after a re-sync that passed all of these is skipped
+     * the first cycle after a re-sync that passed all of these is skipped
      * ({@link #fllResyncHold}); the re-sync itself dropped the pending
      * reading ({@link #dropFllFeed}).
      *
      * <p>A trim is published only when the loop's correction moved since the
      * last published one, so a holding loop leaves the generator alone.
      *
-     * @param r               this tick's result, before the accumulator overlay
-     * @param alignMode       the tick's fundamental phase alignment mode
+     * @param r               this cycle's result, before the accumulator overlay
+     * @param alignMode       the cycle's fundamental phase alignment mode
      * @param samplesAbsStart absolute capture position of the window's start
      * @param writePos        live capture head - where a correction issued now lands
-     * @param epochAtStart    the reset epoch the tick started under
+     * @param epochAtStart    the reset epoch the cycle started under
      */
     private void applyFrequencyLock(FftResult r, FundamentalPhaseAlignment alignMode,
                                     long samplesAbsStart, long writePos, long epochAtStart) {
@@ -2658,7 +2667,7 @@ public final class FftAnalyzerWorker {
 
     /** A re-sync's effect on the frequency lock: the reading the previous
      *  cycle kept is dropped - its window met the discontinuity - and the
-     *  first tick that would feed the lock afterwards is skipped
+     *  first cycle that would feed the lock afterwards is skipped
      *  ({@link #fllResyncHold}). */
     private void dropFllFeed() {
         pendingFllReading = null;
@@ -2710,9 +2719,9 @@ public final class FftAnalyzerWorker {
         r.fllAveraged2Hz = (fll2 != null && fll2.isTracking()) ? meanHz(fllAverage2) : Double.NaN;
     }
 
-    /** Tests and clears {@link #fllResyncHold}: {@code true} on the one tick
+    /** Tests and clears {@link #fllResyncHold}: {@code true} on the one cycle
      *  after a re-sync that it skips.  Asked only once every other gate of
-     *  the tick has passed, so a tick that would not have fed a loop anyway
+     *  the cycle has passed, so a cycle that would not have fed a loop anyway
      *  does not use it up. */
     private boolean skipAfterResync() {
         if (!fllResyncHold) return false;
@@ -2732,13 +2741,13 @@ public final class FftAnalyzerWorker {
     }
 
     /** Magnitude-drift watch: baselines the fundamental level(s) on the
-     *  first tick after a lock reset re-armed it, then - once the loop(s)
-     *  report aligned - compares the current level(s) against that baseline
-     *  ONE time.  A drift beyond {@link #ALIGN_DRIFT_DB} means the running
-     *  average still contains pre-alignment frames at a depressed level; the
-     *  view shows a blinking hint to reset statistics.  Levels in dBFS - the
-     *  dBV offset cancels in the delta; {@code f2Db} is {@code NaN} in
-     *  single-tone mode. */
+     *  first analysis cycle after a lock reset re-armed it, then - once the
+     *  loop(s) report aligned - compares the current level(s) against that
+     *  baseline ONE time.  A drift beyond {@link #ALIGN_DRIFT_DB} means the
+     *  running average still contains pre-alignment frames at a depressed
+     *  level; the view shows a blinking hint to reset statistics.  Levels in
+     *  dBFS - the dBV offset cancels in the delta; {@code f2Db} is {@code NaN}
+     *  in single-tone mode. */
     private void watchAlignmentMagnitudeDrift(double f1Db, double f2Db, boolean aligned) {
         if (!alignWatchArmed || Double.isNaN(f1Db)) return;
         if (!alignWatchBaselined) {
@@ -2782,8 +2791,8 @@ public final class FftAnalyzerWorker {
      *  so the collection runs unaligned, with the two numbers logged and, once
      *  per collection, handed to the pane for the operator.  The sweep costs
      *  one single-bin transform per neighbourhood bin, paid once per restart,
-     *  never per tick.  A no-op in every other alignment mode, which keep no
-     *  reference window - or keep it for the trace alone. */
+     *  never per analysis cycle.  A no-op in every other alignment mode, which
+     *  keep no reference window - or keep it for the trace alone. */
     private void checkPhaseAlignStart(FftResult r, int halfSize) {
         phaseAlignRefused = false;
         if (refWinBuf == null || refMirrorForTrace || !winValid || r.freqResolution <= 0.0) return;
@@ -2853,7 +2862,7 @@ public final class FftAnalyzerWorker {
     }
 
     /** The alignment afresh, in every aligning mode: the reference channel's
-     *  baseline is taken anew at the next tick and the pilot is elected again
+     *  baseline is taken anew at the next cycle and the pilot is elected again
      *  for the geometry in force.  What a collection start does, and what a
      *  change of the generated signal does in the middle of one - the tone
      *  that changed has a new phase through the notch, so nothing measured on
@@ -3039,7 +3048,7 @@ public final class FftAnalyzerWorker {
         publishOnUiThread(Events.GENERATOR_PILOT_OFF, null);
     }
 
-    /** The FORK: the per-tick tracking correction (in samples) pooled from
+    /** The FORK: the per-cycle tracking correction (in samples) pooled from
      *  every strong line of the coherent family instead of the fundamental
      *  alone.  A common sample offset rotates each line proportionally to its
      *  frequency, so each line's accumulated-vs-fresh phase difference divided
@@ -3051,7 +3060,7 @@ public final class FftAnalyzerWorker {
      *  (Preferences, {@code fftStrongToneRelDb}) below the fundamental's -
      *  smaller threshold pools fewer lines - and the dual pair's F2 (the
      *  {@code (0,1)} grid product) always joins; a line within
-     *  {@link #FORK_WRAP_GUARD_RAD} of the ±π wrap is dropped for the tick.
+     *  {@link #FORK_WRAP_GUARD_RAD} of the ±π wrap is dropped for the cycle.
      *  Behind a notch the fundamental is the WEAKEST line, and the pooled
      *  reference noise falls with the combined power of the harmonics - the
      *  theory chapter's fork.  With nothing else admitted, returns the
@@ -3105,8 +3114,8 @@ public final class FftAnalyzerWorker {
 
     /** One fork line's {@code [weight, offset-estimate]} - or {@code null}
      *  when the line is below the admission level (unless {@code exempt}),
-     *  out of range, or too close to the phase wrap this tick.  The fresh
-     *  phasor is de-rotated by the line's own family angle and by
+     *  out of range, or too close to the phase wrap this analysis cycle.  The
+     *  fresh phasor is de-rotated by the line's own family angle and by
      *  {@code excessRad}, the phase excess the accumulator turned that line's
      *  region by, exactly as the accumulator rotated its bin - so the two
      *  phases compare directly and the residual holds the sample offset
@@ -3189,8 +3198,8 @@ public final class FftAnalyzerWorker {
 
     // ─── External wiring ────────────────────────────────────────────────────
 
-    /** Cumulative frame count accumulated across all forever-mode ticks
-     *  since the last reset.  Returns 0 outside forever mode or before
+    /** Cumulative frame count accumulated across all forever-mode analysis
+     *  cycles since the last reset.  Returns 0 outside forever mode or before
      *  any contribution.  This is the meaningful "N average(s)" depth
      *  for forever mode - equal to the SNR-improvement factor √N². */
     public int  getAccumulatedFrames()          { return (int) Math.round(accumulator.getFrames()); }
@@ -3228,7 +3237,7 @@ public final class FftAnalyzerWorker {
         captureEndReason = null;   // fresh session - no terminal recorded yet
         // Re-arm the first-frame regime + drop any stale spectrum so the chart
         // starts blank.  reanchorPending makes the worker seek the reader to
-        // "now" on its next tick, so the first analysis window is built from a
+        // "now" on its next cycle, so the first analysis window is built from a
         // FULL needed-sample span of FRESH samples captured AFTER this point.
         firstFrameDone        = false;
         invalidateWindow();
@@ -3241,11 +3250,11 @@ public final class FftAnalyzerWorker {
         // and a readout cadence that starts with the collection.
         phaseAlignRefusalPublished = false;
         pilotLostPublished         = false;
-        phaseAlignTicks            = 0;
+        phaseAlignCycles           = 0;
         // A new collection needs its own baseline - a phase excess from a
         // collection that has ended describes a filter at a temperature this
         // one knows nothing about - and it gets one from the statistics reset
-        // above, which the first tick consumes.  A restart armed before this
+        // above, which the first cycle consumes.  A restart armed before this
         // press belonged to the collection that ended and is dropped here.
         alignRestartPending.set(false);
         MessageBus bus = MessageBus.instance();
@@ -3262,8 +3271,8 @@ public final class FftAnalyzerWorker {
     }
 
     /** Stops the analyser and interrupts the worker.  Idempotent.  Joins the
-     *  worker (it exits within one tick - the interrupt breaks any sleep) so
-     *  the teardown below can't race a tick still in flight. */
+     *  worker (it exits within one cycle - the interrupt breaks any sleep) so
+     *  the teardown below can't race a cycle still in flight. */
     public synchronized void stop() {
         running = false;
         Thread w = worker;
@@ -3284,7 +3293,7 @@ public final class FftAnalyzerWorker {
         prefs0.fftPilotMarginDbProperty().removeListener(pilotMarginChanged);
         // Nothing reads the pilot once the analysis is over, and the generator
         // keeps what it was asked for until it is told otherwise - so the
-        // request is withdrawn here, after the join, where no tick can ask
+        // request is withdrawn here, after the join, where no cycle can ask
         // for it again.
         clearPilot();
         // The lock goes with the capture: its estimate of the two converters'
@@ -3301,10 +3310,10 @@ public final class FftAnalyzerWorker {
             // both run on the UI thread and both use getAndSet(null).)
             resultPool.release(latestForUi.getAndSet(null));
             resultPool.clear();
-            // Big-buffer teardown: the sliding window, its per-tick copy, the
+            // Big-buffer teardown: the sliding window, its per-cycle copy, the
             // hop stage and the analyzer's scratch idle on several hundred MB
             // at fftSize 4 M while nothing records.  All rebuild on demand at
-            // the next start (the join above guarantees no tick is in flight).
+            // the next start (the join above guarantees no cycle is in flight).
             winBuf     = new double[0];
             analyzeBuf = new double[0];
             hopBuf     = new double[0];
@@ -3314,7 +3323,7 @@ public final class FftAnalyzerWorker {
             winNeeded  = -1;
             analyzer.releaseScratch();
         } else {
-            // A monster-FFT tick outlived the join: leave its state alone and
+            // A monster-FFT cycle outlived the join: leave its state alone and
             // let the next start's pending reset wipe it on the worker side.
             log.warn("FFT worker did not exit within 3 s - accumulator cleanup deferred to the next start.");
             resetPending.set(true);
@@ -3332,7 +3341,7 @@ public final class FftAnalyzerWorker {
      *  Safe to call from any thread.  Does NOT post the redraw - the
      *  caller does that. */
     public void resetStatistics() {
-        resetEpoch.incrementAndGet();   // first: a mid-tick analysis must see it
+        resetEpoch.incrementAndGet();   // first: a mid-cycle analysis must see it
         paused.set(false);
         completedAnalyses     = 0;
         averagesInWindow      = 0;
@@ -3341,7 +3350,7 @@ public final class FftAnalyzerWorker {
         reAnchorPending       = true;
         if (running) {
             // Worker-owned state (accumulator, mains tracking) is wiped by the
-            // worker itself at the next tick boundary - see resetPending.
+            // worker itself at the next cycle boundary - see resetPending.
             resetPending.set(true);
         } else {
             resetWorkerOwnedState();    // no worker thread to race with
@@ -3377,7 +3386,7 @@ public final class FftAnalyzerWorker {
         resetAccumulator();
         completedAnalyses = 0;          // re-zero: a racing worker-side ++ may have resurrected a stale count
         averagesInWindow  = 0;
-        mainsTrackTick = 0;             // re-lock mains on the very next tick
+        mainsTrackCycle = 0;            // re-lock mains on the very next cycle
         if (mainsComb != null) mainsComb.resetTracking();   // re-lock mains from scratch
     }
 
@@ -3415,14 +3424,14 @@ public final class FftAnalyzerWorker {
         if (avail == SignalBufferReader.OVERRUN) return -1.0;
         // The hop actually being gathered - the worker's drawn pending hop, not
         // a recomputation from preferences (under the random overlap the two
-        // differ every tick, and even for fixed modes the preference can change
-        // ahead of the worker's next tick).
+        // differ every cycle, and even for fixed modes the preference can change
+        // ahead of the worker's next cycle).
         double hop = Math.max(1, pendingHopSamples);
         // Building the first window needs a full `needed`; once it's valid each
-        // tick just needs one fresh hop, so the bar sweeps 0->1 per hop.  A span
-        // is gathered across ticks, so what already sits in the analyser's own
-        // buffer counts as captured - otherwise a span longer than the ring
-        // would read 0 % for its whole (minutes-long) collection.
+        // analysis cycle just needs one fresh hop, so the bar sweeps 0->1 per
+        // hop.  A span is gathered across cycles, so what already sits in the
+        // analyser's own buffer counts as captured - otherwise a span longer
+        // than the ring would read 0 % for its whole (minutes-long) collection.
         double want = winValid ? hop : (winNeeded > 0 ? winNeeded : fftLength);
         double f = (avail + (winValid ? hopFill : winFill)) / want;
         return (f < 0) ? 0 : (f > 1 ? 1 : f);
@@ -3435,7 +3444,7 @@ public final class FftAnalyzerWorker {
      *  blocked by the FFT compute. */
     private void workerLoop() {
         while (running) {
-            int sleepMs = IDLE_TICK_MS;
+            int sleepMs = IDLE_CYCLE_MS;
             awaitSamplesNext = 0;
             // A frequency-lock reset asked for since the last iteration, taken
             // before the paused test so a paused worker still performs it.
@@ -3448,18 +3457,18 @@ public final class FftAnalyzerWorker {
                 } catch (Throwable t) {
                     if (log.isWarnEnabled()) {
                         if (!(t.getCause() instanceof InterruptedException)) {
-                            log.warn("FFT analysis tick failed", t);
+                            log.warn("FFT analysis cycle failed", t);
                         }
                     }
-                    sleepMs = IDLE_TICK_MS;
+                    sleepMs = IDLE_CYCLE_MS;
                     awaitSamplesNext = 0;
                 }
             }
-            if (sleepMs <= 0) sleepMs = IDLE_TICK_MS;
+            if (sleepMs <= 0) sleepMs = IDLE_CYCLE_MS;
             if (sleepMs > MAX_SLEEP_MS) sleepMs = MAX_SLEEP_MS;
             // Data-driven wait: block on the ring for the samples the next
-            // tick needs (the writer notifies per batch and on finish); the
-            // ms value only CAPS the wait, so a stalled capture still ticks
+            // cycle needs (the writer notifies per batch and on finish); the
+            // ms value only CAPS the wait, so a stalled capture still cycles
             // the loop.  Time-driven wait (no count): plain sleep as before.
             int wantSamples = awaitSamplesNext;
             SignalBufferReader rdr = reader;
@@ -3503,16 +3512,16 @@ public final class FftAnalyzerWorker {
             fllTargetHz  = 0.0;         // the loops' targets belong to the collection they steered
             fll2TargetHz = 0.0;
         }
-        // Stamp AFTER the transition reset above so this tick doesn't
+        // Stamp AFTER the transition reset above so this analysis cycle doesn't
         // discard itself; see the epoch check below the analyze call.
         final long epochAtStart = resetEpoch.get();
 
-        // Single per-tick snapshot: stop() nulls the field (and a quick
-        // stop->start swaps in a NEW cursor) while a tick is in flight -
-        // re-reading the field mid-tick would let an outgoing worker consume
+        // Single per-cycle snapshot: stop() nulls the field (and a quick
+        // stop->start swaps in a NEW cursor) while a cycle is in flight -
+        // re-reading the field mid-cycle would let an outgoing worker consume
         // from the new worker's cursor.
         final SignalBufferReader rdr = reader;
-        if (rdr == null) return IDLE_TICK_MS;
+        if (rdr == null) return IDLE_CYCLE_MS;
         // Reader-terminal consult: the capture writer finished the ring buffer
         // from below (device lost / delivery stalled).  CLAIM the reason (the
         // buffer hands it to exactly one consumer - one dead device, one
@@ -3527,26 +3536,26 @@ public final class FftAnalyzerWorker {
                 display.asyncExec(() ->
                         MessageBus.instance().publish(Events.FFT_RECORDING_AUTO_STOPPED));
             }
-            return IDLE_TICK_MS;
+            return IDLE_CYCLE_MS;
         }
         int sampleRate = rdr.getSampleRate();
-        if (sampleRate <= 0) return IDLE_TICK_MS;
+        if (sampleRate <= 0) return IDLE_CYCLE_MS;
 
         Preferences prefs = Preferences.instance();
         int fftLength = prefs.getFftLength();
-        if (fftLength < 8 || (fftLength & (fftLength - 1)) != 0) return IDLE_TICK_MS;
+        if (fftLength < 8 || (fftLength & (fftLength - 1)) != 0) return IDLE_CYCLE_MS;
 
         double avgRaw = prefs.getFftAverages();
         boolean foreverMode = Double.isInfinite(avgRaw);
         int     ringN       = Math.max(1, (int) avgRaw);
-        // Cross-tick accumulate whenever any averaging is requested.  Each tick
-        // then FFTs ONE fresh frame; the running cross-tick accumulator
+        // Cross-cycle accumulate whenever any averaging is requested.  Each cycle
+        // then FFTs ONE fresh frame; the running cross-cycle accumulator
         // supplies the depth.  This makes a "200×" ring reach its full depth
         // (instead of being capped by what fits in the capture buffer) and
-        // stops it re-FFTing ~40 frames every tick.
+        // stops it re-FFTing ~40 frames every cycle.
         boolean accumulate = foreverMode || ringN >= 2;
         // Frame-depth cap for the bounded (ring) accumulator: one frame per
-        // tick, and the on-screen "N×" count is tick-based, so N frames.
+        // cycle, and the on-screen "N×" count is cycle-based, so N frames.
         int targetFrames = foreverMode ? Integer.MAX_VALUE : ringN;
 
         WindowType window = prefs.getFftWindow();
@@ -3562,19 +3571,19 @@ public final class FftAnalyzerWorker {
         int minHopSamples = overlap.minHopSamples(fftLength);
         int maxHopSamples = overlap.maxHopSamples(fftLength);
         // NOT bounded by the capture ring: the analysis span is the analyser's
-        // own buffer, gathered from the ring across as many ticks as it takes.
-        // Clamping it to the ring made the largest FFT lengths impossible - a
-        // 4 M-point frame at 48 kS/s is 87 s of audio against a 22 s ring, so
-        // the span demanded was the whole ring, and waiting for it guaranteed
-        // the writer lapped the cursor (the permanent overrun at 4 M).
+        // own buffer, gathered from the ring across as many analysis cycles as
+        // it takes.  Clamping it to the ring made the largest FFT lengths
+        // impossible - a 4 M-point frame at 48 kS/s is 87 s of audio against a
+        // 22 s ring, so the span demanded was the whole ring, and waiting for it
+        // guaranteed the writer lapped the cursor (the permanent overrun at 4 M).
         int needed = fftLength;
 
         Channel channel = prefs.getFftChannel();
         boolean wantLeft = (channel == Channel.L);
 
         FundamentalPhaseAlignment alignMode = prefs.getFftFundamentalPhaseAlignment();
-        // A generated signal that changed since the last tick starts the
-        // alignment afresh, before this tick reads its first sample.
+        // A generated signal that changed since the last analysis cycle
+        // starts the alignment afresh, before this cycle reads its first sample.
         if (alignRestartPending.getAndSet(false)) {
             restartAlignment();
             republishTrims();       // the loops keep their state; their next update re-sends the trim
@@ -3582,8 +3591,8 @@ public final class FftAnalyzerWorker {
         }
         // The pilot lives only while the mode asks for it and the generator
         // plays.  A mode left behind and a tone taken down are both silent
-        // events for the alignment - nothing restarts it - so the tick
-        // itself takes the pilot back off the generator.
+        // events for the alignment - nothing restarts it - so the analysis
+        // cycle itself takes the pilot back off the generator.
         if (!pilotWanted(alignMode) || !genActiveNow) {
             clearPilot();
         }
@@ -3656,39 +3665,39 @@ public final class FftAnalyzerWorker {
         long avail = rdr.available();
         if (avail == SignalBufferReader.OVERRUN) {
             // The writer lapped the cursor - the contiguous stream tore (the
-            // worker fell a full ring behind).  Drop the cross-tick accumulator
+            // worker fell a full ring behind).  Drop the cross-cycle accumulator
             // + counters, invalidate the window, and re-anchor: deep averaging
             // restarts from a fresh unbroken span (overlap can only resume once
             // there are no breaks).  A reset the user can SEE - not a silent
             // torn-read glitch.
             onCaptureOverrun(rdr);
-            return IDLE_TICK_MS;
+            return IDLE_CYCLE_MS;
         }
 
         long samplesAbsStart;
         if (!winValid) {
             // Build the first window by GATHERING the `needed`-sample span into
-            // winBuf over as many ticks as it takes - the span can be longer
-            // than the ring, and every tick's share is consumed as it arrives,
-            // so the cursor stays right behind the writer instead of standing
-            // still and being lapped.
+            // winBuf over as many analysis cycles as it takes - the span can be
+            // longer than the ring, and every cycle's share is consumed as it
+            // arrives, so the cursor stays right behind the writer instead of
+            // standing still and being lapped.
             winFill = gather(rdr, winBuf, refWinBuf, winFill, needed, wantLeft, avail);
-            if (winFill == SignalBufferReader.OVERRUN) { onCaptureOverrun(rdr); return IDLE_TICK_MS; }
+            if (winFill == SignalBufferReader.OVERRUN) { onCaptureOverrun(rdr); return IDLE_CYCLE_MS; }
             if (winFill < needed) return awaitFor(needed - winFill, sampleRate);
             winLen      = needed;
             winAbsStart = rdr.getReadPos() - winLen;
             winValid    = true;
             winFill     = 0;
             // First hop of a fresh window: the lattice cycle starts over, and
-            // the value is the spacing this tick's frame pair is analysed at
-            // and the amount the next slide consumes.
+            // the value is the spacing this analysis cycle's frame pair is
+            // analysed at and the amount the next slide consumes.
             hopStep = 0;
             pendingHopSamples = nextHop(minHopSamples, maxHopSamples);
         } else {
             // Slide forward exactly one hop: pull the fresh hop, drop the oldest
-            // hop, append it.  The de-rotation rides each tick's ABSOLUTE
-            // sample position, so a per-tick VARIABLE hop stays exact - the
-            // stream just has to remain gap-free, which is why the pending hop
+            // hop, append it.  The de-rotation rides each analysis cycle's
+            // ABSOLUTE sample position, so a per-cycle VARIABLE hop stays exact -
+            // the stream just has to remain gap-free, which is why the pending hop
             // is frozen until its gather completes.  The hop is gathered the
             // same way as the first window: at zero overlap it is as long as
             // the frame itself, hence longer than the ring at the large FFT
@@ -3707,7 +3716,7 @@ public final class FftAnalyzerWorker {
                 refHopBuf = new double[maxHopSamples];
             }
             hopFill = gather(rdr, hopBuf, refHopBuf, hopFill, slideHop, wantLeft, avail);
-            if (hopFill == SignalBufferReader.OVERRUN) { onCaptureOverrun(rdr); return IDLE_TICK_MS; }
+            if (hopFill == SignalBufferReader.OVERRUN) { onCaptureOverrun(rdr); return IDLE_CYCLE_MS; }
             if (hopFill < slideHop) return awaitFor(slideHop - hopFill, sampleRate);
             System.arraycopy(winBuf, slideHop, winBuf, 0, winLen - slideHop);
             System.arraycopy(hopBuf, 0, winBuf, winLen - slideHop, slideHop);
@@ -3718,19 +3727,19 @@ public final class FftAnalyzerWorker {
             winAbsStart += slideHop;
             hopFill = 0;
             // The slide is complete - take the NEXT hop.  It is the spacing
-            // this tick's analysis states for its frame pair, so the second
-            // frame lands exactly where the next tick's first frame will.
+            // this cycle's analysis states for its frame pair, so the second
+            // frame lands exactly where the next cycle's first frame will.
             pendingHopSamples = nextHop(minHopSamples, maxHopSamples);
         }
         samplesAbsStart = winAbsStart;
 
-        // Per-tick analysis copy: the comb / FFT window mutate the samples in
+        // Per-cycle analysis copy: the comb / FFT window mutate the samples in
         // place, so the retained sliding window must NOT be handed to analyze.
         if (analyzeBuf.length != winLen) analyzeBuf = new double[winLen];
         System.arraycopy(winBuf, 0, analyzeBuf, 0, winLen);
 
         // Any change to fftLength / window / channel / sampleRate makes the
-        // cross-tick accumulator meaningless (a different geometry or signal
+        // cross-cycle accumulator meaningless (a different geometry or signal
         // under the cumulative spectrum), so it restarts.
         // The mains-suppression mode is NOT one of them - a change of mode is a
         // change of what the samples are, not of the spectrum's geometry, so it
@@ -3755,13 +3764,14 @@ public final class FftAnalyzerWorker {
         // position.
         //
         // What that buys is one window of coverage discarded, and no more.  It
-        // does NOT prevent a mixed frame: every tick copies the pristine retained
-        // window into analyzeBuf and filters the WHOLE copy in one
-        // processPreservingDc call, so no FFT frame can straddle the switch with
-        // or without the restart.  Nor does it train the new filter, which
-        // mainsTimeFilter rebuilds untrained on a mode change: the gather ticks
-        // return at the incomplete-window wait above, before this block runs, so
-        // the first analysed tick after the switch is the first one to train it.
+        // does NOT prevent a mixed frame: every analysis cycle copies the
+        // pristine retained window into analyzeBuf and filters the WHOLE copy
+        // in one processPreservingDc call, so no FFT frame can straddle the
+        // switch with or without the restart.  Nor does it train the new
+        // filter, which mainsTimeFilter rebuilds untrained on a mode change:
+        // the gather cycles return at the incomplete-window wait above, before
+        // this block runs, so the first analysed cycle after the switch is the
+        // first one to train it.
         //
         // The accumulator is deliberately left untouched.  Pre-switch and
         // post-switch frames go on averaging together, and the averages counter
@@ -3798,9 +3808,10 @@ public final class FftAnalyzerWorker {
         // The coherent de-rotation locks onto the detected fundamental, so
         // in dual-tone the hint must point at a real tone (the lower one).
         // Hinting the single-tone frequency - usually nowhere near F1/F2 -
-        // pegs the reference to a noise bin that jitters tick-to-tick, which
-        // smears BOTH tones and makes the measured frequencies (and Δf
-        // readout) swing wildly even though the generator never moves.
+        // pegs the reference to a noise bin that jitters from one analysis
+        // cycle to the next, which smears BOTH tones and makes the measured
+        // frequencies (and Δf readout) swing wildly even though the generator
+        // never moves.
         boolean dualTone = prefs.getGenSignalForm().isDualTone();
         // Which tones the generator is EMITTING - asked of the engine that owns
         // it (Events.GENERATOR_EMITTED_HZ) rather than re-derived from these
@@ -3831,8 +3842,8 @@ public final class FftAnalyzerWorker {
         // like the .frc cal, but independent of it.  Input stays pristine, so
         // the per-frame cache works normally.
         if (mainsSuppress) {
-            // Re-track every Nth tick only - see MAINS_TRACK_TICK_INTERVAL.
-            if (mainsTrackTick++ % MAINS_TRACK_TICK_INTERVAL == 0) {
+            // Re-track every Nth analysis cycle only - see MAINS_TRACK_CYCLE_INTERVAL.
+            if (mainsTrackCycle++ % MAINS_TRACK_CYCLE_INTERVAL == 0) {
                 mainsComb(sampleRate).track(samples, Math.min(samples.length, sampleRate));
             }
         } else if (mainsTimeDomain) {
@@ -3842,7 +3853,7 @@ public final class FftAnalyzerWorker {
             // so the coherent de-rotation / average is undisturbed.  The window
             // is filtered in double precision to preserve the measurement floor.
             MainsTimeFilter mf = mainsTimeFilter(mainsMode, sampleRate);
-            if (mainsTrackTick++ % MAINS_TRACK_TICK_INTERVAL == 0) {
+            if (mainsTrackCycle++ % MAINS_TRACK_CYCLE_INTERVAL == 0) {
                 mf.track(samples, Math.min(samples.length, sampleRate));
             }
             mf.processPreservingDc(samples, samples.length, samplesAbsStart);
@@ -3856,11 +3867,11 @@ public final class FftAnalyzerWorker {
                         : Double.NaN);
         // Dual tone: the second tone is searched for when no hint names it.
         analyzer.setMultiTone(dualTone);
-        // While cross-tick averaging, the single-tick THD / SNR / noise-floor
+        // While cross-cycle averaging, the single-cycle THD / SNR / noise-floor
         // stats are discarded and re-derived by recomputeStats() on the
         // accumulated spectrum below - so tell analyze to skip those sweeps
         // (incl. the two O(N log N) noise sorts) and only produce the spectrum
-        // + fundamental/harmonic bins.  Single-tick mode keeps the full stats.
+        // + fundamental/harmonic bins.  Single-cycle mode keeps the full stats.
         analyzer.setSpectrumOnly(accumulate);
         FftResult slot = resultPool.acquire();
         FftResult r;
@@ -3873,14 +3884,14 @@ public final class FftAnalyzerWorker {
         } catch (RuntimeException ex) {
             // Pool hygiene only - the failure itself must surface: the worker
             // loop's Throwable catch logs it, so a persistently throwing
-            // analysis is visible in a WARN-level log instead of ticking
+            // analysis is visible in a WARN-level log instead of cycling
             // forever in silence.
             resultPool.release(slot);
             throw ex;
         }
-        // Pooled slot: clear the conditionally-written debug fields so a tick
+        // Pooled slot: clear the conditionally-written debug fields so a cycle
         // that doesn't reach their assignment below can't republish a
-        // previous tick's snapshots.
+        // previous cycle's snapshots.
         r.gates         = null;
         r.gateBlockDbFs = null;
         // A signal change (resetStatistics) landed while this window was
@@ -3895,12 +3906,12 @@ public final class FftAnalyzerWorker {
                 log.info("Signal changed mid-analysis - straddling window discarded");
             }
             resultPool.release(r);
-            return IDLE_TICK_MS;
+            return IDLE_CYCLE_MS;
         }
         // The dBFS->dBV offset is the analysed channel's ADC calibration, applied
         // at display time - nothing to anchor per result here; dBFS is the
         // result's only base scale.
-        // Mode-transition detection - reset the cross-tick average only when the
+        // Mode-transition detection - reset the cross-cycle average only when the
         // new bound discards collected depth: the averaging mode flips
         // (idle ↔ averaging), a ring ↔ infinite switch, or a SMALLER ring.  A
         // LARGER ring keeps the depth (the exponential window just widens).
@@ -3917,7 +3928,7 @@ public final class FftAnalyzerWorker {
         lastAccumulate  = accumulate;
         lastForeverMode = foreverMode;
         lastRingN       = ringN;
-        // Cross-tick accumulation: each tick contributes its (small) per-tick
+        // Cross-cycle accumulation: each cycle contributes its (small) per-cycle
         // frames to a running accumulator (coherently rotated to align with
         // the accumulator's time reference), then the displayed Result is
         // rebuilt from the running average and the harmonic / THD / SNR stats
@@ -3925,28 +3936,28 @@ public final class FftAnalyzerWorker {
         // mean (SNR boost √(total frames)); a finite ring N is the same
         // accumulator bounded to N frames (an exponential window), so it also
         // reaches √N depth regardless of the capture-buffer size.
-        // Frequency-domain glitch / stall rejection: compare this tick's
+        // Frequency-domain glitch / stall rejection: compare this cycle's
         // spectrum to the running-median reference and re-sync (like an
         // overrun - re-anchor past the glitched overlap) before it can poison
-        // the cross-tick vector average.  Only while accumulating; the
+        // the cross-cycle vector average.  Only while accumulating; the
         // detector reconfigures itself on an fftLength change and reuses the
         // existing discontinuity recovery + banner.
         // Time-domain discontinuity gate first (cheap O(n) pass on the raw
-        // window): the tick's own refined fundamental pins the recurrence
-        // prediction exactly, so the reject threshold rides on the noise
-        // floor at any signal frequency; NaN (no tone) self-estimates.
+        // window): the analysis cycle's own refined fundamental pins the
+        // recurrence prediction exactly, so the reject threshold rides on the
+        // noise floor at any signal frequency; NaN (no tone) self-estimates.
         if (USE_TIME_DISCONTINUITY && accumulate && prefs.isFftDetectTimeDiscontinuity()) {
             double f0 = r.fundamentalHzRefined;
             double omega = (f0 > 0 && f0 < sampleRate / 2.0)
                     ? 2.0 * Math.PI * f0 / sampleRate : Double.NaN;
             if (timeDetector.detect(samples, samples.length, omega)) {
                 if (log.isInfoEnabled()) {
-                    log.info("Time-domain discontinuity in the tick window - re-sync");
+                    log.info("Time-domain discontinuity in the analysis cycle's window - re-sync");
                 }
-                subtractPreviousTicks();
+                subtractPreviousCycles();
                 onSignalDiscontinuity(rdr);
                 resultPool.release(r);
-                return IDLE_TICK_MS;
+                return IDLE_CYCLE_MS;
             }
         }
         if (USE_SPECTRAL_DISCONTINUITY && accumulate) {
@@ -3959,12 +3970,12 @@ public final class FftAnalyzerWorker {
                     lastRejectBlockDbFs = dbgBlock;
                     lastRejectGates     = spectralDetector.gates();
                 }
-                subtractPreviousTicks();
+                subtractPreviousCycles();
                 onSignalDiscontinuity(rdr);
                 resultPool.release(r);
-                return IDLE_TICK_MS;
+                return IDLE_CYCLE_MS;
             }
-            r.gates         = spectralDetector.gates();   // debug overlay snapshot
+            r.gates        = spectralDetector.gates();   // debug overlay snapshot
             r.gateBlockDbFs = dbgBlock;                    // current accepted block (pre-average)
         }
         // Second epoch gate: the detector pass above takes tens of ms at large
@@ -3975,7 +3986,7 @@ public final class FftAnalyzerWorker {
                 log.info("Signal changed mid-analysis - straddling window discarded before accumulation");
             }
             resultPool.release(r);
-            return IDLE_TICK_MS;
+            return IDLE_CYCLE_MS;
         }
         // The tone frequencies for the frequency lock, read from the phase
         // step between this cycle's frame and the previous one on both
@@ -3985,13 +3996,14 @@ public final class FftAnalyzerWorker {
         // notched channel.
         measureAnalysedFrequencies(r);
         measureReferenceFrequencies(r, coherent);
-        // Fundamental phase alignment: this tick's phase excess, measured after
-        // the gates (a tick that never reaches the accumulator needs none) and
-        // before the accumulator, which consumes it at its two points.  Mode
-        // REFERENCE_CHANNEL measures it per tick against the opposite channel.
+        // Fundamental phase alignment: this analysis cycle's phase excess,
+        // measured after the gates (a cycle that never reaches the accumulator
+        // needs none) and before the accumulator, which consumes it at its two
+        // points.  Mode REFERENCE_CHANNEL measures it per cycle against the
+        // opposite channel.
         phaseAlignUnsettled = false;
         if (accumulate) {
-            pendingPhiF = tickPhiF(alignMode, r, coherent);
+            pendingPhiF = cyclePhiF(alignMode, r, coherent);
         } else {
             pendingPhiF  = 0.0;
             pendingPhiF2 = 0.0;
@@ -4011,23 +4023,23 @@ public final class FftAnalyzerWorker {
             }
             onSignalDiscontinuity(rdr);
             resultPool.release(r);
-            return IDLE_TICK_MS;
+            return IDLE_CYCLE_MS;
         }
-        // A tick whose alignment has settled nothing is read and published but
-        // never averaged: the drift it carries is the last settled one, held
-        // while the notch moves on, so accumulating it would fold a stale
-        // rotation into every line.
+        // An analysis cycle whose alignment has settled nothing is read and
+        // published but never averaged: the drift it carries is the last
+        // settled one, held while the notch moves on, so accumulating it would
+        // fold a stale rotation into every line.
         boolean accumulated = accumulate && !phaseAlignUnsettled
                 && accumulateIntoForeverBuffer(r, samplesAbsStart, coherent, targetFrames);
 
-        // The generator frequency lock, on every tick that got here - settled
-        // or not: each passed both discontinuity gates on a full post-seek
-        // window, and the lock's reading is the reference channel's tone,
-        // which the pair's settling does not touch.  A lock that stood
+        // The generator frequency lock, on every analysis cycle that got here -
+        // settled or not: each passed both discontinuity gates on a full
+        // post-seek window, and the lock's reading is the reference channel's
+        // tone, which the pair's settling does not touch.  A lock that stood
         // still while the pair was unsettled left the generator wherever a
         // false reading had put it, with nothing to bring it back.  Ahead of
         // the unsettled return and the display throttle, so neither an
-        // unsettled tick nor a tick the display skips starves the loop.
+        // unsettled cycle nor a cycle the display skips starves the loop.
         applyFrequencyLock(r, alignMode, samplesAbsStart, rdr.getWritePos(), epochAtStart);
         stampFllAverages(r);
 
@@ -4038,12 +4050,12 @@ public final class FftAnalyzerWorker {
             pilotRetrackPending = true;
         }
 
-        // A tick the alignment has not settled is analysed but not averaged, so
-        // it must not reach the view either: drawn among averaged frames it
-        // shows one frame's noise floor, which reads as the average collapsing.
-        // The tick goes the way a re-sync tick goes - nothing published - and
-        // the banner raised here stands until a published frame clears it,
-        // which is the first frame that was averaged again.
+        // An analysis cycle the alignment has not settled is analysed but not
+        // averaged, so it must not reach the view either: drawn among averaged
+        // frames it shows one frame's noise floor, which reads as the average
+        // collapsing.  The cycle goes the way a re-sync cycle goes - nothing
+        // published - and the banner raised here stands until a published frame
+        // clears it, which is the first frame that was averaged again.
         if (phaseAlignUnsettled) {
             if (!phaseAlignBannerUp) {
                 phaseAlignBannerUp = true;
@@ -4054,7 +4066,7 @@ public final class FftAnalyzerWorker {
         }
         phaseAlignBannerUp = false;
 
-        // Per-tick bookkeeping runs EVERY tick, even on ticks whose display we
+        // Per-cycle bookkeeping runs EVERY cycle, even on cycles whose display we
         // skip below.  Neither counter counts the collection's first cycle:
         // that one seeds the accumulator instead of averaging into it.
         if (firstFrameDone) {
@@ -4063,18 +4075,18 @@ public final class FftAnalyzerWorker {
         }
         firstFrameDone = true;
         // Stop-after-N: forever mode + cap enabled.  The bound is that same
-        // depth.  The cross-tick accumulator deepens past 2 frames.
+        // depth.  The cross-cycle accumulator deepens past 2 frames.
         if (foreverMode
                 && prefs.isFftStopAfterNEnabled()
                 && completedAnalyses >= prefs.getFftStopAfterN()) {
             pauseAndAnnounceAutoStop();
         }
 
-        // Per-tick TRIM: the accumulator above ran this tick, but the O(N) display
-        // rebuild below (overlay + recomputeStats + dBV lift + deep-copy publish)
-        // does NOT need to.  Skip it while the capture backlog is high - catch up
-        // rather than overrun - throttle it to DISPLAY_MIN_NANOS when caught up,
-        // but force it by DISPLAY_MAX_NANOS so the view never freezes.
+        // Per-cycle TRIM: the accumulator above ran this cycle, but the O(N)
+        // display rebuild below (overlay + recomputeStats + dBV lift + deep-copy
+        // publish) does NOT need to.  Skip it while the capture backlog is high -
+        // catch up rather than overrun - throttle it to DISPLAY_MIN_NANOS when
+        // caught up, but force it by DISPLAY_MAX_NANOS so the view never freezes.
         long backlog   = rdr.getWritePos() - rdr.getReadPos();
         long sinceShow = System.nanoTime() - lastShowNanos;
         boolean showNow = paused.get()
@@ -4097,7 +4109,8 @@ public final class FftAnalyzerWorker {
         // so it's not redone on coalesced frames and mains is applied at plot
         // time.  Here we only hand over the RAW averaged spectrum plus
         // the state that pipeline needs: tracked mains f0 (NaN => off), the pinned
-        // coherent κ for the cal "before" dots (NaN => single tick), the channel.
+        // coherent κ for the cal "before" dots (NaN => single analysis cycle),
+        // the channel.
         r.mainsF0Hz     = mainsSuppress ? mainsComb(sampleRate).getMainsHz() : Double.NaN;
         r.coherentKappa = accumulated
                 ? (accumulator.isStarted() ? accumulator.getKappa()
@@ -4110,7 +4123,7 @@ public final class FftAnalyzerWorker {
         r.gateRejectGates  = lastRejectGates;
 
         // Hand off to the UI.  No copy needed: analyze() returns a FRESH
-        // FftResult each tick (the worker never mutates a handed-off {@code r}),
+        // FftResult each cycle (the worker never mutates a handed-off {@code r}),
         // and the view deep-copies on receipt.  publishResult coalesces, so a
         // slow repaint can't pile spectra up on the asyncExec queue.
         if (log.isWarnEnabled() && DebugSwitches.SHOW_FFT_ANALYZE_TIME) {
@@ -4124,7 +4137,7 @@ public final class FftAnalyzerWorker {
                 log.info("Signal changed mid-analysis - straddling window discarded before publish");
             }
             resultPool.release(r);
-            return IDLE_TICK_MS;
+            return IDLE_CYCLE_MS;
         }
         publishResult(r);
         handToPredistortionEngine(r);
@@ -4158,9 +4171,9 @@ public final class FftAnalyzerWorker {
         // Coalescing handoff: stash the newest result and post a drain runnable
         // ONLY when the slot was empty.  If the UI hasn't drained the previous
         // one yet (a large-FFT repaint is far slower than the parallelized
-        // per-tick), the newer result simply overwrites it - the SWT asyncExec
+        // per-cycle), the newer result simply overwrites it - the SWT asyncExec
         // queue then holds at most one spectrum instead of growing without
-        // bound until recording stops.  Averaging keeps running every tick; only
+        // bound until recording stops.  Averaging keeps running every cycle; only
         // the DISPLAY is throttled to the UI's paint rate, which is lossless for
         // a coherent average (the next frame carries the deeper accumulation).
         FftResult coalesced = latestForUi.getAndSet(newSlot);
@@ -4271,7 +4284,7 @@ public final class FftAnalyzerWorker {
         return (int) Math.ceil(1000.0 * samples / sampleRate);
     }
 
-    /** Marks the coming inter-tick wait as DATA-driven: the loop blocks on
+    /** Marks the coming inter-cycle wait as DATA-driven: the loop blocks on
      *  the ring until {@code samples} fresh samples exist (see
      *  {@link #awaitSamplesNext}).  Returns the rate-derived estimate, which
      *  only CAPS that wait. */
@@ -4294,12 +4307,12 @@ public final class FftAnalyzerWorker {
         return Math.min(maxHopSamples, minHopSamples + (1 + step) * quantum);
     }
 
-    /** Consumes this tick's share of a span being collected into {@code dst}:
+    /** Consumes this cycle's share of a span being collected into {@code dst}:
      *  copies what the ring holds right now (at most the {@code target - have}
      *  still missing) behind the {@code have} samples already there, and
      *  returns the new fill count - {@code target} once the span is complete,
      *  or {@link SignalBufferReader#OVERRUN} if the cursor was lapped.  Reading
-     *  every tick is what keeps the cursor close behind the writer while a span
+     *  every cycle is what keeps the cursor close behind the writer while a span
      *  longer than the ring is being assembled.  Worker-thread only (it
      *  advances the cursor). */
     private int gather(SignalBufferReader rdr, double[] dst, double[] refDst, int have, int target,

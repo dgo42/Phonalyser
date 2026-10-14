@@ -26,9 +26,10 @@ import org.junit.jupiter.api.Test;
 
 /**
  * Convergence + sign check for {@link DerotationPhaseLock}.  Models the worker
- * loop: each tick the fundamental is de-rotated with the lock's CURRENT kappa,
- * so the observed (residual) phase is 2π·(κtrue − κ)·delta/N; the loop must
- * drive κ -> κtrue and lock - and stay stable (the old per-tick PLL diverged).
+ * loop: each analysis cycle the fundamental is de-rotated with the lock's
+ * CURRENT kappa, so the observed (residual) phase is 2π·(κtrue − κ)·delta/N;
+ * the loop must drive κ -> κtrue and lock - and stay stable (the old per-cycle
+ * PLL diverged).
  */
 class DerotationPhaseLockTest {
 
@@ -67,7 +68,7 @@ class DerotationPhaseLockTest {
     void convergesWithPhaseNoise() {
         double kappaTrue = 5482.371;
         for (double seedErr : new double[]{+0.3, -0.3}) {
-            runConverges(kappaTrue, seedErr, 0.0005);  // high-SNR-grade per-tick phase noise
+            runConverges(kappaTrue, seedErr, 0.0005);  // high-SNR-grade per-cycle phase noise
         }
     }
 }

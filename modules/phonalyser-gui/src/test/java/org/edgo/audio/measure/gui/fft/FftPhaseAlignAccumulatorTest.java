@@ -42,14 +42,14 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Fundamental phase alignment inside the real cross-tick accumulator.
+ * Fundamental phase alignment inside the real cross-cycle accumulator.
  *
- * <p>Vocabulary.  A <b>tick</b> is one analysis cycle: a window of
- * {@code fftSize + hop} samples is analysed as two overlapping frames and the
- * result is added to the cross-tick accumulator
- * ({@code accumulateIntoForeverBuffer}), which de-rotates it
- * onto the first tick's time origin and sums.  <b>phiF</b> is the
- * fundamental's phase excess for a tick, in radians: how far the analysed
+ * <p>Vocabulary.  An <b>analysis cycle</b> is one pass of the analyser: a
+ * window of {@code fftSize + hop} samples is analysed as two overlapping
+ * frames and the result is added to the cross-cycle accumulator
+ * ({@code accumulateIntoForeverBuffer}), which de-rotates it onto the first
+ * cycle's time origin and sums.  <b>phiF</b> is the fundamental's phase
+ * excess for an analysis cycle, in radians: how far the analysed
  * channel's fundamental phase stands from the drift-free time base an
  * alignment mode supplies.  Behind a notch filter the centre frequency drifts
  * thermally and the phase response at the centre is steep, so the fundamental -
@@ -63,14 +63,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * fundamental WITHOUT the walk (the un-notched tap the reference-channel mode
  * feeds on).  phiF is computed exactly as the worker computes it -
  * {@link FftAnalyzer#binPhasor} on the reference window against the analysed
- * spectrum's raw fundamental bin - and written into the worker's own per-tick
+ * spectrum's raw fundamental bin - and written into the worker's own per-cycle
  * field, which is where the accumulator reads it.  Everything below that field
  * is production code, reached as it stands: the accumulator step, its rollback
  * and the field are private, and a productive class is not widened to let a
  * test in, so the harness goes through reflection.
  *
- * <p>Untagged on purpose: it is fast (a small FFT, a few hundred ticks) and
- * runs in the normal build, unlike the exploratory drift harness beside it.
+ * <p>Untagged on purpose: it is fast (a small FFT, a few hundred analysis
+ * cycles) and runs in the normal build, unlike the exploratory drift harness
+ * beside it.
  */
 class FftPhaseAlignAccumulatorTest {
 
@@ -78,11 +79,11 @@ class FftPhaseAlignAccumulatorTest {
     private static final int        FFT_SIZE    = 4096;
     private static final WindowType WINDOW      = WindowType.BH7;
     private static final FftOverlap OVERLAP     = FftOverlap.PCT_75;
-    /** The overlap's hop: the advance between the frames of successive ticks
-     *  - the worker's own geometry. */
+    /** The overlap's hop: the advance between the frames of successive
+     *  analysis cycles - the worker's own geometry. */
     private static final int        HOP         = FFT_SIZE / 4;
     private static final int        WIN_LEN     = FFT_SIZE;
-    private static final int        TICKS       = 300;
+    private static final int        CYCLES      = 300;
 
     /** On-bin fundamental: an integer bin makes the accumulated level exactly
      *  the synthesized one, so a tolerance of 0.1 dB measures the coherent sum
@@ -125,23 +126,23 @@ class FftPhaseAlignAccumulatorTest {
      *  must be the ones a zero excess gives, to floating-point noise. */
     private static final double     CONST_PHIF_RAD  = 0.7;
     private static final double     IDENTICAL_TOL_DB = 1.0e-6;
-    /** Ticks between two steps of the held-excess case, and the step the
-     *  notch's phase takes in that time.  The excess is HELD until the next
-     *  step replaces it, so in between the modelled notch stands still and the
-     *  held value is exact. */
-    private static final int        HOLD_TICKS    = 50;
+    /** Analysis cycles between two steps of the held-excess case, and the
+     *  step the notch's phase takes in that time.  The excess is HELD until
+     *  the next step replaces it, so in between the modelled notch stands
+     *  still and the held value is exact. */
+    private static final int        HOLD_CYCLES   = 50;
     private static final double     HOLD_STEP_RAD = Math.toRadians(4.0);
 
-    /** The most samples a tick of the slipped case loses without telling the
-     *  counter: past half a period of the fundamental -
-     *  {@code FFT_SIZE / (2 FUND_BIN)} = 32 samples - so on some ticks the
-     *  count names the wrong period, which a ladder of whole multiples of the
-     *  fundamental must not see. */
+    /** The most samples an analysis cycle of the slipped case loses without
+     *  telling the counter: past half a period of the fundamental -
+     *  {@code FFT_SIZE / (2 FUND_BIN)} = 32 samples - so on some analysis
+     *  cycles the count names the wrong period, which a ladder of whole
+     *  multiples of the fundamental must not see. */
     private static final int        SLIP_MAX_SAMPLES = 40;
-    /** The least number of ticks the pilot case with the gap must average: a
-     *  run in which the pair settled on few frames would hold its levels on
-     *  those few and prove nothing about the rest. */
-    private static final int        SLIP_MIN_AVERAGED_TICKS = TICKS * 3 / 4;
+    /** The least number of analysis cycles the pilot case with the gap must
+     *  average: a run in which the pair settled on few frames would hold its
+     *  levels on those few and prove nothing about the rest. */
+    private static final int        SLIP_MIN_AVERAGED_CYCLES = CYCLES * 3 / 4;
 
     /** The two pilot bins of the cases below, both whole bins of the
      *  transform and spaced ONE FUNDAMENTAL BIN apart - 992 and 992 - 64 -
@@ -151,7 +152,7 @@ class FftPhaseAlignAccumulatorTest {
     private static final int    PILOT_BIN  = 992;
     private static final int    PILOT2_BIN = PILOT_BIN - FUND_BIN;
     /** Amplitude of every bin of the synthetic frame that carries no tone:
-     *  60 dB under the pilot's own line, so the worker's per-tick check finds
+     *  60 dB under the pilot's own line, so the worker's per-cycle check finds
      *  the pilot standing over its local floor. */
     private static final double PILOT_FLOOR = 1.0e-3;
     /** The margin a pilot line must hold over its local floor, dB: the
@@ -160,14 +161,15 @@ class FftPhaseAlignAccumulatorTest {
      *  floor above, a frame carrying the line reads 60 dB and one without it
      *  0 dB. */
     private static final double PILOT_MARGIN_DB = 20.0;
-    /** Ticks each pilot case runs.  Enough that a case which loses samples
-     *  part way through still leaves the resolver a decision span and its
-     *  confirming frames afterwards: a span is two transform lengths, which
-     *  at these hops is about five ticks. */
-    private static final int    PILOT_TICKS = 24;
+    /** Analysis cycles each pilot case runs.  Enough that a case which loses
+     *  samples part way through still leaves the resolver a decision span and
+     *  its confirming frames afterwards: a span is two transform lengths,
+     *  which at these hops is about five analysis cycles. */
+    private static final int    PILOT_CYCLES = 24;
     /** The hops a pilot case draws from, in samples - the random overlap
-     *  draws a new one every tick, so the cases must not stand on one. */
-    private static final int[]  PILOT_HOPS  = { 1024, 1280, 1536, 1792, 2048 };
+     *  draws a new one every analysis cycle, so the cases must not stand on
+     *  one. */
+    private static final int[]  PILOT_HOPS   = { 1024, 1280, 1536, 1792, 2048 };
     /** The fixed hop of the single-pilot case: with one line the whole turns
      *  come from the hop counter, which is right only while the counter's
      *  advance and the stream's agree to under half a turn of that line. */
@@ -185,11 +187,11 @@ class FftPhaseAlignAccumulatorTest {
      *  the transform's 4096 - so each frame finds both lines at a phase of
      *  their own and only a member of their own in the family can bring them
      *  back together. */
-    private static final int    PILOT_ACCUM_TICKS = 8;
-    private static final int    PILOT_ACCUM_HOP   = 1000;
-    private static final double PILOT_ACCUM_DBFS  = -40.0;
-    private static final double PILOT_PHASE_RAD   = 0.9;
-    private static final double PILOT2_PHASE_RAD  = -2.4;
+    private static final int    PILOT_ACCUM_CYCLES = 8;
+    private static final int    PILOT_ACCUM_HOP    = 1000;
+    private static final double PILOT_ACCUM_DBFS   = -40.0;
+    private static final double PILOT_PHASE_RAD    = 0.9;
+    private static final double PILOT2_PHASE_RAD   = -2.4;
     /** The relative error left between the two converter clocks by the
      *  fundamental's frequency lock: it trims the generator until the
      *  fundamental sits on its bin in the capture's clock, and the pilots,
@@ -211,35 +213,38 @@ class FftPhaseAlignAccumulatorTest {
      *  bin's ratio. */
     private static final double PILOT_POS  = PILOT_BIN  + PILOT_OFFSET_BINS;
     private static final double FUND_POS   = FUND_BIN   + FUND_OFFSET_BINS;
-    /** The time base's own slip per tick, in samples: what a converter pair
-     *  running at slightly different rates adds to the window's position.  It
-     *  turns EVERY line, the pilot by {@code 2 pi f2 dt} and the fundamental
-     *  by {@code 2 pi f0 dt}, which is what the pilot method cancels. */
+    /** The time base's own slip per analysis cycle, in samples: what a
+     *  converter pair running at slightly different rates adds to the
+     *  window's position.  It turns EVERY line, the pilot by
+     *  {@code 2 pi f2 dt} and the fundamental by {@code 2 pi f0 dt}, which
+     *  is what the pilot method cancels. */
     private static final double PILOT_SLIP_SAMPLES = 0.05;
-    /** The notch's own phase step per tick, radians: a drift that turns the
-     *  fundamental ALONE, which is what the excess must report.  A ninth of a
-     *  degree per tick, inside the excess change the worker allows between
-     *  two read frames (a third of a degree plus the drift of the elapsed
-     *  time), and forty times a real notch's drift over one hop. */
+    /** The notch's own phase step per analysis cycle, radians: a drift that
+     *  turns the fundamental ALONE, which is what the excess must report.  A
+     *  ninth of a degree per analysis cycle, inside the excess change the
+     *  worker allows between two read frames (a third of a degree plus the
+     *  drift of the elapsed time), and forty times a real notch's drift over
+     *  one hop. */
     private static final double PILOT_NOTCH_STEP_RAD = 0.002;
     /** Degrees the pilot cases allow around an exact answer. */
     private static final double PILOT_TOL_DEG = 1.0e-3;
 
     /** The worker members this harness drives, by name because that is what
-     *  reflection takes: the private field holding the next tick's phase
-     *  excess, the private accumulate step, the private rollback the
+     *  reflection takes: the private field holding the next analysis cycle's
+     *  phase excess, the private accumulate step, the private rollback the
      *  discontinuity path uses, and the private accumulator whose overlay
      *  writes the average back onto a result for the display path. */
     private static final String PHI_F_FIELD = "pendingPhiF";
     private static final String ACCUMULATE  = "accumulateIntoForeverBuffer";
-    private static final String SUBTRACT    = "subtractPreviousTicks";
+    private static final String SUBTRACT    = "subtractPreviousCycles";
     private static final String ACCUMULATOR = "accumulator";
 
     private static final Logger LOG = LogManager.getLogger("FftPhaseAlign");
 
-    /** One tick's phase excess in radians, as the driver supplies it. */
+    /** One analysis cycle's phase excess in radians, as the driver supplies
+     *  it. */
     @FunctionalInterface
-    private interface TickPhiF {
+    private interface CyclePhiF {
         double of(FftAnalyzer analyzer, FftResult r, long base);
     }
 
@@ -253,7 +258,7 @@ class FftPhaseAlignAccumulatorTest {
      */
     @Test
     void referenceChannelHoldsTheHarmonicsThatNoneLoses() {
-        int total = (TICKS - 1) * HOP + WIN_LEN;
+        int total = (CYCLES - 1) * HOP + WIN_LEN;
         double[] walk      = phaseWalk(SEED, total);
         double[] analysed  = channel(SEED + 1, total, FUND_BIN, HARMONICS, 0.0, walk);
         double[] reference = channel(SEED + 2, total, FUND_BIN, 0, 0.0, null);
@@ -294,7 +299,7 @@ class FftPhaseAlignAccumulatorTest {
      */
     @Test
     void constantExcessLeavesEveryLevelWhereZeroDoes() {
-        int total = (TICKS - 1) * HOP + WIN_LEN;
+        int total = (CYCLES - 1) * HOP + WIN_LEN;
         double[] analysed = channel(SEED + 3, total, FUND_BIN, HARMONICS, 0.0, null);
 
         double[] zero     = accumulate(analysed, (analyzer, r, base) -> 0.0);
@@ -313,16 +318,16 @@ class FftPhaseAlignAccumulatorTest {
     /**
      * The reference recipe itself: two channels carrying the SAME off-bin
      * fundamental at a known phase difference.  phiF must be that difference at
-     * every tick - constant, and free of the per-tick hop advance.  Off-bin on
-     * purpose: with an integer bin and this hop the analyser's de-rotation is
-     * the identity and a wrong recipe would pass unnoticed.
+     * every analysis cycle - constant, and free of the per-cycle hop advance.
+     * Off-bin on purpose: with an integer bin and this hop the analyser's
+     * de-rotation is the identity and a wrong recipe would pass unnoticed.
      */
     @Test
     void phaseExcessIsTheChannelDifference() {
         final double offBinPos   = FUND_BIN + 0.3;
         final double analysedPhi = 1.1;
         final double referencePhi = -0.4;
-        int total = (TICKS - 1) * HOP + WIN_LEN;
+        int total = (CYCLES - 1) * HOP + WIN_LEN;
         double[] analysed  = channel(SEED + 4, total, offBinPos, HARMONICS, analysedPhi, null);
         double[] reference = channel(SEED + 5, total, offBinPos, 0, referencePhi, null);
 
@@ -331,33 +336,33 @@ class FftPhaseAlignAccumulatorTest {
         double[] refWin = new double[WIN_LEN];
         double expected = Math.IEEEremainder(analysedPhi - referencePhi, 2.0 * Math.PI);
         long base = 0;
-        for (int t = 0; t < TICKS; t++) {
+        for (int t = 0; t < CYCLES; t++) {
             System.arraycopy(analysed,  (int) base, win,    0, WIN_LEN);
             System.arraycopy(reference, (int) base, refWin, 0, WIN_LEN);
             FftResult r = analyze(analyzer, win, base);
             double phiF = phaseExcess(analyzer, r, refWin);
             assertEquals(expected, phiF, 1.0e-3,
-                    "phiF must be the two channels' fundamental phase difference at tick " + t);
+                    "phiF must be the two channels' fundamental phase difference at analysis cycle " + t);
             base += HOP;
         }
     }
 
     /**
      * What the worker feeds its accumulator in mode REFERENCE_CHANNEL is the
-     * CHANGE of the measured excess since the collection's first tick, not the
-     * excess itself: the accumulated fundamental then keeps the notch's
-     * baseline phase, the phase the loaded correction de-embeds and the
-     * predistortion frame reference subtracts.  Two channels at a fixed
-     * difference give zero at every tick; a difference that grows by a step
-     * afterwards gives that step.
+     * CHANGE of the measured excess since the collection's first analysis
+     * cycle, not the excess itself: the accumulated fundamental then keeps
+     * the notch's baseline phase, the phase the loaded correction de-embeds
+     * and the predistortion frame reference subtracts.  Two channels at a
+     * fixed difference give zero at every analysis cycle; a difference that
+     * grows by a step afterwards gives that step.
      */
     @Test
-    void referenceExcessFedToTheAccumulatorIsTheChangeSinceTheFirstTick() throws Exception {
+    void referenceExcessFedToTheAccumulatorIsTheChangeSinceTheFirstCycle() throws Exception {
         final double offBinPos    = FUND_BIN + 0.3;
         final double analysedPhi  = 1.1;
         final double referencePhi = -0.4;
         final double stepRad      = 0.3;
-        int total = (TICKS - 1) * HOP + WIN_LEN;
+        int total = (CYCLES - 1) * HOP + WIN_LEN;
         double[] analysed  = channel(SEED + 7, total, offBinPos, HARMONICS, analysedPhi, null);
         double[] stepped   = channel(SEED + 7, total, offBinPos, HARMONICS, analysedPhi + stepRad, null);
         double[] reference = channel(SEED + 8, total, offBinPos, 0, referencePhi, null);
@@ -368,47 +373,47 @@ class FftPhaseAlignAccumulatorTest {
         double[] refWin = new double[WIN_LEN];
         // The analysed and the reference window the worker's frame read
         // takes, and the frame geometry it reads them with - the state the
-        // tick loop would have set.
+        // analysis-cycle loop would have set.
         FieldUtils.writeField(worker, "analyzeBuf", win, true);
         FieldUtils.writeField(worker, "refWinBuf", refWin, true);
         FieldUtils.writeField(worker, "winValid", true, true);
         FieldUtils.writeField(worker, "pendingHopSamples", HOP, true);
 
         long base = 0;
-        for (int t = 0; t < TICKS; t++) {
+        for (int t = 0; t < CYCLES; t++) {
             System.arraycopy(analysed,  (int) base, win,    0, WIN_LEN);
             System.arraycopy(reference, (int) base, refWin, 0, WIN_LEN);
-            double fed = tickPhiF(worker, analyze(analyzer, win, base));
+            double fed = cyclePhiF(worker, analyze(analyzer, win, base));
             assertEquals(0.0, fed, 1.0e-3,
-                    "a constant difference feeds no excess at tick " + t);
+                    "a constant difference feeds no excess at analysis cycle " + t);
             base += HOP;
         }
         System.arraycopy(stepped,   0, win,    0, WIN_LEN);
         System.arraycopy(reference, 0, refWin, 0, WIN_LEN);
-        assertEquals(stepRad, tickPhiF(worker, analyze(analyzer, win, 0)), 1.0e-3,
+        assertEquals(stepRad, cyclePhiF(worker, analyze(analyzer, win, 0)), 1.0e-3,
                 "a step of the difference feeds the step");
     }
 
     /**
-     * The reference channel as the frame's clock.  Before every tick the
-     * capture loses a different number of samples without telling the
-     * counter, so the counted advance is wrong on every frame - by up to
+     * The reference channel as the frame's clock.  Before every analysis
+     * cycle the capture loses a different number of samples without telling
+     * the counter, so the counted advance is wrong on every frame - by up to
      * {@link #SLIP_MAX_SAMPLES}, more than half a period of the fundamental.
      * In mode REFERENCE_CHANNEL the worker turns each frame by the turn its
      * own read of the reference channel shows, and every harmonic holds its
      * level while the fundamental's phase walks through the notch; turned by
      * the count, with the tracking loop left to follow a time base that jumps
-     * from tick to tick, H9 sinks.
+     * from cycle to cycle, H9 sinks.
      */
     @Test
     void theReferenceChannelsTurnCarriesTheFrameThroughUncountedSlips() throws Exception {
-        int total = (TICKS - 1) * HOP + WIN_LEN + SLIP_MAX_SAMPLES;
+        int total = (CYCLES - 1) * HOP + WIN_LEN + SLIP_MAX_SAMPLES;
         double[] walk      = phaseWalk(SEED + 9, total);
         double[] analysed  = channel(SEED + 10, total, FUND_BIN, HARMONICS, 0.0, walk);
         double[] reference = channel(SEED + 11, total, FUND_BIN, 0, 0.0, null);
         Random rng   = new Random(SEED + 12);
-        int[]  slips = new int[TICKS];
-        for (int t = 0; t < TICKS; t++) {
+        int[]  slips = new int[CYCLES];
+        for (int t = 0; t < CYCLES; t++) {
             slips[t] = rng.nextInt(SLIP_MAX_SAMPLES + 1);
         }
 
@@ -430,12 +435,13 @@ class FftPhaseAlignAccumulatorTest {
                         + fmt(h9Loss) + " dB");
     }
 
-    /** Drives a worker over a capture whose window at tick {@code t} starts
-     *  {@code slips[t]} samples later than the counter says, and returns the
-     *  accumulated {@code [fundamental, H2 .. H9]} in dBFS.  With a reference
-     *  capture the worker reads its own excess in mode REFERENCE_CHANNEL on
-     *  every tick - the read that also takes the reference channel's turn;
-     *  without one it accumulates by the count alone. */
+    /** Drives a worker over a capture whose window at analysis cycle
+     *  {@code t} starts {@code slips[t]} samples later than the counter says,
+     *  and returns the accumulated {@code [fundamental, H2 .. H9]} in dBFS.
+     *  With a reference capture the worker reads its own excess in mode
+     *  REFERENCE_CHANNEL on every analysis cycle - the read that also takes
+     *  the reference channel's turn; without one it accumulates by the count
+     *  alone. */
     private double[] accumulateSlipped(double[] analysed, double[] reference, int[] slips)
             throws Exception {
         FftAnalyzer       analyzer = new FftAnalyzer();
@@ -450,16 +456,16 @@ class FftPhaseAlignAccumulatorTest {
         }
         FftResult r = null;
         long base = 0;
-        for (int t = 0; t < TICKS; t++) {
+        for (int t = 0; t < CYCLES; t++) {
             int at = (int) base + slips[t];
             System.arraycopy(analysed, at, win, 0, WIN_LEN);
             r = analyze(analyzer, win, base);
             double phiF = 0.0;
             if (reference != null) {
                 System.arraycopy(reference, at, refWin, 0, WIN_LEN);
-                phiF = tickPhiF(worker, r);
+                phiF = cyclePhiF(worker, r);
             }
-            accumulateTick(worker, phiF, r, base);
+            accumulateCycle(worker, phiF, r, base);
             base += HOP;
         }
         return levels(worker, r);
@@ -479,12 +485,12 @@ class FftPhaseAlignAccumulatorTest {
     @Test
     void thePilotPairsTurnCarriesTheFrameThroughAnUncountedGap() throws Exception {
         int gap   = (int) GAP_SAMPLES;
-        int total = (TICKS - 1) * HOP + WIN_LEN + gap;
+        int total = (CYCLES - 1) * HOP + WIN_LEN + gap;
         double[] walk     = phaseWalk(SEED + 13, total);
         double[] analysed = channel(SEED + 14, total, FUND_BIN, HARMONICS, 0.0, walk);
         addPilots(analysed);
-        int[] slips = new int[TICKS];
-        for (int t = TICKS / 2; t < TICKS; t++) {
+        int[] slips = new int[CYCLES];
+        for (int t = CYCLES / 2; t < CYCLES; t++) {
             slips[t] = gap;
         }
 
@@ -510,11 +516,12 @@ class FftPhaseAlignAccumulatorTest {
         }
     }
 
-    /** Drives a pilot-mode worker over a capture whose window at tick
-     *  {@code t} starts {@code slips[t]} samples later than the counter says,
-     *  the way the tick loop does: the worker reads its own excess, and a tick
-     *  its alignment left unsettled is not averaged.  Returns the accumulated
-     *  {@code [fundamental, H2 .. H9]} in dBFS. */
+    /** Drives a pilot-mode worker over a capture whose window at analysis
+     *  cycle {@code t} starts {@code slips[t]} samples later than the counter
+     *  says, the way the analysis-cycle loop does: the worker reads its own
+     *  excess, and an analysis cycle its alignment left unsettled is not
+     *  averaged.  Returns the accumulated {@code [fundamental, H2 .. H9]} in
+     *  dBFS. */
     private double[] accumulatePilotSlipped(double[] analysed, int[] slips) throws Exception {
         FftAnalyzer       analyzer = new FftAnalyzer();
         FftAnalyzerWorker worker   = pilotWorker();
@@ -522,23 +529,23 @@ class FftPhaseAlignAccumulatorTest {
         FftResult r        = null;
         long      base     = 0;
         int       averaged = 0;
-        for (int t = 0; t < TICKS; t++) {
+        for (int t = 0; t < CYCLES; t++) {
             System.arraycopy(analysed, (int) base + slips[t], win, 0, WIN_LEN);
             analyzer.setPilotBins(PILOT_BIN, PILOT2_BIN);
             r = analyze(analyzer, win, base);
             FieldUtils.writeField(worker, "winAbsStart", base, true);
             FieldUtils.writeField(worker, "phaseAlignUnsettled", false, true);
-            double phiF = (Double) MethodUtils.invokeMethod(worker, true, "tickPhiF",
+            double phiF = (Double) MethodUtils.invokeMethod(worker, true, "cyclePhiF",
                     FundamentalPhaseAlignment.PILOT_TONE, r, true);
             if (!(Boolean) FieldUtils.readField(worker, "phaseAlignUnsettled", true)) {
-                accumulateTick(worker, phiF, r, base);
+                accumulateCycle(worker, phiF, r, base);
                 averaged++;
             }
             base += HOP;
         }
-        assertTrue(averaged >= SLIP_MIN_AVERAGED_TICKS,
-                "the pair must settle on at least " + SLIP_MIN_AVERAGED_TICKS + " of " + TICKS
-                        + " ticks; it settled on " + averaged);
+        assertTrue(averaged >= SLIP_MIN_AVERAGED_CYCLES,
+                "the pair must settle on at least " + SLIP_MIN_AVERAGED_CYCLES + " of " + CYCLES
+                        + " analysis cycles; it settled on " + averaged);
         return levels(worker, r);
     }
 
@@ -610,18 +617,19 @@ class FftPhaseAlignAccumulatorTest {
      * line, each in proportion to its own bin.  The pair then resolves an
      * advance stretched by exactly that relative error, the fundamental owes
      * its whole turn to that same stretched advance, and the excess stays at
-     * zero - the notch did not move.  The hops are drawn per tick, as the
-     * random overlap draws them, and all three lines sit off their bin centres
-     * by one relative clock error, as lines carried on one converter pair do.
+     * zero - the notch did not move.  The hops are drawn per analysis
+     * cycle, as the random overlap draws them, and all three lines sit off
+     * their bin centres by one relative clock error, as lines carried on one
+     * converter pair do.
      */
     @Test
     void aCommonTimeBaseDriftLeavesThePilotExcessAtZero() throws Exception {
         FftAnalyzerWorker worker = pilotWorker();
         double excess = 0.0;
         long   pos    = 0;
-        for (int t = 0; t < PILOT_TICKS; t++) {
+        for (int t = 0; t < PILOT_CYCLES; t++) {
             double at = pos + PILOT_SLIP_SAMPLES * t;
-            excess = pilotTick(worker, pos, FUND_POS, PILOT_POS, at, 0.0, true);
+            excess = pilotCycle(worker, pos, FUND_POS, PILOT_POS, at, 0.0, true);
             pos += PILOT_HOPS[t % PILOT_HOPS.length];
         }
         LOG.info("pilot, common drift: excess = {} deg", fmt(Math.toDegrees(excess)));
@@ -641,31 +649,32 @@ class FftPhaseAlignAccumulatorTest {
         FftAnalyzerWorker worker = pilotWorker();
         double excess = 0.0;
         long   pos    = 0;
-        for (int t = 0; t < PILOT_TICKS; t++) {
+        for (int t = 0; t < PILOT_CYCLES; t++) {
             double at = pos + PILOT_SLIP_SAMPLES * t;
-            excess = pilotTick(worker, pos, FUND_POS, PILOT_POS, at, PILOT_NOTCH_STEP_RAD * t, true);
+            excess = pilotCycle(worker, pos, FUND_POS, PILOT_POS, at, PILOT_NOTCH_STEP_RAD * t, true);
             pos += PILOT_HOPS[t % PILOT_HOPS.length];
         }
-        double expected = notchRadAt(PILOT_TICKS - 1);
+        double expected = notchRadAt(PILOT_CYCLES - 1);
         LOG.info("pilot, notch drift: excess = {} deg, notch turned {} deg",
                 fmt(Math.toDegrees(excess)), fmt(Math.toDegrees(expected)));
         assertEquals(Math.toDegrees(expected), Math.toDegrees(excess), PILOT_TOL_DEG,
-                "the fundamental's own rotation since the first tick IS the excess");
+                "the fundamental's own rotation since the first analysis cycle IS the excess");
     }
 
     /**
      * The window's own position leaves no ramp: with every line on its bin
-     * and the window hopping half a transform per tick - where an odd bin's
-     * raw phase alternates by half a turn - each line's turn is exactly the
-     * one the resolved advance explains, and the excess stays at zero.
+     * and the window hopping half a transform per analysis cycle - where an
+     * odd bin's raw phase alternates by half a turn - each line's turn is
+     * exactly the one the resolved advance explains, and the excess stays at
+     * zero.
      */
     @Test
     void theWindowPositionLeavesNoRamp() throws Exception {
         FftAnalyzerWorker worker = pilotWorker();
         double excess = 0.0;
         long   pos    = 0;
-        for (int t = 0; t < PILOT_TICKS; t++) {
-            excess = pilotTick(worker, pos, FUND_BIN, PILOT_BIN, pos, 0.0, true);
+        for (int t = 0; t < PILOT_CYCLES; t++) {
+            excess = pilotCycle(worker, pos, FUND_BIN, PILOT_BIN, pos, 0.0, true);
             pos += FFT_SIZE / 2;
         }
         LOG.info("pilot, half-transform hops: excess = {} deg", fmt(Math.toDegrees(excess)));
@@ -674,12 +683,12 @@ class FftPhaseAlignAccumulatorTest {
     }
 
     /**
-     * The signal shifts against the window's position between two ticks by
-     * more than half a pilot period, so pilot 1's raw phase steps past half a
-     * turn while the fundamental's steps by a few degrees.  The hop counter
-     * knows nothing of the shift, so its guess at the advance is wrong by it;
-     * the two pilots' ladders agree on the true advance, the fundamental owes
-     * its own turn to that advance, and no excess is left.
+     * The signal shifts against the window's position between two analysis
+     * cycles by more than half a pilot period, so pilot 1's raw phase steps
+     * past half a turn while the fundamental's steps by a few degrees.  The
+     * hop counter knows nothing of the shift, so its guess at the advance is
+     * wrong by it; the two pilots' ladders agree on the true advance, the
+     * fundamental owes its own turn to that advance, and no excess is left.
      */
     @Test
     void aShiftPastHalfAPilotPeriodForwardLeavesNoExcess() throws Exception {
@@ -712,9 +721,9 @@ class FftPhaseAlignAccumulatorTest {
         FftAnalyzerWorker worker = pilotWorker();
         double excess = 0.0;
         long   pos    = 0;
-        for (int t = 0; t < PILOT_TICKS; t++) {
-            double at = pos + (t >= PILOT_TICKS / 2 ? shift : 0.0);
-            excess = pilotTick(worker, pos, FUND_POS, PILOT_POS, at, 0.0, true);
+        for (int t = 0; t < PILOT_CYCLES; t++) {
+            double at = pos + (t >= PILOT_CYCLES / 2 ? shift : 0.0);
+            excess = pilotCycle(worker, pos, FUND_POS, PILOT_POS, at, 0.0, true);
             pos += PILOT_HOPS[t % PILOT_HOPS.length];
         }
         LOG.info("pilot, shift {}: excess = {} deg", direction, fmt(Math.toDegrees(excess)));
@@ -727,8 +736,8 @@ class FftPhaseAlignAccumulatorTest {
      *  start() would load, and nothing else: the
      *  pilot path reads the frame handed to it, never a device.  The frame
      *  handed to it is the fresh one alone, so it starts at the window's
-     *  first sample, where the tick loop's drawn hop would otherwise put
-     *  it. */
+     *  first sample, where the analysis-cycle loop's drawn hop would
+     *  otherwise put it. */
     private FftAnalyzerWorker pilotWorker() throws Exception {
         FftAnalyzerWorker worker = new FftAnalyzerWorker(null);
         FieldUtils.writeField(worker, "pilotReader1", new PilotReader(PILOT_BIN), true);
@@ -740,36 +749,37 @@ class FftPhaseAlignAccumulatorTest {
         return worker;
     }
 
-    /** The excess the worker applies at tick {@code t} under the notch drift:
-     *  the notch's rotation since the first frame, which the per-frame changes
-     *  sum to exactly - the pilot path holds the sum itself and averages
-     *  nothing. */
+    /** The excess the worker applies at analysis cycle {@code t} under the
+     *  notch drift: the notch's rotation since the first frame, which the
+     *  per-frame changes sum to exactly - the pilot path holds the sum itself
+     *  and averages nothing. */
     private double notchRadAt(int t) {
         return PILOT_NOTCH_STEP_RAD * t;
     }
 
-    /** One pilot tick with both lines present. */
-    private double pilotTick(FftAnalyzerWorker worker, long absStart, double kappaF,
+    /** One pilot analysis cycle with both lines present. */
+    private double pilotCycle(FftAnalyzerWorker worker, long absStart, double kappaF,
             double kappaP, double at, double notchRad, boolean pilotLine) throws Exception {
-        return pilotTick(worker, absStart, kappaF, kappaP, at, notchRad, pilotLine, pilotLine);
+        return pilotCycle(worker, absStart, kappaF, kappaP, at, notchRad, pilotLine, pilotLine);
     }
 
-    /** One pilot tick: the analysis window's absolute start, which the tick
-     *  loop sets and the pilot path reads as the frame's time; the fresh
-     *  frame, with the three lines at their positions in bins, the frame
-     *  starting {@code at} samples into the stream and the fundamental turned
-     *  by {@code notchRad} on top; which of the two pilot lines the tick's
-     *  spectrum carries; and then the excess the mode feeds the accumulator.
-     *  The second pilot rides the same relative clock error as the first, one
-     *  error displacing every line in proportion to its own bin. */
-    private double pilotTick(FftAnalyzerWorker worker, long absStart, double kappaF,
+    /** One pilot analysis cycle: the analysis window's absolute start, which
+     *  the analysis-cycle loop sets and the pilot path reads as the frame's
+     *  time; the fresh frame, with the three lines at their positions in
+     *  bins, the frame starting {@code at} samples into the stream and the
+     *  fundamental turned by {@code notchRad} on top; which of the two pilot
+     *  lines the cycle's spectrum carries; and then the excess the mode feeds
+     *  the accumulator.  The second pilot rides the same relative clock error
+     *  as the first, one error displacing every line in proportion to its own
+     *  bin. */
+    private double pilotCycle(FftAnalyzerWorker worker, long absStart, double kappaF,
             double kappaP, double at, double notchRad, boolean pilotLine,
             boolean pilot2Line) throws Exception {
         double   kappaP2 = kappaP * PILOT2_BIN / (double) PILOT_BIN;
         double[] frame   = pilotSamples(kappaF, kappaP, kappaP2, at, notchRad);
         FieldUtils.writeField(worker, "winAbsStart", absStart, true);
         FieldUtils.writeField(worker, "analyzeBuf", frame, true);
-        return (Double) MethodUtils.invokeMethod(worker, true, "tickPhiF",
+        return (Double) MethodUtils.invokeMethod(worker, true, "cyclePhiF",
                 FundamentalPhaseAlignment.PILOT_TONE, pilotSpectrum(frame, pilotLine, pilot2Line), true);
     }
 
@@ -787,13 +797,13 @@ class FftPhaseAlignAccumulatorTest {
     void aFrameWithoutThePilotLineTakesThePredictedExcess() throws Exception {
         FftAnalyzerWorker worker = pilotWorker();
         long pos = 0;
-        for (int t = 0; t < PILOT_TICKS; t++) {
-            pilotTick(worker, pos, FUND_POS, PILOT_POS, pos + PILOT_SLIP_SAMPLES * t,
+        for (int t = 0; t < PILOT_CYCLES; t++) {
+            pilotCycle(worker, pos, FUND_POS, PILOT_POS, pos + PILOT_SLIP_SAMPLES * t,
                     steadyNotchRad(pos), true);
             pos += PILOT_HOPS[t % PILOT_HOPS.length];
         }
-        double predicted = pilotTick(worker, pos, FUND_POS, PILOT_POS,
-                pos + PILOT_SLIP_SAMPLES * PILOT_TICKS, steadyNotchRad(pos), false);
+        double predicted = pilotCycle(worker, pos, FUND_POS, PILOT_POS,
+                pos + PILOT_SLIP_SAMPLES * PILOT_CYCLES, steadyNotchRad(pos), false);
         LOG.info("pilot, line refused: excess = {} deg, the drift there {} deg",
                 fmt(Math.toDegrees(predicted)), fmt(Math.toDegrees(steadyNotchRad(pos))));
         assertEquals(Math.toDegrees(steadyNotchRad(pos)), Math.toDegrees(predicted), PILOT_TOL_DEG,
@@ -824,22 +834,22 @@ class FftPhaseAlignAccumulatorTest {
         double gapped = notchRunExcess(GAP_SAMPLES);
         LOG.info("pilot, {}-sample gap: excess {} deg, without the gap {} deg",
                 GAP_SAMPLES, fmt(Math.toDegrees(gapped)), fmt(Math.toDegrees(plain)));
-        assertEquals(Math.toDegrees(notchRadAt(PILOT_TICKS - 1)), Math.toDegrees(plain),
+        assertEquals(Math.toDegrees(notchRadAt(PILOT_CYCLES - 1)), Math.toDegrees(plain),
                 PILOT_TOL_DEG, "the run without a gap reports the notch's own rotation");
         assertEquals(Math.toDegrees(plain), Math.toDegrees(gapped), PILOT_TOL_DEG,
                 "and the pair resolves the gap, so the run with it reports the same");
     }
 
-    /** One run of {@link #PILOT_TICKS} frames under the notch's per-frame
+    /** One run of {@link #PILOT_CYCLES} frames under the notch's per-frame
      *  step, the signal moved against the window by {@code gap} samples from
      *  the middle of the run on; the excess the last frame feeds. */
     private double notchRunExcess(double gap) throws Exception {
         FftAnalyzerWorker worker = pilotWorker();
         double excess = 0.0;
         long   pos    = 0;
-        for (int t = 0; t < PILOT_TICKS; t++) {
-            double at = pos + PILOT_SLIP_SAMPLES * t + (t >= PILOT_TICKS / 2 ? gap : 0.0);
-            excess = pilotTick(worker, pos, FUND_POS, PILOT_POS, at, notchRadAt(t), true);
+        for (int t = 0; t < PILOT_CYCLES; t++) {
+            double at = pos + PILOT_SLIP_SAMPLES * t + (t >= PILOT_CYCLES / 2 ? gap : 0.0);
+            excess = pilotCycle(worker, pos, FUND_POS, PILOT_POS, at, notchRadAt(t), true);
             pos += PILOT_HOPS[t % PILOT_HOPS.length];
         }
         return excess;
@@ -862,14 +872,14 @@ class FftPhaseAlignAccumulatorTest {
         FieldUtils.writeField(worker, "pilotPair", null, true);
         double excess = 0.0;
         long   pos    = 0;
-        for (int t = 0; t < PILOT_TICKS; t++) {
+        for (int t = 0; t < PILOT_CYCLES; t++) {
             double at = pos + PILOT_SLIP_SAMPLES * t;
-            excess = pilotTick(worker, pos, FUND_POS, PILOT_POS, at, notchRadAt(t), true);
+            excess = pilotCycle(worker, pos, FUND_POS, PILOT_POS, at, notchRadAt(t), true);
             pos += SINGLE_PILOT_HOP;
         }
         LOG.info("single pilot, notch drift: excess = {} deg, notch turned {} deg",
-                fmt(Math.toDegrees(excess)), fmt(Math.toDegrees(notchRadAt(PILOT_TICKS - 1))));
-        assertEquals(Math.toDegrees(notchRadAt(PILOT_TICKS - 1)), Math.toDegrees(excess),
+                fmt(Math.toDegrees(excess)), fmt(Math.toDegrees(notchRadAt(PILOT_CYCLES - 1))));
+        assertEquals(Math.toDegrees(notchRadAt(PILOT_CYCLES - 1)), Math.toDegrees(excess),
                 PILOT_TOL_DEG,
                 "one pilot and the hop counter carry the notch's rotation at a fixed hop");
     }
@@ -884,13 +894,13 @@ class FftPhaseAlignAccumulatorTest {
     void oneMissingPilotLineTakesThePredictedExcess() throws Exception {
         FftAnalyzerWorker worker = pilotWorker();
         long pos = 0;
-        for (int t = 0; t < PILOT_TICKS; t++) {
-            pilotTick(worker, pos, FUND_POS, PILOT_POS, pos + PILOT_SLIP_SAMPLES * t,
+        for (int t = 0; t < PILOT_CYCLES; t++) {
+            pilotCycle(worker, pos, FUND_POS, PILOT_POS, pos + PILOT_SLIP_SAMPLES * t,
                     steadyNotchRad(pos), true);
             pos += PILOT_HOPS[t % PILOT_HOPS.length];
         }
-        double predicted = pilotTick(worker, pos, FUND_POS, PILOT_POS,
-                pos + PILOT_SLIP_SAMPLES * PILOT_TICKS, steadyNotchRad(pos), true, false);
+        double predicted = pilotCycle(worker, pos, FUND_POS, PILOT_POS,
+                pos + PILOT_SLIP_SAMPLES * PILOT_CYCLES, steadyNotchRad(pos), true, false);
         LOG.info("pilot, second line refused: excess = {} deg, the drift there {} deg",
                 fmt(Math.toDegrees(predicted)), fmt(Math.toDegrees(steadyNotchRad(pos))));
         assertEquals(Math.toDegrees(steadyNotchRad(pos)), Math.toDegrees(predicted), PILOT_TOL_DEG,
@@ -899,25 +909,26 @@ class FftPhaseAlignAccumulatorTest {
 
     /**
      * Two frames in a row without a measurement look exactly like a gap in the
-     * stream, so the second one asks the tick loop for the re-sync a detected
-     * discontinuity gets: the loop discards that frame whole, re-anchors the
-     * window and publishes no result of its own, which is what leaves the
-     * warning banner standing until the reloaded window produces one.  The
-     * first frame alone asks for nothing - it is bridged by the trend.
+     * stream, so the second one asks the analysis-cycle loop for the re-sync
+     * a detected discontinuity gets: the loop discards that frame whole,
+     * re-anchors the window and publishes no result of its own, which is what
+     * leaves the warning banner standing until the reloaded window produces
+     * one.  The first frame alone asks for nothing - it is bridged by the
+     * trend.
      */
     @Test
     void twoFramesWithoutAMeasurementAskForTheReSync() throws Exception {
         FftAnalyzerWorker worker = pilotWorker();
-        long pos = runMeasuredFrames(worker, PILOT_TICKS);
+        long pos = runMeasuredFrames(worker, PILOT_CYCLES);
 
-        pilotTick(worker, pos, FUND_POS, PILOT_POS, pos, steadyNotchRad(pos), false);
+        pilotCycle(worker, pos, FUND_POS, PILOT_POS, pos, steadyNotchRad(pos), false);
         assertFalse((Boolean) FieldUtils.readField(worker, "pilotResyncPending", true),
                 "one frame is bridged by the trend and re-syncs nothing");
         pos += PILOT_HOPS[0];
 
-        pilotTick(worker, pos, FUND_POS, PILOT_POS, pos, steadyNotchRad(pos), false);
+        pilotCycle(worker, pos, FUND_POS, PILOT_POS, pos, steadyNotchRad(pos), false);
         assertTrue((Boolean) FieldUtils.readField(worker, "pilotResyncPending", true),
-                "the second asks the tick loop to discard the frame and re-sync");
+                "the second asks the analysis-cycle loop to discard the frame and re-sync");
     }
 
     /**
@@ -929,10 +940,10 @@ class FftPhaseAlignAccumulatorTest {
     @Test
     void threeFramesWithoutAMeasurementEndTheRecording() throws Exception {
         FftAnalyzerWorker worker = pilotWorker();
-        long pos = runMeasuredFrames(worker, PILOT_TICKS);
+        long pos = runMeasuredFrames(worker, PILOT_CYCLES);
 
         for (int i = 0; i < 3; i++) {
-            pilotTick(worker, pos, FUND_POS, PILOT_POS, pos, steadyNotchRad(pos), false);
+            pilotCycle(worker, pos, FUND_POS, PILOT_POS, pos, steadyNotchRad(pos), false);
             pos += PILOT_HOPS[0];
         }
         AtomicBoolean paused = (AtomicBoolean) FieldUtils.readField(worker, "paused", true);
@@ -946,7 +957,7 @@ class FftPhaseAlignAccumulatorTest {
     private long runMeasuredFrames(FftAnalyzerWorker worker, int frames) throws Exception {
         long pos = 0;
         for (int t = 0; t < frames; t++) {
-            pilotTick(worker, pos, FUND_POS, PILOT_POS, pos + PILOT_SLIP_SAMPLES * t,
+            pilotCycle(worker, pos, FUND_POS, PILOT_POS, pos + PILOT_SLIP_SAMPLES * t,
                     steadyNotchRad(pos), true);
             pos += PILOT_HOPS[t % PILOT_HOPS.length];
         }
@@ -971,14 +982,14 @@ class FftPhaseAlignAccumulatorTest {
      */
     @Test
     void theAccumulatedPilotLinesHoldTheirCoherentSum() throws Exception {
-        int total = (PILOT_ACCUM_TICKS - 1) * PILOT_ACCUM_HOP + WIN_LEN;
+        int total = (PILOT_ACCUM_CYCLES - 1) * PILOT_ACCUM_HOP + WIN_LEN;
         double[] capture = pilotCapture(total);
         FftAnalyzer       analyzer = new FftAnalyzer();
         FftAnalyzerWorker worker   = pilotWorker();
         double[]  win  = new double[WIN_LEN];
         FftResult r    = null;
         long      base = 0;
-        for (int t = 0; t < PILOT_ACCUM_TICKS; t++) {
+        for (int t = 0; t < PILOT_ACCUM_CYCLES; t++) {
             System.arraycopy(capture, (int) base, win, 0, WIN_LEN);
             r = analyzeWithPilots(analyzer, win, base);
             // what the pilot reading leaves for the lobes' own de-rotation:
@@ -988,7 +999,7 @@ class FftPhaseAlignAccumulatorTest {
                     Math.IEEEremainder(2.0 * Math.PI * PILOT_BIN * base / FFT_SIZE, 2.0 * Math.PI), true);
             FieldUtils.writeField(worker, "pilotRawPhase2",
                     Math.IEEEremainder(2.0 * Math.PI * PILOT2_BIN * base / FFT_SIZE, 2.0 * Math.PI), true);
-            accumulateTick(worker, 0.0, r, base);
+            accumulateCycle(worker, 0.0, r, base);
             base += PILOT_ACCUM_HOP;
         }
         CoherentAccumulator accumulator =
@@ -1001,9 +1012,9 @@ class FftPhaseAlignAccumulatorTest {
             double sum = Math.hypot(accumRe[bin], accumIm[bin]);
             LOG.info("pilot bin {}: accumulated {}, one frame {}, ratio {}",
                     bin, fmt(sum), fmt(one), fmt(sum / one));
-            assertEquals(PILOT_ACCUM_TICKS * one, sum, 0.01 * PILOT_ACCUM_TICKS * one,
+            assertEquals(PILOT_ACCUM_CYCLES * one, sum, 0.01 * PILOT_ACCUM_CYCLES * one,
                     "the line at bin " + bin + " must sum coherently over "
-                            + PILOT_ACCUM_TICKS + " frames");
+                            + PILOT_ACCUM_CYCLES + " frames");
         }
     }
 
@@ -1022,8 +1033,9 @@ class FftPhaseAlignAccumulatorTest {
         return s;
     }
 
-    /** One tick's analysis with the two pilot bins pinned on the analyser, as
-     *  the tick loop pins them once they are elected. */
+    /** One analysis cycle's analysis with the two pilot bins pinned on the
+     *  analyser, as the analysis-cycle loop pins them once they are
+     *  elected. */
     private FftResult analyzeWithPilots(FftAnalyzer analyzer, double[] win, long base) {
         analyzer.setPilotBins(PILOT_BIN, PILOT2_BIN);
         return analyze(analyzer, win, base);
@@ -1034,26 +1046,27 @@ class FftPhaseAlignAccumulatorTest {
      * just wrote.  The frequency-response correction runs on the overlaid
      * spectrum before the readouts are recomputed and reads its level scale
      * from those scalars over the bin's magnitude; scalars left from the
-     * fresh tick would put the accumulated spectrum on the fresh tick's
-     * scale, off by however far a drifting notch has moved the fundamental
-     * since the collection began.
+     * fresh analysis cycle would put the accumulated spectrum on the fresh
+     * cycle's scale, off by however far a drifting notch has moved the
+     * fundamental since the collection began.
      */
     @Test
     void theOverlayRestatesTheFundamentalFromTheAccumulatedBin() {
-        int total = (TICKS - 1) * HOP + WIN_LEN;
+        int total = (CYCLES - 1) * HOP + WIN_LEN;
         double[] analysed = channel(SEED + 3, total, FUND_BIN, HARMONICS, 0.0, null);
         FftAnalyzer       analyzer = new FftAnalyzer();
         FftAnalyzerWorker worker   = new FftAnalyzerWorker(null);
         double[] win = new double[WIN_LEN];
         FftResult r  = null;
         long base = 0;
-        for (int t = 0; t < TICKS; t++) {
+        for (int t = 0; t < CYCLES; t++) {
             System.arraycopy(analysed, (int) base, win, 0, WIN_LEN);
             r = analyze(analyzer, win, base);
-            accumulateTick(worker, 0.0, r, base);
+            accumulateCycle(worker, 0.0, r, base);
             base += HOP;
         }
-        // a level the fresh tick never had, as a drifted notch would leave it
+        // a level the fresh analysis cycle never had, as a drifted notch
+        // would leave it
         r.fundamentalDbFs   = FUND_DBFS + 6.0;
         r.fundamentalLinear = Math.pow(10.0, r.fundamentalDbFs / 20.0);
         overlay(worker, r);
@@ -1089,15 +1102,15 @@ class FftPhaseAlignAccumulatorTest {
         return s;
     }
 
-    /** One tick's spectrum as the pilot path reads it: at the three lines'
-     *  bins the phasors the analysed frame carries there - the pilots' only
-     *  when {@code pilotLine} / {@code pilot2Line} - which is where the path
-     *  reads each line's phase and its level over the floor; every other bin
-     *  the floor the line check measures against; the fundamental's refined
-     *  frequency naming its bin, which is how the path finds it before an
-     *  accumulator exists; the window the frame is read with and the sample
-     *  rate the frame's time is counted with.  Nothing else of the result is
-     *  read on that path. */
+    /** One analysis cycle's spectrum as the pilot path reads it: at the
+     *  three lines' bins the phasors the analysed frame carries there - the
+     *  pilots' only when {@code pilotLine} / {@code pilot2Line} - which is
+     *  where the path reads each line's phase and its level over the floor;
+     *  every other bin the floor the line check measures against; the
+     *  fundamental's refined frequency naming its bin, which is how the path
+     *  finds it before an accumulator exists; the window the frame is read
+     *  with and the sample rate the frame's time is counted with.  Nothing
+     *  else of the result is read on that path. */
     private FftResult pilotSpectrum(double[] frame, boolean pilotLine, boolean pilot2Line) {
         FftResult r = new FftResult();
         r.fftSize              = FFT_SIZE;
@@ -1133,10 +1146,11 @@ class FftPhaseAlignAccumulatorTest {
         return 2.0 * Math.PI * Math.IEEEremainder(kappa * samples, FFT_SIZE) / FFT_SIZE;
     }
 
-    /** The worker's own excess for this tick in mode REFERENCE_CHANNEL - the
-     *  private method the tick loop calls, reached by reflection. */
-    private double tickPhiF(FftAnalyzerWorker worker, FftResult r) throws Exception {
-        return (Double) MethodUtils.invokeMethod(worker, true, "tickPhiF",
+    /** The worker's own excess for this analysis cycle in mode
+     *  REFERENCE_CHANNEL - the private method the analysis-cycle loop calls,
+     *  reached by reflection. */
+    private double cyclePhiF(FftAnalyzerWorker worker, FftResult r) throws Exception {
+        return (Double) MethodUtils.invokeMethod(worker, true, "cyclePhiF",
                 FundamentalPhaseAlignment.REFERENCE_CHANNEL, r, true);
     }
 
@@ -1145,17 +1159,17 @@ class FftPhaseAlignAccumulatorTest {
      * stands still in between, and the accumulator is fed the same reading
      * until the next step replaces it.  The fundamental region stays coherent
      * and the harmonics keep their levels - the held reading reaches the
-     * fundamental alone.  Then the retroactive half: one more tick with a
-     * non-zero excess is accumulated and taken back out again the way a
-     * discontinuity gate takes it out, which has to leave the accumulator
-     * exactly where it was - the subtractable ring slot must hold what was
-     * added, the extra rotation included.
+     * fundamental alone.  Then the retroactive half: one more analysis
+     * cycle with a non-zero excess is accumulated and taken back out again
+     * the way a discontinuity gate takes it out, which has to leave the
+     * accumulator exactly where it was - the subtractable ring slot must hold
+     * what was added, the extra rotation included.
      */
     @Test
     void aHeldExcessKeepsTheLevelsAndLeavesNoResidue() {
-        // One tick longer than the run: the last one is accumulated and then
-        // removed again, which is the residue half of the case.
-        int total = TICKS * HOP + WIN_LEN;
+        // One analysis cycle longer than the run: the last one is accumulated
+        // and then removed again, which is the residue half of the case.
+        int total = CYCLES * HOP + WIN_LEN;
         double[] excess   = new double[total];
         for (int k = 0; k < total; k++) {
             excess[k] = heldExcessRad(k);
@@ -1167,10 +1181,10 @@ class FftPhaseAlignAccumulatorTest {
         double[] win = new double[WIN_LEN];
         FftResult r  = null;
         long base = 0;
-        for (int t = 0; t < TICKS; t++) {
+        for (int t = 0; t < CYCLES; t++) {
             System.arraycopy(analysed, (int) base, win, 0, WIN_LEN);
             r = analyze(analyzer, win, base);
-            accumulateTick(worker, heldExcessRad(base), r, base);
+            accumulateCycle(worker, heldExcessRad(base), r, base);
             base += HOP;
         }
         double[] held = levels(worker, r);
@@ -1184,22 +1198,22 @@ class FftPhaseAlignAccumulatorTest {
 
         System.arraycopy(analysed, (int) base, win, 0, WIN_LEN);
         FftResult extra = analyze(analyzer, win, base);
-        accumulateTick(worker, heldExcessRad(base), extra, base);
+        accumulateCycle(worker, heldExcessRad(base), extra, base);
         call(worker, SUBTRACT);
         double[] after = levels(worker, extra);
         for (int i = 0; i <= HARMONICS; i++) {
             assertEquals(held[i], after[i], IDENTICAL_TOL_DB,
                     (i == 0 ? "the fundamental" : "H" + (i + 1))
-                            + " must be back where it was after the tick is removed");
+                            + " must be back where it was after the analysis cycle is removed");
         }
     }
 
     /** The fundamental's phase excess at {@code sample}: one step per
-     *  interval, standing still in between.  The tick whose window starts at
-     *  that sample is handed the same number, which is what holding a reading
-     *  until the next one means. */
+     *  interval, standing still in between.  The analysis cycle whose window
+     *  starts at that sample is handed the same number, which is what holding
+     *  a reading until the next one means. */
     private double heldExcessRad(long sample) {
-        return HOLD_STEP_RAD * ((sample / HOP) / HOLD_TICKS);
+        return HOLD_STEP_RAD * ((sample / HOP) / HOLD_CYCLES);
     }
 
     // ── Drivers ────────────────────────────────────────────────────────────
@@ -1219,16 +1233,16 @@ class FftPhaseAlignAccumulatorTest {
     }
 
     /**
-     * One accumulated tick: the tick's phase excess goes into the worker's
-     * private field - the state the accumulate step reads, and the only way
-     * in now that the setter is gone - and then the step runs.
+     * One accumulated analysis cycle: the cycle's phase excess goes into the
+     * worker's private field - the state the accumulate step reads, and the
+     * only way in now that the setter is gone - and then the step runs.
      *
      * <p>Nothing clears the field afterwards, which is why the rollback below
      * needs no write of its own: it runs with the excess still in force, the
-     * situation on the worker's own discontinuity path, where the tick that
+     * situation on the worker's own discontinuity path, where the cycle that
      * fired the gate is removed while its excess is the one that was applied.
      */
-    private void accumulateTick(FftAnalyzerWorker worker, double phiF, FftResult r, long base) {
+    private void accumulateCycle(FftAnalyzerWorker worker, double phiF, FftResult r, long base) {
         try {
             FieldUtils.writeField(worker, PHI_F_FIELD, phiF, true);
         } catch (IllegalAccessException ex) {
@@ -1237,20 +1251,20 @@ class FftPhaseAlignAccumulatorTest {
         call(worker, ACCUMULATE, r, base, true, Integer.MAX_VALUE);
     }
 
-    /** Drives the real accumulator over the whole capture, one tick per hop,
-     *  and reads the accumulated levels back through the worker's own overlay.
-     *  Returns {@code [fundamental, H2 .. H9]} in dBFS, taken at the tones' own
-     *  bins - every tone is on-bin, so the peak bin IS the level. */
-    private double[] accumulate(double[] analysed, TickPhiF phiF) {
+    /** Drives the real accumulator over the whole capture, one analysis cycle
+     *  per hop, and reads the accumulated levels back through the worker's own
+     *  overlay.  Returns {@code [fundamental, H2 .. H9]} in dBFS, taken at the
+     *  tones' own bins - every tone is on-bin, so the peak bin IS the level. */
+    private double[] accumulate(double[] analysed, CyclePhiF phiF) {
         FftAnalyzer       analyzer = new FftAnalyzer();
         FftAnalyzerWorker worker   = new FftAnalyzerWorker(null);     // headless
         double[] win = new double[WIN_LEN];
         FftResult r  = null;
         long base = 0;
-        for (int t = 0; t < TICKS; t++) {
+        for (int t = 0; t < CYCLES; t++) {
             System.arraycopy(analysed, (int) base, win, 0, WIN_LEN);
             r = analyze(analyzer, win, base);
-            accumulateTick(worker, phiF.of(analyzer, r, base), r, base);
+            accumulateCycle(worker, phiF.of(analyzer, r, base), r, base);
             base += HOP;
         }
         return levels(worker, r);
@@ -1280,8 +1294,9 @@ class FftPhaseAlignAccumulatorTest {
         }
     }
 
-    /** One tick's analysis, with the worker's own settings: the spectrum only
-     *  (the stats are re-derived from the accumulator), single tone, no hint. */
+    /** One analysis cycle's analysis, with the worker's own settings: the
+     *  spectrum only (the stats are re-derived from the accumulator), single
+     *  tone, no hint. */
     private FftResult analyze(FftAnalyzer analyzer, double[] win, long base) {
         analyzer.setSpectrumOnly(true);
         analyzer.setMultiTone(false);

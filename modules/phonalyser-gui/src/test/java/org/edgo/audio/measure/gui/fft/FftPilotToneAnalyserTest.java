@@ -38,12 +38,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * The pilot-tone phase alignment through the REAL analyser.
  *
- * <p>Vocabulary.  A <b>tick</b> is one analysis cycle: the window slides by a
- * hop of fresh samples and the whole window is analysed as two overlapping
- * frames.  The <b>pilots</b> are two generated tones on whole bins far above
- * the protected harmonics whose phases the alignment reads on every tick;
- * between two frames each fixes the capture's <b>advance</b> - how far the
- * stream moved, in samples - only modulo its own period, and the two together
+ * <p>Vocabulary.  An <b>analysis cycle</b> is one pass of the analyser:
+ * the window slides by a hop of fresh samples and the whole window is
+ * analysed as two overlapping frames.  The <b>pilots</b> are two
+ * generated tones on whole bins far above the protected harmonics whose
+ * phases the alignment reads on every analysis cycle; between two frames
+ * each fixes the capture's <b>advance</b> - how far the stream moved, in
+ * samples - only modulo its own period, and the two together
  * settle it.  The <b>excess</b> is the rotation the alignment charges to the
  * fundamental's bin alone, in radians, which the accumulator then applies to
  * that bin and to nothing else: the fundamental's own turn between two frames
@@ -59,12 +60,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p>Why this class exists beside the accumulator harness: that one
  * synthesizes the frame by hand and therefore proves the worker against its
  * own assumptions.  Here every number the worker reads comes from the real
- * analyser over real samples - the tick's spectrum from
+ * analyser over real samples - the analysis cycle's spectrum from
  * {@link FftAnalyzer#analyze}, the phases from its single-frame bin read on
  * the same window - a stream of two double-precision sines, windowed,
- * hopped and transformed the way the tick loop does it, so a disagreement
- * between the analysed side and the single-bin side shows up instead of
- * being assumed away.
+ * hopped and transformed the way the analysis-cycle loop does it, so a
+ * disagreement between the analysed side and the single-bin side shows up
+ * instead of being assumed away.
  *
  * <p>The fundamental sits on bin 85 and the two pilots on bins 1317 and 1601,
  * the coprime pair an election yields.  All three lines are displaced by ONE
@@ -81,9 +82,10 @@ class FftPilotToneAnalyserTest {
     private static final int        SAMPLE_RATE = 48_000;
     private static final int        FFT_SIZE    = 4096;
     private static final WindowType WINDOW      = WindowType.BH7;
-    /** Harmonics the analysis evaluates, as the tick loop states them. */
+    /** Harmonics the analysis evaluates, as the analysis-cycle loop
+     *  states them. */
     private static final int        HARMONICS   = 8;
-    private static final int        TICKS       = 20;
+    private static final int        CYCLES      = 20;
 
     /** The fundamental's bin: the frequency lock's target, so the line sits on
      *  it up to the clock error below. */
@@ -109,8 +111,8 @@ class FftPilotToneAnalyserTest {
     private static final double PILOT1_POS = PILOT1_BIN * (1.0 + CLOCK_ERROR);
     private static final double PILOT2_POS = PILOT2_BIN * (1.0 + CLOCK_ERROR);
     /** The fundamental's frequency as the generator states it - the hint the
-     *  tick loop passes, so the fundamental is found by its lock target and
-     *  never by a peak search, which would take the pilot for it. */
+     *  analysis-cycle loop passes, so the fundamental is found by its lock
+     *  target and never by a peak search, which would take the pilot for it. */
     private static final double FUND_HINT_HZ = FUND_BIN * (double) SAMPLE_RATE / FFT_SIZE;
 
     private static final double FUND_AMP    = 0.1;      // -20 dBFS
@@ -119,19 +121,19 @@ class FftPilotToneAnalyserTest {
     private static final double PILOT_PHASE  = -1.3;
     private static final double PILOT2_PHASE = 2.1;
 
-    /** The time base's slip per tick, in samples: what a converter pair at
-     *  slightly different rates adds to the window's position.  It turns the
-     *  pilot by 2 pi f2 dt and the fundamental by 2 pi f0 dt, and the pilot
-     *  method exists to cancel it. */
+    /** The time base's slip per analysis cycle, in samples: what a converter
+     *  pair at slightly different rates adds to the window's position.  It
+     *  turns the pilot by 2 pi f2 dt and the fundamental by 2 pi f0 dt, and
+     *  the pilot method exists to cancel it. */
     private static final double SLIP_SAMPLES = 0.05;
-    /** The notch's own phase step per tick, radians: a drift that turns the
-     *  fundamental ALONE, which is what the excess must report. */
+    /** The notch's own phase step per analysis cycle, radians: a drift that
+     *  turns the fundamental ALONE, which is what the excess must report. */
     private static final double NOTCH_STEP_RAD = 0.002;
 
     /** The fixed hop: 50 percent overlap. */
     private static final int    FIXED_HOP = FFT_SIZE / 2;
     /** The random mode's hop lattice at this transform size, from the mode's
-     *  own range - the tick loop draws one of these every tick. */
+     *  own range - the analysis-cycle loop draws one of these every cycle. */
     private static final int    RAND_HOP_MIN  = FftOverlap.RAND.minHopSamples(FFT_SIZE);
     private static final int    RAND_HOP_MAX  = FftOverlap.RAND.maxHopSamples(FFT_SIZE);
     private static final int    RAND_HOP_STEP =
@@ -143,10 +145,10 @@ class FftPilotToneAnalyserTest {
 
     private static final Logger LOG = LogManager.getLogger("FftPilotToneAnalyser");
 
-    /** What one run produced: the excess fed to the accumulator at every tick,
-     *  the deviation, the trace's third value, at every tick (radians), the
-     *  advance handed to the accumulator (samples) and whether the tick went
-     *  unsettled. */
+    /** What one run produced: the excess fed to the accumulator at every
+     *  analysis cycle, the deviation, the trace's third value, at every cycle
+     *  (radians), the advance handed to the accumulator (samples) and whether
+     *  the cycle went unsettled. */
     private record Run(double[] excessRad, double[] deviationRad,
                        double[] advanceSamples, boolean[] unsettled) {}
 
@@ -173,12 +175,13 @@ class FftPilotToneAnalyserTest {
     @Test
     void aNotchOnlyDriftBecomesTheExcessThroughTheRealAnalyser() throws Exception {
         Run run = drive(true, false, "notch drift, fixed hop");
-        assertNotchExcess(run, "the fundamental's own rotation since the first tick IS the excess");
+        assertNotchExcess(run, "the fundamental's own rotation since the first analysis cycle IS the excess");
         assertDeviationZero(run, "notch drift, fixed hop");
     }
 
-    /** The shared drift again with a hop drawn per tick, as the random overlap
-     *  draws it: no per-tick advance the recipe removes can be a nominal one. */
+    /** The shared drift again with a hop drawn per analysis cycle, as the
+     *  random overlap draws it: no per-cycle advance the recipe removes can be
+     *  a nominal one. */
     @Test
     void aSharedTimeBaseDriftCancelsWithADrawnHop() throws Exception {
         Run run = drive(false, true, "shared drift, drawn hop");
@@ -186,7 +189,7 @@ class FftPilotToneAnalyserTest {
         assertDeviationZero(run, "shared drift, drawn hop");
     }
 
-    /** The notch drift again with a hop drawn per tick. */
+    /** The notch drift again with a hop drawn per analysis cycle. */
     @Test
     void aNotchOnlyDriftBecomesTheExcessWithADrawnHop() throws Exception {
         Run run = drive(true, true, "notch drift, drawn hop");
@@ -195,31 +198,31 @@ class FftPilotToneAnalyserTest {
     }
 
     /**
-     * The pilot re-zero under the notch drift: armed before one tick, it makes
-     * that tick's totals the carries and its readings the new zero.  The
-     * excess handed on must continue the notch's rotation without a step on
-     * ANY tick - settled or not - and once the pair has confirmed its seed
-     * candidate (two ticks), the advance must continue the time base's slip
-     * from the collection's first tick, not from the new zero: that
-     * continuity is what keeps the accumulator's frames valid.
+     * The pilot re-zero under the notch drift: armed before one analysis
+     * cycle, it makes that cycle's totals the carries and its readings the new
+     * zero.  The excess handed on must continue the notch's rotation without
+     * a step on ANY cycle - settled or not - and once the pair has confirmed
+     * its seed candidate (two cycles), the advance must continue the time
+     * base's slip from the collection's first cycle, not from the new zero:
+     * that continuity is what keeps the accumulator's frames valid.
      */
     @Test
     void aPilotRezeroCarriesExcessAndAdvance() throws Exception {
         int retrackAt = 8;
-        Run run = drive(true, false, retrackAt, "notch drift, re-zero at tick " + retrackAt);
+        Run run = drive(true, false, retrackAt, "notch drift, re-zero at analysis cycle " + retrackAt);
         assertNotchExcess(run, "the excess must continue across the re-zero");
-        // Ticks 1 and 2 are the collection's OWN seed and confirm ticks; from
-        // there to the re-zero tick the pair stands settled.
+        // Analysis cycles 1 and 2 are the collection's OWN seed and confirm
+        // cycles; from there to the re-zero cycle the pair stands settled.
         for (int t = 3; t <= retrackAt; t++) {
-            assertFalse(run.unsettled()[t], "settled before and on the re-zero tick, tick " + t);
+            assertFalse(run.unsettled()[t], "settled before and on the re-zero analysis cycle, cycle " + t);
         }
         assertTrue(run.unsettled()[retrackAt + 1] && run.unsettled()[retrackAt + 2],
-                "the reset pair spends its seed and confirm ticks unsettled");
-        for (int t = retrackAt + 3; t < TICKS; t++) {
-            assertFalse(run.unsettled()[t], "settled again after the confirm ticks, tick " + t);
+                "the reset pair spends its seed and confirm analysis cycles unsettled");
+        for (int t = retrackAt + 3; t < CYCLES; t++) {
+            assertFalse(run.unsettled()[t], "settled again after the confirm analysis cycles, cycle " + t);
             double expected = (double) FIXED_HOP * t + SLIP_SAMPLES * t;
             assertEquals(expected, run.advanceSamples()[t], 0.05,
-                    "the advance must continue from the collection's first tick, tick " + t);
+                    "the advance must continue from the collection's first analysis cycle, cycle " + t);
         }
     }
 
@@ -227,13 +230,14 @@ class FftPilotToneAnalyserTest {
 
     private void assertZeroExcess(Run run, String why) {
         for (int t = 0; t < run.excessRad().length; t++) {
-            assertEquals(0.0, Math.toDegrees(run.excessRad()[t]), TOL_DEG, why + ", tick " + t);
+            assertEquals(0.0, Math.toDegrees(run.excessRad()[t]), TOL_DEG, why + ", analysis cycle " + t);
         }
     }
 
-    /** The excess the worker applies at tick {@code t} under the notch drift:
-     *  the notch's rotation since the first tick, which the per-frame changes
-     *  sum to exactly - the pilot path holds the sum itself. */
+    /** The excess the worker applies at analysis cycle {@code t} under the
+     *  notch drift: the notch's rotation since the first cycle, which the
+     *  per-frame changes sum to exactly - the pilot path
+     *  holds the sum itself. */
     private double expectedNotchExcessRad(int t) {
         return NOTCH_STEP_RAD * t;
     }
@@ -241,7 +245,7 @@ class FftPilotToneAnalyserTest {
     private void assertNotchExcess(Run run, String why) {
         for (int t = 0; t < run.excessRad().length; t++) {
             assertEquals(Math.toDegrees(expectedNotchExcessRad(t)),
-                    Math.toDegrees(run.excessRad()[t]), TOL_DEG, why + ", tick " + t);
+                    Math.toDegrees(run.excessRad()[t]), TOL_DEG, why + ", analysis cycle " + t);
         }
     }
 
@@ -250,37 +254,37 @@ class FftPilotToneAnalyserTest {
      *  shared time-base drift and under a notch drift alike the deviation
      *  is nothing at all.  A remainder is something rotating the
      *  pilot that the clean fundamental does not see, and the run's log
-     *  carries the per-tick geometry to say where. */
+     *  carries the per-cycle geometry to say where. */
     private void assertDeviationZero(Run run, String label) {
         for (int t = 0; t < run.deviationRad().length; t++) {
             assertEquals(0.0, Math.toDegrees(run.deviationRad()[t]), TOL_DEG,
                     "the pilot's reading must agree with the reference channel's, "
-                            + label + ", tick " + t
-                            + " - see the per-tick log lines for the frame geometry");
+                            + label + ", analysis cycle " + t
+                            + " - see the per-cycle log lines for the frame geometry");
         }
     }
 
     // ── The run ────────────────────────────────────────────────────────────
 
     /**
-     * One run of the fixture: {@code TICKS} windows of a live stream, each
-     * analysed the way the tick loop analyses it, each handed to the worker's
-     * own per-tick phase excess in mode PILOT_TONE.  The worker's private
-     * members are driven by reflection - a productive class is not widened to
-     * let a test in - and the members are the ones the tick loop sets: the two
-     * elected pilots with the pair arithmetic their election admitted, the
-     * window's absolute start, the drawn hop, the analysed window, the
-     * reference mirror and its valid flag.
+     * One run of the fixture: {@code CYCLES} windows of a live stream, each
+     * analysed the way the analysis-cycle loop analyses it, each handed to the
+     * worker's own per-cycle phase excess in mode PILOT_TONE.  The worker's
+     * private members are driven by reflection - a productive class is not
+     * widened to let a test in - and the members are the ones the
+     * analysis-cycle loop sets: the two elected pilots with the pair
+     * arithmetic their election admitted, the window's absolute start, the
+     * drawn hop, the analysed window, the reference mirror and its valid flag.
      */
     private Run drive(boolean notchDrift, boolean randomHop, String label) throws Exception {
         return drive(notchDrift, randomHop, -1, label);
     }
 
-    /** The same run with the pilot re-zero armed before tick
-     *  {@code retrackAtTick} ({@code -1} for never): that tick executes it at
-     *  its end, the way the tick loop arms it once the frequency lock is
-     *  tracking. */
-    private Run drive(boolean notchDrift, boolean randomHop, int retrackAtTick,
+    /** The same run with the pilot re-zero armed before analysis cycle
+     *  {@code retrackAtCycle} ({@code -1} for never): that cycle executes it
+     *  at its end, the way the analysis-cycle loop arms it once the frequency
+     *  lock is tracking. */
+    private Run drive(boolean notchDrift, boolean randomHop, int retrackAtCycle,
                       String label) throws Exception {
         FftAnalyzer       analyzer = new FftAnalyzer();
         FftAnalyzerWorker worker   = new FftAnalyzerWorker(null);          // headless
@@ -291,11 +295,11 @@ class FftPilotToneAnalyserTest {
         FieldUtils.writeField(worker, "winValid", true, true);
         Random    rng       = new Random(SEED);
         long      pos       = 0;
-        double[]  excess    = new double[TICKS];
-        double[]  deviation = new double[TICKS];
-        double[]  advances  = new double[TICKS];
-        boolean[] unsettled = new boolean[TICKS];
-        for (int t = 0; t < TICKS; t++) {
+        double[]  excess    = new double[CYCLES];
+        double[]  deviation = new double[CYCLES];
+        double[]  advances  = new double[CYCLES];
+        boolean[] unsettled = new boolean[CYCLES];
+        for (int t = 0; t < CYCLES; t++) {
             int      hop   = randomHop
                     ? RAND_HOP_MIN + RAND_HOP_STEP * rng.nextInt(FftOverlap.RAND_HOP_STEPS + 1)
                     : FIXED_HOP;
@@ -311,17 +315,17 @@ class FftPilotToneAnalyserTest {
             FieldUtils.writeField(worker, "refWinBuf", ref, true);
             FieldUtils.writeField(worker, "pendingHopSamples", hop, true);
             FieldUtils.writeField(worker, "winAbsStart", pos, true);
-            if (t == retrackAtTick) {
+            if (t == retrackAtCycle) {
                 FieldUtils.writeField(worker, "pilotRetrackPending", true, true);
             }
             FftResult r = analyse(analyzer, win, hop);
-            excess[t]    = tickPhiF(worker, r);
+            excess[t]    = cyclePhiF(worker, r);
             deviation[t] = pilotAgainstReference(worker, r);
             advances[t]  = (Double)  FieldUtils.readField(worker, "pilotAdvanceSamples", true);
             unsettled[t] = (Boolean) FieldUtils.readField(worker, "phaseAlignUnsettled", true);
             // The geometry and the measured positions, so a case that fails
             // says WHERE the two sides parted.
-            LOG.info("{} tick {}: hop {}, frames {}, window start {}, pilot pos {} bins, "
+            LOG.info("{} analysis cycle {}: hop {}, frames {}, window start {}, pilot pos {} bins, "
                             + "fundamental pos {} bins, pilot vs ref chan {} deg, excess {} deg",
                     label, t, hop, r.frameCount, pos,
                     String.format("%.6f", r.pilot1HzRefined / r.freqResolution),
@@ -333,10 +337,10 @@ class FftPilotToneAnalyserTest {
         return new Run(excess, deviation, advances, unsettled);
     }
 
-    /** One tick's analysis with the tick loop's own arguments: the spectrum
-     *  only (the stats are re-derived from the accumulator), single tone, no
-     *  second-tone hint, the pilot pinned on its bin, coherent averaging on,
-     *  and the frame spacing stated - the drawn hop. */
+    /** One cycle's analysis with the analysis-cycle loop's own arguments: the
+     *  spectrum only (the stats are re-derived from the accumulator), single
+     *  tone, no second-tone hint, the pilot pinned on its bin, coherent
+     *  averaging on, and the frame spacing stated - the drawn hop. */
     private FftResult analyse(FftAnalyzer analyzer, double[] win, int hop) {
         analyzer.setSpectrumOnly(true);
         analyzer.setMultiTone(false);
@@ -347,11 +351,11 @@ class FftPilotToneAnalyserTest {
                 new FftResult(), hop);
     }
 
-    /** The worker's own third trace value after this tick, radians - "pilot
-     *  vs ref chan": the reference channel's reading of the fundamental's
-     *  drift less the excess, both taken from the worker rather than
-     *  recomputed, so the case tests the production formula and not a copy
-     *  of it. */
+    /** The worker's own third trace value after this analysis cycle, radians -
+     *  "pilot vs ref chan": the reference channel's reading of the
+     *  fundamental's drift less the excess, both taken from the worker rather
+     *  than recomputed, so the case tests the production formula and not a
+     *  copy of it. */
     private double pilotAgainstReference(FftAnalyzerWorker worker, FftResult r) throws Exception {
         double againstReference = (Double) MethodUtils.invokeMethod(worker, true,
                 "fundamentalAgainstReferenceRad");
@@ -359,22 +363,23 @@ class FftPilotToneAnalyserTest {
                 "pilotAgainstReferenceRad", againstReference);
     }
 
-    /** The worker's own excess for this tick in mode PILOT_TONE - the private
-     *  method the tick loop calls, reached by reflection. */
-    private double tickPhiF(FftAnalyzerWorker worker, FftResult r) throws Exception {
-        return (Double) MethodUtils.invokeMethod(worker, true, "tickPhiF",
+    /** The worker's own excess for this analysis cycle in mode PILOT_TONE - the
+     *  private method the analysis-cycle loop calls, reached by reflection. */
+    private double cyclePhiF(FftAnalyzerWorker worker, FftResult r) throws Exception {
+        return (Double) MethodUtils.invokeMethod(worker, true, "cyclePhiF",
                 FundamentalPhaseAlignment.PILOT_TONE, r, true);
     }
 
     // ── The capture ────────────────────────────────────────────────────────
 
     /**
-     * The window a tick analyses: the three lines as double-precision sines,
-     * sampled over {@code FFT_SIZE + hop} samples starting at the absolute
-     * position {@code pos}, with the time base slipped by {@code slip} samples
-     * and the fundamental turned by {@code notchRad} on top.  A slip that
-     * grows from tick to tick is what a converter pair running at slightly
-     * different rates does; a rotation of the fundamental alone is what a
+     * The window an analysis cycle analyses: the three lines as
+     * double-precision sines, sampled over {@code FFT_SIZE + hop} samples
+     * starting at the absolute position {@code pos}, with the time base
+     * slipped by {@code slip} samples and the fundamental turned by
+     * {@code notchRad} on top.  A slip that grows from analysis cycle to
+     * analysis cycle is what a converter pair running at slightly different
+     * rates does; a rotation of the fundamental alone is what a
      * drifting notch does.  Each line's phase argument is reduced to one turn
      * before the sine, so the arithmetic stays exact however far the stream
      * has run.

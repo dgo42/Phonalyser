@@ -35,19 +35,20 @@ import java.util.Random;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Coherent cross-tick accumulator vs a DEGENERATE FIRST WINDOW.
+ * Coherent cross-cycle accumulator vs a DEGENERATE FIRST WINDOW.
  *
  * <p>The accumulator pins its coherent reference (κ, the fractional
- * fundamental bin) from the RESTART tick.  A capture that begins with a
- * line-open transient - leading zeros, a half-filled window, a DC step -
- * hands that tick a window with no usable fundamental, so the pinned
- * reference comes from noise (or is not finite at all).  Every later
- * clean tick is then de-rotated against that reference; if the reference
- * never heals, the displayed average stays degenerate for the whole run
- * while the tick counter keeps climbing - a chart with no trace, no
- * harmonic dots and no THD table, at every scroll position.
+ * fundamental bin) from the RESTART analysis cycle.  A capture that
+ * begins with a line-open transient - leading zeros, a half-filled
+ * window, a DC step - hands that cycle a window with no usable
+ * fundamental, so the pinned reference comes from noise (or is not
+ * finite at all).  Every later clean analysis cycle is then de-rotated
+ * against that reference; if the reference never heals, the displayed
+ * average stays degenerate for the whole run while the cycle counter
+ * keeps climbing - a chart with no trace, no harmonic dots and no THD
+ * table, at every scroll position.
  *
- * <p>Same driving pattern as {@link FftCrossTickDriftTest}: the real
+ * <p>Same driving pattern as {@link FftCrossCycleDriftTest}: the real
  * {@link FftAnalyzerWorker} accumulator + PLL headlessly, read back
  * through the accumulator's overlay +
  * {@link FftAnalyzer#recomputeStats} - the exact display path.  Both of
@@ -64,12 +65,12 @@ class FftBlankStartupTest {
     private static final WindowType WINDOW      = WindowType.HANN;
     private static final FftOverlap OVERLAP     = FftOverlap.PCT_0;
     private static final int        HARMONICS   = 8;
-    private static final int        TARGET_N    = 4;            // ring 4 -> 4 frames, one per tick
+    private static final int        TARGET_N    = 4;            // ring 4 -> 4 frames, one per analysis cycle
     private static final double     FUND_HZ     = 999.96;       // fractional bin 2047.918
     private static final double     AMPL        = 0.724;        // -2.8 dBFS
     private static final double     NOISE_STD   = 3.0e-6;
     private static final long       SEED        = 20_260_818L;
-    private static final int        TICKS       = 12;
+    private static final int        CYCLES      = 12;
     /** A displayed fundamental this far above the clamp floor counts as drawn. */
     private static final double     HEALTHY_DBFS = -30.0;
 
@@ -123,14 +124,14 @@ class FftBlankStartupTest {
     @Test
     void startTransientMustNotBlankTheAverageForever() {
         int hop    = FFT_SIZE;                       // 0 % overlap
-        int winLen = FFT_SIZE;                       // one frame per tick (worker geometry)
-        int total  = (TICKS - 1) * hop + winLen;
+        int winLen = FFT_SIZE;                       // one frame per analysis cycle (worker geometry)
+        int total  = (CYCLES - 1) * hop + winLen;
 
         StringBuilder failures = new StringBuilder();
         for (Start start : Start.values()) {
             double lastFund = run(start, hop, winLen, total);
-            LOG.info(String.format("=== %s: displayed fundamental after %d ticks = %.2f dBFS ===",
-                    start, TICKS, lastFund));
+            LOG.info(String.format("=== %s: displayed fundamental after %d analysis cycles = %.2f dBFS ===",
+                    start, CYCLES, lastFund));
             if (!(lastFund > HEALTHY_DBFS)) {
                 failures.append(String.format("%s ends at %.2f dBFS; ", start, lastFund));
             }
@@ -149,7 +150,7 @@ class FftBlankStartupTest {
 
         double lastFund = Double.NEGATIVE_INFINITY;
         long base = 0;
-        for (int t = 0; t < TICKS; t++) {
+        for (int t = 0; t < CYCLES; t++) {
             System.arraycopy(sig, (int) base, win, 0, winLen);
             analyzer.setSpectrumOnly(true);
             analyzer.setMultiTone(false);
@@ -158,7 +159,7 @@ class FftBlankStartupTest {
                     WINDOW, OVERLAP, 0.0, 0.0, true, Double.NaN, false, FUND_HZ);
             call(worker, ACCUMULATE, r, base, true, TARGET_N);
 
-            overlay(worker, r);                      // the display path, every tick
+            overlay(worker, r);                      // the display path, every analysis cycle
             analyzer.recomputeStats(r);
             int nanBins = 0, liveBins = 0;
             for (int k = 1; k < r.amplitudeDbFs.length; k++) {
@@ -167,7 +168,7 @@ class FftBlankStartupTest {
             }
             lastFund = r.fundamentalDbFs;
             LOG.info(String.format(
-                    "%s tick %2d  frames=%3d  fund=%8.2f dBFS @ %10.3f Hz  live=%6d  nan=%6d",
+                    "%s cycle %2d  frames=%3d  fund=%8.2f dBFS @ %10.3f Hz  live=%6d  nan=%6d",
                     start, t + 1, worker.getAccumulatedFrames(), r.fundamentalDbFs,
                     r.fundamentalHzRefined, liveBins, nanBins));
             base += hop;

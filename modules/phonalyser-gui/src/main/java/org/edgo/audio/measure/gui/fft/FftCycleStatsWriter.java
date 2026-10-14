@@ -32,25 +32,25 @@ import org.edgo.audio.measure.fft.FftResult;
 import lombok.extern.log4j.Log4j2;
 
 /**
- * Per-tick diagnostic record of the coherent cross-tick FFT accumulator - a
+ * Per-cycle diagnostic record of the coherent cross-cycle FFT accumulator - a
  * plain CSV, deliberately NOT a logger (the same conventions as the
  * predistortion statistics record: one file per accumulator run, named
- * {@code fft-ticks-<timestamp>.csv} in the application's log directory,
+ * {@code fft-cycles-<timestamp>.csv} in the application's log directory,
  * semicolon-separated with German decimal commas, every row flushed, nothing
  * here ever throws - the first I/O failure closes the stream and turns every
  * further call into a silent no-op).
  *
  * <p>Purpose: numeric offline analysis of how the fundamental's window lobe
  * behaves under overlapped coherent averaging.  Each row carries the
- * de-rotation inputs exactly as the accumulator used them for that tick
- * (absolute window position, intra-call step, elapsed-sample delta, the
+ * de-rotation inputs exactly as the accumulator used them for that analysis
+ * cycle (absolute window position, intra-call step, elapsed-sample delta, the
  * phase-lock loop's cumulative correction, the refined fractional bin kappa
  * and the per-bin ramp slope theta) plus two complex spectrum slices around
- * the pinned fundamental bin: the fresh tick's spectrum BEFORE the cross-tick
- * rotation, and the accumulated running sum AFTER this tick was added.  From
- * those slices an analysis script can reconstruct, per lobe bin, the actual
- * tick-to-tick phase advance and the carving of the averaged lobe, and test
- * them against a rotation model.
+ * the pinned fundamental bin: the fresh cycle's spectrum BEFORE the
+ * cross-cycle rotation, and the accumulated running sum AFTER this cycle was
+ * added.  From those slices an analysis script can reconstruct, per lobe
+ * bin, the actual cycle-to-cycle phase advance and the carving of the
+ * averaged lobe, and test them against a rotation model.
  *
  * <p>Not thread-safe: every record call comes from the analysis worker
  * thread.  A concurrent {@code close()} from another thread at worst trips
@@ -58,9 +58,9 @@ import lombok.extern.log4j.Log4j2;
  * accepted cost of a diagnostic record.
  */
 @Log4j2
-public final class FftTickStatsWriter {
+public final class FftCycleStatsWriter {
 
-    private static final String FILE_PREFIX = "fft-ticks-";
+    private static final String FILE_PREFIX = "fft-cycles-";
     private static final String FILE_SUFFIX = ".csv";
     private static final String SEP         = ";";
     /** Bins recorded either side of the pinned fundamental bin - wide enough
@@ -75,20 +75,20 @@ public final class FftTickStatsWriter {
     /** {@code null} once closed, failed, or constructed disabled - every
      *  record call then does nothing. */
     private BufferedWriter out;
-    /** Row counter since this file was opened (= ticks accumulated). */
-    private long tick;
+    /** Row counter since this file was opened (= analysis cycles accumulated). */
+    private long cycle;
 
     /** Creates a DISABLED record: no file is opened and every call returns at
      *  once - the shape the worker holds while the diagnostic switch is off,
      *  so call sites need neither a null check nor a branch. */
-    public FftTickStatsWriter() {
+    public FftCycleStatsWriter() {
         this.file = null;                                   // out stays null - disabled
     }
 
     /** Creates and opens this accumulator run's file in {@code logsDir},
      *  writing a configuration line and the column header.  A failure here
      *  disables the record; it never throws. */
-    public FftTickStatsWriter(Path logsDir, int fftSize, int sampleRate, double freqResolution) {
+    public FftCycleStatsWriter(Path logsDir, int fftSize, int sampleRate, double freqResolution) {
         this.file = logsDir.resolve(FILE_PREFIX + LocalDateTime.now().format(STAMP) + FILE_SUFFIX);
         try {
             Files.createDirectories(logsDir);
@@ -102,23 +102,23 @@ public final class FftTickStatsWriter {
                 + " lobeHalfWidth=" + LOBE_SLICE_HALF_WIDTH);
         write(header());
         if (log.isInfoEnabled()) {
-            log.info("FFT tick statistics file: {}", file);
+            log.info("FFT cycle statistics file: {}", file);
         }
     }
 
-    /** One row per accumulated tick.  {@code r} holds the fresh tick's
-     *  spectrum (still un-rotated - the accumulator rotates on the fly while
-     *  adding); {@code accumRe/accumIm} the running sum AFTER the add;
+    /** One row per accumulated analysis cycle.  {@code r} holds the fresh
+     *  cycle's spectrum (still un-rotated - the accumulator rotates on the fly
+     *  while adding); {@code accumRe/accumIm} the running sum AFTER the add;
      *  {@code theta} the fundamental's rotation angle the add used (the
      *  reference the rest of the family derives from); {@code delta}
      *  includes {@code droppedSamples} (the loop correction), both recorded
      *  so the analysis can separate them. */
-    public void tick(FftResult r, long absStart, double delta, double droppedSamples,
+    public void cycle(FftResult r, long absStart, double delta, double droppedSamples,
                      double kappa, int k0, double theta,
                      double[] accumRe, double[] accumIm, int accumFramesAfter) {
         if (out == null) return;
         StringBuilder sb = new StringBuilder(2048);
-        sb.append(tick++)
+        sb.append(cycle++)
           .append(SEP).append(absStart)
           .append(SEP).append(r.stepSamples)
           .append(SEP).append(r.frameCount)
@@ -137,9 +137,9 @@ public final class FftTickStatsWriter {
 
     private String header() {
         StringBuilder sb = new StringBuilder(
-                "tick;abs_start;step_samples;frames_in_call;delta;dropped_samples;"
+                "cycle;abs_start;step_samples;frames_in_call;delta;dropped_samples;"
                 + "kappa;k0;theta_rad;fund_hz;fund_dbfs;accum_frames");
-        appendLobeHeader(sb, "t");      // fresh tick spectrum
+        appendLobeHeader(sb, "t");      // fresh cycle spectrum
         appendLobeHeader(sb, "a");      // accumulated running sum
         return sb.toString();
     }
@@ -189,7 +189,7 @@ public final class FftTickStatsWriter {
 
     private void disable(IOException e) {
         if (log.isWarnEnabled()) {
-            log.warn("FFT tick statistics disabled ({}): {}", file, e.toString());
+            log.warn("FFT cycle statistics disabled ({}): {}", file, e.toString());
         }
         BufferedWriter w = out;
         out = null;
