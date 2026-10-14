@@ -67,6 +67,10 @@ public final class ScopeOpenSignal {
     private File          loadedFile;
     @Getter
     private String        lastError;
+    /** The reader over the loaded file's buffer, which this loader built and
+     *  so releases - on {@link #clear} and when a new load replaces it;
+     *  {@code null} while no file is loaded. */
+    private SignalBufferReader loadedReader;
 
     public ScopeOpenSignal(ScopeView mainView, ZoomedView condensedView) {
         this.mainView      = mainView;
@@ -87,7 +91,7 @@ public final class ScopeOpenSignal {
             lastError = I18n.t("scope.openSignal.pickFirst");
             return false;
         }
-        SignalBufferReader.Builder builder;
+        SignalBufferReader.Builder builder = null;
         try (AudioInputStream in = PcmFileLoader.instance().openAsPcm(file)) {
             AudioFormat fmt = in.getFormat();
             int sampleRate     = (int) fmt.getSampleRate();
@@ -143,15 +147,19 @@ public final class ScopeOpenSignal {
             // run - same user answer, localized here.
             lastError = I18n.t("scope.openSignal.tooLarge", file.getName(), ex.needMb, ex.freeMb);
             log.warn("Scope open signal failed: {}", ex.getMessage());
+            if (builder != null) builder.release();
             return false;
         } catch (Exception ex) {
             lastError = ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName();
             log.warn("Scope open signal failed: {}", lastError, ex);
+            if (builder != null) builder.release();
             return false;
         }
 
+        if (loadedReader != null) loadedReader.release();
         loadedFile = file;
         SignalBufferReader reader = builder.build();
+        loadedReader = reader;
         if (!mainView.isDisposed()) {
             mainView.setBuffer(reader);
             mainView.setFileMode(true);
@@ -174,6 +182,10 @@ public final class ScopeOpenSignal {
      * nothing is loaded.
      */
     public void clear() {
+        if (loadedReader != null) {
+            loadedReader.release();
+            loadedReader = null;
+        }
         loadedFile = null;
         lastError  = null;
         if (!mainView.isDisposed()) {

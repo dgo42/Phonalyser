@@ -173,6 +173,9 @@ public final class SharedCapture {
         // own failure meant - the reading of a native error belongs to the
         // module that produced it, exactly as on the playback side.
         AudioDeviceManager input = audio.manager(device.carrier());
+        // Hoisted for the same reason: a failed open releases the buffer it
+        // already built.
+        SignalBuffer bufRelease = null;
         try {
             AudioCapture cap = audio.openCapture(device);
             cap.open();
@@ -191,6 +194,7 @@ public final class SharedCapture {
             // needs double) and the scope alike; float storage exists only on
             // scope-private copies (SignalBuffer.frozenCopy).
             SignalBuffer buf = new DoubleSignalBuffer(grantedRate, BUFFER_SECONDS);
+            bufRelease = buf;
 
             final int sampleBytes = bitDepth / 8;
             final int frameSize   = sampleBytes * 2;   // stereo
@@ -284,7 +288,7 @@ public final class SharedCapture {
             DeviceFailureReason reason = input.classifyFailure(ex);
             lastStartError = openFailureText(reason, device, sampleRate, bitDepth);
             log.error("Capture: failed to start ({}) - {}", reason, ex.getMessage(), ex);
-            cleanupAfterFailure();
+            cleanupAfterFailure(bufRelease);
             return null;
         }
     }
@@ -335,6 +339,7 @@ public final class SharedCapture {
         refCount--;
         if (refCount > 0) return;
         closeLine();
+        if (sharedBuffer != null) sharedBuffer.unregister();
         sharedBuffer = null;
         log.info("Audio capture stopped (last reference released).");
     }
@@ -371,6 +376,7 @@ public final class SharedCapture {
                     dead.getFinishedReason());
         }
         closeLine();
+        dead.unregister();
         sharedBuffer = null;
     }
 
@@ -397,10 +403,14 @@ public final class SharedCapture {
 
     /** Undoes a half-built lane.  The reference count is NOT touched: this open
      *  never incremented it, and it may already carry holders of a lane discarded
-     *  just before - zeroing it would strand their releases. */
-    private void cleanupAfterFailure() {
+     *  just before - zeroing it would strand their releases.  {@code buf} is
+     *  the buffer this open built, {@code null} when it failed before that; the
+     *  shared field holds either nothing or that same buffer, because a live
+     *  lane never reaches an open. */
+    private void cleanupAfterFailure(SignalBuffer buf) {
         Closeables.closeQuietly(capture);
         capture = null;
+        if (buf != null) buf.unregister();
         sharedBuffer = null;
     }
 

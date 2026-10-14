@@ -82,6 +82,26 @@ public final class FloatSignalBuffer extends SignalBuffer {
     }
 
     @Override
+    protected void combineOut(int srcIdx, boolean leftMaster, double gain, double offset,
+                              double[] out, int dstPos, int len) {
+        float[] master = leftMaster ? left  : right;
+        float[] slave  = leftMaster ? right : left;
+        for (int i = 0; i < len; i++) {
+            out[dstPos + i] = (master[srcIdx + i] + gain * slave[srcIdx + i] + offset) / 2.0;
+        }
+    }
+
+    @Override
+    protected void combineOut(int srcIdx, boolean leftMaster, double gain, double offset,
+                              float[] out, int dstPos, int len) {
+        float[] master = leftMaster ? left  : right;
+        float[] slave  = leftMaster ? right : left;
+        for (int i = 0; i < len; i++) {
+            out[dstPos + i] = (float) ((master[srcIdx + i] + gain * slave[srcIdx + i] + offset) / 2.0);
+        }
+    }
+
+    @Override
     protected void narrowTo(float[] dstLeft, float[] dstRight) {
         System.arraycopy(left,  0, dstLeft,  0, left.length);
         System.arraycopy(right, 0, dstRight, 0, right.length);

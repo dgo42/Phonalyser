@@ -18,6 +18,7 @@
 
 package org.edgo.audio.measure.gui.sound;
 
+import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.sound.CaptureEndReason;
 
 import lombok.Getter;
@@ -78,10 +79,40 @@ public final class SignalBufferReader {
      *  owning consumer thread advances it. */
     @Getter
     private volatile long readPos = -1;
+    /** The master channel while the two inputs are combined - the other
+     *  channel, the slave, is folded into it - or {@code null} while they are
+     *  separate.  One reference, so the consumer threads sharing this reader
+     *  see a consistent state without a lock. */
+    private volatile Channel master;
 
     public SignalBufferReader(SignalBuffer buffer) {
         if (buffer == null) throw new IllegalArgumentException("buffer must not be null");
         this.buffer = buffer;
+        buffer.acquire();
+    }
+
+    // ─── Combined channel ───────────────────────────────────────────────────
+
+    /** Combines the two inputs - both carrying the same signal - into
+     *  {@code masterChannel}: the other channel becomes its slave.  The
+     *  averages behind the combination belong to the buffer, shared by every
+     *  reader over it. */
+    public void combine(Channel masterChannel) {
+        if (masterChannel == null) throw new IllegalArgumentException("masterChannel must not be null");
+        this.master = masterChannel;
+    }
+
+    /** Separates the two inputs again; the buffer's averages are kept. */
+    public void separate() {
+        this.master = null;
+    }
+
+    /** Counts this reader off its buffer - once, by the holder, right before
+     *  letting go of it.  The buffer stops following the averaging-time
+     *  preference when its last reader is released.
+     *  @see SignalBuffer#release() */
+    public void release() {
+        buffer.release();
     }
 
     // ─── Delegated latest-window access ─────────────────────────────────────
@@ -126,25 +157,35 @@ public final class SignalBufferReader {
         return buffer.awaitAvailable(readPos, count, maxWaitMs);
     }
 
-    /** @see SignalBuffer#readLatest(int, double[], double[]) */
+    /** Combined, the buffer's combined form of the same read.
+     *  @see SignalBuffer#readLatest(int, double[], double[]) */
     public int readLatest(int count, double[] outLeft, double[] outRight) {
-        return buffer.readLatest(count, outLeft, outRight);
+        Channel masterChannel = master;
+        if (masterChannel == null) return buffer.readLatest(count, outLeft, outRight);
+        return buffer.readLatest(masterChannel, count, outLeft, outRight);
     }
 
-    /** @see SignalBuffer#readEndingAt(long, int, double[], double[]) */
+    /** Combined, the buffer's combined form of the same read.
+     *  @see SignalBuffer#readEndingAt(long, int, double[], double[]) */
     public int readEndingAt(long absoluteEnd, int count, double[] outLeft, double[] outRight) {
-        return buffer.readEndingAt(absoluteEnd, count, outLeft, outRight);
+        Channel masterChannel = master;
+        if (masterChannel == null) return buffer.readEndingAt(absoluteEnd, count, outLeft, outRight);
+        return buffer.readEndingAt(masterChannel, absoluteEnd, count, outLeft, outRight);
     }
 
     /** Single-precision view of {@link #readLatest(int, double[], double[])}
      *  for the display / WAV paths (which keep their DSP in {@code float}). */
     public int readLatest(int count, float[] outLeft, float[] outRight) {
-        return buffer.readLatest(count, outLeft, outRight);
+        Channel masterChannel = master;
+        if (masterChannel == null) return buffer.readLatest(count, outLeft, outRight);
+        return buffer.readLatest(masterChannel, count, outLeft, outRight);
     }
 
     /** Single-precision view of {@link #readEndingAt(long, int, double[], double[])}. */
     public int readEndingAt(long absoluteEnd, int count, float[] outLeft, float[] outRight) {
-        return buffer.readEndingAt(absoluteEnd, count, outLeft, outRight);
+        Channel masterChannel = master;
+        if (masterChannel == null) return buffer.readEndingAt(absoluteEnd, count, outLeft, outRight);
+        return buffer.readEndingAt(masterChannel, absoluteEnd, count, outLeft, outRight);
     }
 
     /** Returns a new reader over a standalone, frozen copy of this buffer's
@@ -155,9 +196,12 @@ public final class SignalBufferReader {
      *  it to keep showing the last captured frame after Record stops while the
      *  shared device keeps writing for other consumers.  Keeps the raw
      *  {@link SignalBuffer} encapsulated: the caller gets back a reader, never
-     *  the buffer. */
+     *  the buffer.  The new reader keeps this one's master choice, so a
+     *  combined trace stays combined when frozen. */
     public SignalBufferReader frozenSnapshot() {
-        return new SignalBufferReader(buffer.frozenCopy());
+        SignalBufferReader frozen = new SignalBufferReader(buffer.frozenCopy());
+        frozen.master = master;
+        return frozen;
     }
 
     // ─── Contiguous cursor ──────────────────────────────────────────────────
@@ -218,7 +262,12 @@ public final class SignalBufferReader {
         if (readPos < write - buffer.getCapacity()) return OVERRUN;
         int n = (int) Math.min((long) maxCount, write - readPos);
         if (n <= 0) return 0;
-        buffer.readStartingAt(readPos, n, outLeft, outRight, outOffset);   // forward, wrap-aware copy
+        Channel masterChannel = master;
+        if (masterChannel == null) {
+            buffer.readStartingAt(readPos, n, outLeft, outRight, outOffset);   // forward, wrap-aware copy
+        } else {
+            buffer.readStartingAt(masterChannel, readPos, n, outLeft, outRight, outOffset);
+        }
         // The copy runs outside the buffer lock.  When the cursor sits close
         // to a full ring behind (large-FFT backlog), the writer can lap into
         // the region being copied DURING the copy - the pre-check above can't
@@ -238,7 +287,12 @@ public final class SignalBufferReader {
         if (readPos < write - buffer.getCapacity()) return OVERRUN;
         int n = (int) Math.min((long) maxCount, write - readPos);
         if (n <= 0) return 0;
-        buffer.readStartingAt(readPos, n, outLeft, outRight);
+        Channel masterChannel = master;
+        if (masterChannel == null) {
+            buffer.readStartingAt(readPos, n, outLeft, outRight);
+        } else {
+            buffer.readStartingAt(masterChannel, readPos, n, outLeft, outRight);
+        }
         if (readPos < buffer.getWritePos() - buffer.getCapacity()) return OVERRUN;
         readPos += n;
         return n;
@@ -281,6 +335,13 @@ public final class SignalBufferReader {
         /** Returns a reader over the filled buffer. */
         public SignalBufferReader build() {
             return new SignalBufferReader(buffer);
+        }
+
+        /** Releases the buffer being filled, for a load abandoned before
+         *  {@link #build()}.
+         *  @see SignalBuffer#release() */
+        public void release() {
+            buffer.release();
         }
     }
 }

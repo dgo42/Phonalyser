@@ -18,6 +18,12 @@
 
 package org.edgo.audio.measure.gui.sound;
 
+import java.util.Arrays;
+import java.util.function.Consumer;
+
+import org.edgo.audio.measure.bind.Property;
+import org.edgo.audio.measure.enums.Channel;
+import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.CaptureEndReason;
 
 import lombok.Getter;
@@ -69,6 +75,36 @@ public abstract class SignalBuffer {
      *  on the same stream is never mistaken for the new one. */
     @Getter
     private volatile long sweepMarkPos = -1;
+    /** Follows the averaging time onto the averaging window; {@code null} on
+     *  a frozen copy, which never feeds its averages.  Removed by
+     *  {@link #release()} once no reader is left: the property holds its
+     *  listeners strongly. */
+    private final Consumer<Double> averagingTimeListener;
+    /** Readers built over this buffer and not released yet - several
+     *  consumers read one buffer, each through its own reader. */
+    private int readerCount;
+    /** The averaging window in samples - the averaging time at this stream's
+     *  rate - and one sample's weight in the exponential averages once that
+     *  many have been fed. */
+    private double windowSamples;
+    private double exponentialWeight;
+    /** Samples fed into the averages so far: below the window each average is
+     *  the plain mean of what arrived, the first sample feeding straight
+     *  through. */
+    private long fedCount;
+    /** Exponential means of the two channels - their DC offsets - and of
+     *  their deviation from them, {@code |x - mean(x)|} - their levels.  The
+     *  stream's own state, serving either channel as master and the other as
+     *  slave. */
+    private double meanLeft;
+    private double meanRight;
+    private double levelLeft;
+    private double levelRight;
+    /** The multiplier that brings the slave to the master's level,
+     *  {@code level(master) / level(slave)}, with L and with R as master: 1 at
+     *  the start, kept at its last value while the slave's level is 0. */
+    private double scaleLeftMaster  = 1.0;
+    private double scaleRightMaster = 1.0;
 
     protected SignalBuffer(int sampleRate, double seconds) {
         if (sampleRate <= 0 || seconds <= 0) {
@@ -76,6 +112,10 @@ public abstract class SignalBuffer {
         }
         this.sampleRate = sampleRate;
         this.capacity   = (int) Math.ceil(sampleRate * seconds);
+        Property<Double> averagingTime = Preferences.instance().oscMeasurementAverageSecondsProperty();
+        setAveragingTime(averagingTime.get());
+        this.averagingTimeListener = this::setAveragingTime;
+        averagingTime.addListener(averagingTimeListener);
     }
 
     /** Exact-capacity twin used by {@link #frozenCopy()} - the copy must have
@@ -84,6 +124,7 @@ public abstract class SignalBuffer {
     protected SignalBuffer(int sampleRate, int capacity) {
         this.sampleRate = sampleRate;
         this.capacity   = capacity;
+        this.averagingTimeListener = null;
     }
 
     /** Total samples ever written.  Used by the UI to detect new data. */
@@ -185,6 +226,19 @@ public abstract class SignalBuffer {
     protected abstract void copyOut(int srcIdx, float[] outLeft, float[] outRight,
                                     int dstPos, int len);
 
+    /** Writes {@code len} combined samples from backing index {@code srcIdx}
+     *  into {@code out} at {@code dstPos}:
+     *  {@code (master + gain * slave + offset) / 2}, the master being the
+     *  left channel when {@code leftMaster}.  No wrap - the caller split the
+     *  request.  Runs OUTSIDE the monitor, like the plain copy-out. */
+    protected abstract void combineOut(int srcIdx, boolean leftMaster, double gain, double offset,
+                                       double[] out, int dstPos, int len);
+
+    /** {@link #combineOut(int, boolean, double, double, double[], int, int)}
+     *  into single-precision outputs. */
+    protected abstract void combineOut(int srcIdx, boolean leftMaster, double gain, double offset,
+                                       float[] out, int dstPos, int len);
+
     /** Copies the WHOLE backing verbatim-by-index into the given float arrays
      *  (length = {@link #getCapacity()}).  Called under the monitor by
      *  {@link #frozenCopy()} - index-preserving, so the copy's modulo layout
@@ -196,6 +250,8 @@ public abstract class SignalBuffer {
     public synchronized void append(double leftValue, double rightValue) {
         int idx = (int) (writePos % capacity);
         set(idx, leftValue, rightValue);
+        feedSample(leftValue, rightValue);
+        updateScales();
         writePos++;
         notifyAll();   // wake consumers blocked in awaitAvailable
     }
@@ -208,8 +264,8 @@ public abstract class SignalBuffer {
      * at 384 kHz) - dramatically reducing lock contention with the UI
      * thread's {@link #readLatest(int, double[], double[])} during paint.
      *
-     * <p>Both writes are bulk copies so the synchronised hold time stays in
-     * the tens of microseconds even for 8 k-sample chunks.
+     * <p>Both writes are bulk copies; the combine averages add one pass over
+     * the chunk ({@link #feed(double[], double[], int)}).
      */
     public synchronized void appendBatch(double[] leftValues, double[] rightValues, int count) {
         if (count <= 0) return;
@@ -220,6 +276,7 @@ public abstract class SignalBuffer {
         if (remaining > 0) {
             copyIn(leftValues, rightValues, firstChunk, 0, remaining);
         }
+        feed(leftValues, rightValues, count);
         writePos += count;
         notifyAll();   // wake consumers blocked in awaitAvailable
     }
@@ -234,6 +291,7 @@ public abstract class SignalBuffer {
         if (remaining > 0) {
             copyIn(leftValues, rightValues, firstChunk, 0, remaining);
         }
+        feed(leftValues, rightValues, count);
         writePos += count;
     }
 
@@ -263,6 +321,78 @@ public abstract class SignalBuffer {
             wait(Math.max(1L, leftNanos / 1_000_000L));
         }
         return writePos - fromPos;
+    }
+
+    // ── Combine averages ─────────────────────────────────────────────────────
+
+    /** Counts one more reader over this buffer; called by every
+     *  {@link SignalBufferReader} it is built into. */
+    synchronized void acquire() {
+        readerCount++;
+    }
+
+    /** Counts one reader off; the listener on the averaging time goes when
+     *  none is left.  A buffer released before any reader was built - a
+     *  failed load - drops it at once. */
+    public synchronized void release() {
+        if (readerCount > 0) readerCount--;
+        if (readerCount == 0) unregister();
+    }
+
+    /** Removes the listener on the averaging time whatever readers are left -
+     *  for the buffer's owner, right before it drops the buffer. */
+    public void unregister() {
+        if (averagingTimeListener != null) {
+            Preferences.instance().oscMeasurementAverageSecondsProperty().removeListener(averagingTimeListener);
+        }
+    }
+
+    /** Sets the averaging window from the averaging time in seconds. */
+    private synchronized void setAveragingTime(double seconds) {
+        windowSamples     = Math.max(1.0, seconds * sampleRate);
+        exponentialWeight = 1.0 - Math.exp(-1.0 / windowSamples);
+    }
+
+    /** Feeds the averages with the {@code count} arriving sample pairs, in
+     *  order, then updates the scales.  Every sample written is fed once,
+     *  whether or not a reader combines.  Caller holds the monitor. */
+    private void feed(double[] leftValues, double[] rightValues, int count) {
+        for (int i = 0; i < count; i++) {
+            feedSample(leftValues[i], rightValues[i]);
+        }
+        updateScales();
+    }
+
+    /** {@link #feed(double[], double[], int)} from single-precision sources. */
+    private void feed(float[] leftValues, float[] rightValues, int count) {
+        for (int i = 0; i < count; i++) {
+            feedSample(leftValues[i], rightValues[i]);
+        }
+        updateScales();
+    }
+
+    /** One sample pair into the averages: the means first, then the levels
+     *  against them.  Its weight is 1/n for the n-th sample while fewer than
+     *  the window have been fed - the plain mean of what arrived, the first
+     *  sample feeding straight through - and the exponential weight from then
+     *  on.  Caller holds the monitor. */
+    private void feedSample(double leftValue, double rightValue) {
+        fedCount++;
+        double alpha = fedCount < windowSamples ? 1.0 / fedCount : exponentialWeight;
+        double leftDelta = leftValue  - meanLeft;
+        double rightDelta = rightValue - meanRight;
+        meanLeft   += alpha * (leftDelta);
+        meanRight  += alpha * (rightDelta);
+        levelLeft  += alpha * (Math.abs(leftDelta)  - levelLeft);
+        levelRight += alpha * (Math.abs(rightDelta) - levelRight);
+    }
+
+    /** The scales from the levels, {@code level(master) / level(slave)}, each
+     *  kept at its last value while its divisor - the slave's level - is 0.
+     *  Caller holds the monitor. */
+    private void updateScales() {
+        if (levelRight > 0.0) scaleLeftMaster  = levelLeft  / levelRight;
+        if (levelLeft  > 0.0) scaleRightMaster = levelRight / levelLeft;
     }
 
     // ── Reading ──────────────────────────────────────────────────────────────
@@ -436,6 +566,138 @@ public abstract class SignalBuffer {
         }
     }
 
+    // ── Combined reading ─────────────────────────────────────────────────────
+
+    /** {@link #readLatest(int, double[], double[])} with the two inputs
+     *  combined into {@code master}: the master's output takes
+     *  {@code (master + c * (slave - mean(slave)) + mean(master)) / 2}, the
+     *  other output 0 (see {@link #combineOutWrapped}). */
+    public int readLatest(Channel master, int count, double[] outLeft, double[] outRight) {
+        long latest;
+        synchronized (this) {
+            latest = writePos;
+        }
+        long start  = Math.max(0, latest - count);
+        int available = (int) Math.min(count, latest - start);
+        if (available <= 0) return 0;
+        combineOutWrapped(master, start, available, 0, outLeft, null, outRight, null);
+        return available;
+    }
+
+    /** {@link #readLatest(Channel, int, double[], double[])} into float out buffers. */
+    public int readLatest(Channel master, int count, float[] outLeft, float[] outRight) {
+        long latest;
+        synchronized (this) { latest = writePos; }
+        long start  = Math.max(0, latest - count);
+        int available = (int) Math.min(count, latest - start);
+        if (available <= 0) return 0;
+        combineOutWrapped(master, start, available, 0, null, outLeft, null, outRight);
+        return available;
+    }
+
+    /** {@link #readEndingAt(long, int, double[], double[])} combined like
+     *  {@link #readLatest(Channel, int, double[], double[])}. */
+    public int readEndingAt(Channel master, long absoluteEnd, int count,
+                            double[] outLeft, double[] outRight) {
+        long currentWrite;
+        synchronized (this) {
+            currentWrite = writePos;
+        }
+        long oldest    = Math.max(0L, currentWrite - capacity);
+        long endExcl   = Math.min(absoluteEnd, currentWrite);
+        long start     = Math.max(absoluteEnd - count, oldest);
+        int  available = (int) Math.max(0L, endExcl - start);
+        if (available <= 0) return 0;
+        combineOutWrapped(master, start, available, 0, outLeft, null, outRight, null);
+        return available;
+    }
+
+    /** {@link #readEndingAt(Channel, long, int, double[], double[])} into float out buffers. */
+    public int readEndingAt(Channel master, long absoluteEnd, int count, float[] outLeft, float[] outRight) {
+        long currentWrite;
+        synchronized (this) { currentWrite = writePos; }
+        long oldest    = Math.max(0L, currentWrite - capacity);
+        long endExcl   = Math.min(absoluteEnd, currentWrite);
+        long start     = Math.max(absoluteEnd - count, oldest);
+        int  available = (int) Math.max(0L, endExcl - start);
+        if (available <= 0) return 0;
+        combineOutWrapped(master, start, available, 0, null, outLeft, null, outRight);
+        return available;
+    }
+
+    /** {@link #readStartingAt(long, int, double[], double[], int)} combined
+     *  like {@link #readLatest(Channel, int, double[], double[])}. */
+    int readStartingAt(Channel master, long absoluteStart, int count,
+                       double[] outLeft, double[] outRight, int outOffset) {
+        long currentWrite;
+        synchronized (this) {
+            currentWrite = writePos;
+        }
+        long oldest    = Math.max(0L, currentWrite - capacity);
+        long start     = Math.max(absoluteStart, oldest);
+        long endExcl   = Math.min(absoluteStart + (long) count, currentWrite);
+        int  available = (int) Math.max(0L, endExcl - start);
+        if (available <= 0) return 0;
+        combineOutWrapped(master, start, available, outOffset, outLeft, null, outRight, null);
+        return available;
+    }
+
+    /** {@link #readStartingAt(Channel, long, int, double[], double[], int)}
+     *  into float out buffers, head-aligned to index 0. */
+    int readStartingAt(Channel master, long absoluteStart, int count, float[] outLeft, float[] outRight) {
+        long currentWrite;
+        synchronized (this) { currentWrite = writePos; }
+        long oldest    = Math.max(0L, currentWrite - capacity);
+        long start     = Math.max(absoluteStart, oldest);
+        long endExcl   = Math.min(absoluteStart + (long) count, currentWrite);
+        int  available = (int) Math.max(0L, endExcl - start);
+        if (available <= 0) return 0;
+        combineOutWrapped(master, start, available, 0, null, outLeft, null, outRight);
+        return available;
+    }
+
+    /** The combined copy-out: the scale and the offset for {@code master} as
+     *  they stand, taken together under the monitor; then
+     *  {@code (master + c * (slave - mean(slave)) + mean(master)) / 2} - only
+     *  the slave's deviation from its mean is scaled, so the result keeps the
+     *  master's DC offset - into the master's output straight from the ring,
+     *  and 0 into the slave's - whichever of the two the caller passed.
+     *  Exactly ONE of the double/float output pairs is in use per call,
+     *  written from output index {@code dstPos}.  The ring is read outside the
+     *  monitor, like the plain copy. */
+    private void combineOutWrapped(Channel master, long start, int available, int dstPos,
+                                   double[] outLeftD, float[] outLeftF,
+                                   double[] outRightD, float[] outRightF) {
+        boolean leftMaster = master == Channel.L;
+        double gain;
+        double offset;
+        synchronized (this) {
+            gain   = leftMaster ? scaleLeftMaster : scaleRightMaster;
+            offset = leftMaster ? meanLeft - gain * meanRight : meanRight - gain * meanLeft;
+        }
+        double[] masterD = leftMaster ? outLeftD  : outRightD;
+        float[]  masterF = leftMaster ? outLeftF  : outRightF;
+        double[] slaveD  = leftMaster ? outRightD : outLeftD;
+        float[]  slaveF  = leftMaster ? outRightF : outLeftF;
+        int srcStart   = (int) (start % capacity);
+        int firstChunk = Math.min(available, capacity - srcStart);
+        int remaining  = available - firstChunk;
+        if (masterD != null) {
+            combineOut(srcStart, leftMaster, gain, offset, masterD, dstPos, firstChunk);
+            if (remaining > 0) {
+                combineOut(0, leftMaster, gain, offset, masterD, dstPos + firstChunk, remaining);
+            }
+        }
+        if (masterF != null) {
+            combineOut(srcStart, leftMaster, gain, offset, masterF, dstPos, firstChunk);
+            if (remaining > 0) {
+                combineOut(0, leftMaster, gain, offset, masterF, dstPos + firstChunk, remaining);
+            }
+        }
+        if (slaveD != null) Arrays.fill(slaveD, dstPos, dstPos + available, 0.0);
+        if (slaveF != null) Arrays.fill(slaveF, dstPos, dstPos + available, 0f);
+    }
+
     /**
      * Atomic frozen copy: a new buffer holding this ring's current contents at
      * THE SAME ABSOLUTE POSITIONS - identical capacity, identical modulo
@@ -455,11 +717,22 @@ public abstract class SignalBuffer {
      * significant magnitude bits (sign separate), so an int24 sample survives
      * exactly; a 32-bit source is quantised at 2^-24 (≈ -144 dBFS) in the
      * held copy - the live ring and every measurement path stay double.
+     *
+     * <p>The combine averages and scales travel with the copy and stay fixed:
+     * nothing appends to it, so its combined reads combine the raw samples
+     * with the same values on every repaint, for either master.
      */
     public synchronized SignalBuffer frozenCopy() {
         FloatSignalBuffer frozen = new FloatSignalBuffer(sampleRate, capacity);
         narrowTo(frozen.left, frozen.right);
-        ((SignalBuffer) frozen).writePos = writePos;
+        SignalBuffer copy = frozen;
+        copy.writePos         = writePos;
+        copy.meanLeft         = meanLeft;
+        copy.meanRight        = meanRight;
+        copy.levelLeft        = levelLeft;
+        copy.levelRight       = levelRight;
+        copy.scaleLeftMaster  = scaleLeftMaster;
+        copy.scaleRightMaster = scaleRightMaster;
         return frozen;
     }
 }

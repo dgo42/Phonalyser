@@ -71,6 +71,26 @@ public final class DoubleSignalBuffer extends SignalBuffer {
     }
 
     @Override
+    protected void combineOut(int srcIdx, boolean leftMaster, double gain, double offset,
+                              double[] out, int dstPos, int len) {
+        double[] master = leftMaster ? left  : right;
+        double[] slave  = leftMaster ? right : left;
+        for (int i = 0; i < len; i++) {
+            out[dstPos + i] = (master[srcIdx + i] + gain * slave[srcIdx + i] + offset) / 2.0;
+        }
+    }
+
+    @Override
+    protected void combineOut(int srcIdx, boolean leftMaster, double gain, double offset,
+                              float[] out, int dstPos, int len) {
+        double[] master = leftMaster ? left  : right;
+        double[] slave  = leftMaster ? right : left;
+        for (int i = 0; i < len; i++) {
+            out[dstPos + i] = (float) ((master[srcIdx + i] + gain * slave[srcIdx + i] + offset) / 2.0);
+        }
+    }
+
+    @Override
     protected void narrowTo(float[] dstLeft, float[] dstRight) {
         for (int i = 0; i < left.length; i++) {
             dstLeft [i] = (float) left [i];
