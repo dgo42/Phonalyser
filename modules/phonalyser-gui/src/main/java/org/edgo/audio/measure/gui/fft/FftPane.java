@@ -35,7 +35,6 @@ import org.edgo.audio.measure.common.Constants;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
-import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.common.AbstractPane;
 import org.edgo.audio.measure.gui.common.AbstractTabControl;
 import org.edgo.audio.measure.gui.common.CalibrationDialog;
@@ -171,6 +170,15 @@ public final class FftPane extends AbstractPane {
      *  them.  Returns {@code null} on the offscreen (non-live) pane. */
     public PredistortionWizardDialog openPredistortionForCapture() {
         if (genController == null) return null;
+        return openPredistortionWizard();
+    }
+
+    /** Switches the FFT to coherent averaging, then builds and shows the
+     *  DAC-predistortion wizard.  The wizard measures the coherent average's
+     *  phases, which an incoherent average does not carry, so opening it is
+     *  what selects the averaging it needs. */
+    private PredistortionWizardDialog openPredistortionWizard() {
+        Preferences.instance().setFftCoherentAveraging(true);
         PredistortionWizardDialog d = new PredistortionWizardDialog(
                 getGroup().getShell(), controller, view,
                 controller.getCorrectionStore(), worker);
@@ -299,20 +307,11 @@ public final class FftPane extends AbstractPane {
         // Predistortion-wizard button (live pane only) - left of Record,
         // mirroring the Frequency-Response pane's wizard button.
         if (!offScreen && genController != null) {
-            FftController wizardController = controller;   // effectively final for the lambda
             Button wizardButton = createActionButton(toolbarRow, SWT.PUSH);
             wizardButton.setImage(IconUtils.icon(d, Icon.WAND));
             wizardButton.setToolTipText(I18n.t("predistortion.button.wizard.tooltip"));
-            wizardButton.addListener(SWT.Selection, e ->
-                    new PredistortionWizardDialog(group.getShell(), wizardController, view, correctionStore,
-                            worker).buildAndShow());
+            wizardButton.addListener(SWT.Selection, e -> openPredistortionWizard());
             wizardButton.setData("helpAnchor", "fft.html#fft-predistortion");
-            // The wizard measures the coherent average's phases, which an
-            // incoherent average does not carry: available only under
-            // coherent averaging.
-            Preferences prefs = Preferences.instance();
-            wizardButton.setEnabled(prefs.isFftCoherentAveraging());
-            Bindings.onChange(wizardButton, prefs.fftCoherentAveragingProperty(), wizardButton::setEnabled);
         }
 
         recordButton = createActionButton(toolbarRow, SWT.TOGGLE);
