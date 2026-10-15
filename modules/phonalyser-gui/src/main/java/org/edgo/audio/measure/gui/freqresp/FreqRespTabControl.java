@@ -2179,6 +2179,10 @@ public final class FreqRespTabControl extends AbstractTabControl {
             // phase_R_deg).  When the user has hidden one channel in the
             // view, we duplicate the visible channel into the missing
             // slot so the file stays self-consistent on round-trip.
+            // While the inputs are combined, both channels carry the master.
+            Channel combined = prefs.getFreqRespCombinedMaster();
+            if (combined == Channel.L && left  != null) right = left;
+            if (combined == Channel.R && right != null) left  = right;
             FreqRespResult primary = left != null ? left : right;
             FreqRespResult other   = left != null ? right : left;
             if (other == null) other = primary;

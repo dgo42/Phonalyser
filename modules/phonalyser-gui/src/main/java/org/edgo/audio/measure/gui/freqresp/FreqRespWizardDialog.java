@@ -443,6 +443,11 @@ public final class FreqRespWizardDialog {
                 divideInPlace(stereoCal.left(),  direct.left());
                 divideInPlace(stereoCal.right(), direct.right());
             }
+            // While the inputs are combined, the slave channel is saved from
+            // the master measurement.
+            Channel combined = prefs.getFreqRespCombinedMaster();
+            if (combined == Channel.L) stereoCal = new StereoFreqRespCalibration(stereoCal.left(),  stereoCal.left());
+            if (combined == Channel.R) stereoCal = new StereoFreqRespCalibration(stereoCal.right(), stereoCal.right());
             FreqRespSweepParams p = dutResult.left().getSweepParams();
             FreqRespCalHelper.saveFrc(stereoCal,
                     picked, dutResult.left().getSampleRate(),
