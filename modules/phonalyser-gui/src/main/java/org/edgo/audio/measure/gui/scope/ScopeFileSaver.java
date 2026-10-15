@@ -25,6 +25,7 @@ import java.util.Locale;
 import lombok.extern.log4j.Log4j2;
 
 import org.edgo.audio.measure.enums.AudioFileFormat;
+import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.gui.interfaces.PcmSink;
 import org.edgo.audio.measure.gui.sound.SignalBufferReader;
 
@@ -114,11 +115,16 @@ public final class ScopeFileSaver {
      *        the file loops cleanly without a click at the seam.
      *        Pass 0 or {@link Double#NaN} for forms without a fixed
      *        period (noise, sweep, no detection available).
+     * @param combinedMaster the master of a combined {@code reader}: both
+     *        file channels carry it and the period snap reads it (the
+     *        slave's read is zeros); {@code null} while the inputs are
+     *        separate
      */
     public static long save(SignalBufferReader reader, File outFile,
                             int sampleRate, int bitDepth,
                             double durationSeconds,
-                            double signalFrequencyHz) throws IOException {
+                            double signalFrequencyHz,
+                            Channel combinedMaster) throws IOException {
         if (reader == null) {
             throw new IOException("No scope buffer to save (start the scope first).");
         }
@@ -136,7 +142,8 @@ public final class ScopeFileSaver {
         // amplitude and the in-between span is an integer number of
         // signal periods.  Falls back to (0, actual) when frequency
         // isn't detected or no usable crossings exist.
-        Window w = findFullPeriodWindow(left, actual, sampleRate, signalFrequencyHz);
+        Window w = findFullPeriodWindow(combinedMaster == Channel.R ? right : left,
+                actual, sampleRate, signalFrequencyHz);
         int saveStart  = w.start;
         int saveLength = w.length;
 
@@ -151,7 +158,7 @@ public final class ScopeFileSaver {
             int written = 0;
             while (written < saveLength) {
                 int n = Math.min(chunkFrames, saveLength - written);
-                StereoPcmIo.packStereo(left, right, saveStart + written, n, buf, bitDepth);
+                StereoPcmIo.packStereo(left, right, combinedMaster, saveStart + written, n, buf, bitDepth);
                 sink.writeRaw(buf, n * bytesPerFrame);
                 written += n;
             }

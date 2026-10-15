@@ -27,6 +27,7 @@ import java.util.function.LongConsumer;
 import lombok.extern.log4j.Log4j2;
 
 import org.edgo.audio.measure.enums.AudioFileFormat;
+import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.gui.interfaces.PcmSink;
 import org.edgo.audio.measure.gui.sound.SignalBufferReader;
 import org.edgo.audio.measure.wav.AiffWriter;
@@ -97,10 +98,15 @@ public final class StereoPcmIo {
     /**
      * Converts {@code count} stereo float samples (range {@code [-1, +1]})
      * starting at {@code offset} into little-endian signed PCM bytes at the
-     * requested bit depth.
+     * requested bit depth.  While the two inputs are combined
+     * ({@code combinedMaster} non-null) the slave channel of the read holds
+     * zeros, so both channels of the file are written from the master's
+     * samples; {@code null} writes the two channels as read.
      */
-    static void packStereo(float[] left, float[] right, int offset, int count,
-                           byte[] buf, int bitDepth) {
+    static void packStereo(float[] left, float[] right, Channel combinedMaster,
+                           int offset, int count, byte[] buf, int bitDepth) {
+        if (combinedMaster == Channel.L) right = left;
+        if (combinedMaster == Channel.R) left  = right;
         int bytesPerSample = bitDepth / 8;
         int bytesPerFrame  = bytesPerSample * CHANNELS;
         if (bitDepth == 8) {
@@ -199,7 +205,9 @@ public final class StereoPcmIo {
      * <p>Runs SYNCHRONOUSLY - call from a background thread.  {@code cancelled}
      * is polled to stop early (the partial file is still finalised);
      * {@code progress} is notified with the running frame count for a UI bar.
-     * Returns the number of frames actually written.
+     * Returns the number of frames actually written.  {@code combinedMaster}
+     * is the master of a combined {@code reader} (both file channels carry it,
+     * see {@link #packStereo}), {@code null} while the inputs are separate.
      *
      * <p>The caller owns the capture reference (acquire before, release after).
      * A sequential disk write easily keeps up with capture, but if the writer
@@ -208,6 +216,7 @@ public final class StereoPcmIo {
      */
     public static long saveStreaming(SignalBufferReader reader, File outFile,
                                      int sampleRate, int bitDepth, long totalFrames,
+                                     Channel combinedMaster,
                                      BooleanSupplier cancelled, LongConsumer progress)
             throws IOException {
         if (reader == null) {
@@ -245,7 +254,7 @@ public final class StereoPcmIo {
                     catch (InterruptedException ie) { Thread.currentThread().interrupt(); break; }
                     continue;
                 }
-                packStereo(left, right, 0, n, buf, bitDepth);
+                packStereo(left, right, combinedMaster, 0, n, buf, bitDepth);
                 sink.writeRaw(buf, n * bytesPerFrame);
                 written += n;
                 if (progress != null) progress.accept(written);

@@ -1370,13 +1370,16 @@ public final class ScopeTabControl extends AbstractTabControl {
         Preferences prefs = Preferences.instance();
         int sampleRate = prefs.current().getInputSampleRate();
         int bitDepth   = prefs.current().getInputBitDepth();
+        // While the scope combines its inputs, both file channels carry the
+        // master - the slave's read is zeros.
+        Channel combinedMaster = prefs.getOscCombinedMaster();
         // A request longer than the capture ring can hold (and not a loaded
         // file) => record FORWARD to disk in real time (streaming) instead of
         // dumping the ring.  Otherwise dump the most-recent N seconds instantly.
         SignalBufferReader reader = view.getReader();
         long requestedFrames = Math.max(1L, Math.round(durationSeconds * (double) sampleRate));
         if (!view.isFileMode() && (reader == null || requestedFrames > reader.getCapacity())) {
-            startStreamingSave(path, sampleRate, bitDepth, requestedFrames);
+            startStreamingSave(path, sampleRate, bitDepth, requestedFrames, combinedMaster);
             return;
         }
         // Pass the latest detected fundamental so ScopeFileSaver can
@@ -1385,7 +1388,7 @@ public final class ScopeTabControl extends AbstractTabControl {
         double freqHz = view.getLastFrequencyHz();
         try {
             long bytes = ScopeFileSaver.save(reader,
-                    new File(path), sampleRate, bitDepth, durationSeconds, freqHz);
+                    new File(path), sampleRate, bitDepth, durationSeconds, freqHz, combinedMaster);
             log.info("Scope saved: {} ({} bytes)", path, bytes);
         } catch (Exception ex) {
             log.warn("Scope save failed", ex);
@@ -1401,9 +1404,11 @@ public final class ScopeTabControl extends AbstractTabControl {
      * progress dialog with a Cancel.  Acquires its own capture reference for
      * the duration (opening the device if the scope isn't already recording),
      * streams on a daemon thread via {@link StereoPcmIo#saveStreaming}, and
-     * releases when done or cancelled.
+     * releases when done or cancelled.  The acquired reader is combined like
+     * the scope's own while {@code combinedMaster} is set.
      */
-    private void startStreamingSave(String path, int sampleRate, int bitDepth, long totalFrames) {
+    private void startStreamingSave(String path, int sampleRate, int bitDepth, long totalFrames,
+                                    Channel combinedMaster) {
         // DIRECT - the bus is UI-only and carries no device traffic.
         SignalBufferReader reader = SharedCapture.instance().acquire();
         if (reader == null) {
@@ -1412,6 +1417,7 @@ public final class ScopeTabControl extends AbstractTabControl {
                             SharedCapture.instance().getLastStartError()));
             return;
         }
+        if (combinedMaster != null) reader.combine(combinedMaster);
         double totalSeconds = totalFrames / (double) sampleRate;
 
         // Floating tool window: on-top so it stays visible, but NOT modal - the
@@ -1447,7 +1453,7 @@ public final class ScopeTabControl extends AbstractTabControl {
             Exception err = null;
             try {
                 StereoPcmIo.saveStreaming(reader, new File(path), sampleRate, bitDepth, totalFrames,
-                        cancelled::get,
+                        combinedMaster, cancelled::get,
                         written -> {
                             GuiUtil.marshal(dlg, () -> {
                                 if (bar.isDisposed()) return;
