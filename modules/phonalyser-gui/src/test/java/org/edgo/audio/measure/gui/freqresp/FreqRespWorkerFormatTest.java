@@ -77,7 +77,7 @@ class FreqRespWorkerFormatTest {
         backend.setOutputBitDepth(OUTPUT_BITS);
         // The worker's UI marshaller is not reached by the configuration step;
         // running it inline keeps the test free of an SWT display either way.
-        worker = new FreqRespAnalyzerWorker(Runnable::run);
+        worker = new FreqRespAnalyzerWorker();
     }
 
     @AfterEach

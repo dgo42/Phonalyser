@@ -18,13 +18,13 @@
 
 package org.edgo.audio.measure.gui.freqresp;
 
-import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.edgo.audio.measure.dsp.FreqRespCalHelper;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
+import org.edgo.audio.measure.gui.common.GuiUtil;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.sound.SharedCapture;
 import org.edgo.audio.measure.preferences.BackendPrefs;
@@ -61,17 +61,9 @@ import lombok.extern.log4j.Log4j2;
 @Log4j2
 public final class FreqRespAnalyzerWorker {
 
-    /** UI-thread marshaller ({@code display::asyncExec}) for the FAILED /
-     *  STOPPED publishes - their subscribers touch widgets. */
-    private final Executor uiExecutor;
-
     private volatile Thread             workerThread;
     private final AtomicBoolean         cancelFlag       = new AtomicBoolean(false);
     private volatile StereoCaptureProgress activeProgress;
-
-    public FreqRespAnalyzerWorker(Executor uiExecutor) {
-        this.uiExecutor = uiExecutor;
-    }
 
     /** Starts the worker thread (no-op if already running).  See
      *  {@link #start(StereoCaptureProgress)} when a live progress meter
@@ -191,7 +183,7 @@ public final class FreqRespAnalyzerWorker {
             // Publish STOPPED on the UI thread.  The host pane re-enables
             // its controls and closes the progress dialog on it; the other
             // panes' subscribers restore their Record / Play buttons.
-            uiExecutor.execute(() ->
+            GuiUtil.marshal(() ->
                     MessageBus.instance().publish(Events.FREQRESP_MEASUREMENT_STOPPED));
             synchronized (this) { workerThread = null; }
         }
@@ -270,7 +262,7 @@ public final class FreqRespAnalyzerWorker {
 
     private void reportError(String message) {
         log.warn("FreqResp worker: {}", message);
-        uiExecutor.execute(() ->
+        GuiUtil.marshal(() ->
                 MessageBus.instance().publish(Events.FREQRESP_MEASUREMENT_FAILED, message));
     }
 }

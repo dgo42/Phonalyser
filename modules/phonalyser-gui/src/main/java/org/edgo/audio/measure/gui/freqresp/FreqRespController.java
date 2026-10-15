@@ -20,15 +20,15 @@ package org.edgo.audio.measure.gui.freqresp;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.Executor;
 import java.util.function.Consumer;
 
 import org.edgo.audio.measure.bind.Property;
 import org.edgo.audio.measure.dsp.FreqRespCalHelper;
-import org.edgo.audio.measure.sound.StereoCaptureProgress;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
+import org.edgo.audio.measure.gui.common.GuiUtil;
 import org.edgo.audio.measure.preferences.Preferences;
+import org.edgo.audio.measure.sound.StereoCaptureProgress;
 
 /**
  * Controller of the Frequency Response pane: owns the sweep measurement
@@ -52,15 +52,11 @@ public final class FreqRespController {
     /** Engine driving the sweep + deconvolution; created lazily on the
      *  first measurement so app startup never opens audio devices. */
     private FreqRespAnalyzerWorker worker;
-    /** UI-thread marshaller ({@code display::asyncExec}) handed through to
-     *  the worker for its completion / failure publishes. */
-    private final Executor uiExecutor;
     /** Detach actions for every Preferences / bus subscription made in the
      *  constructor; run by {@link #shutdown()}. */
     private final List<Runnable> unsubscribes = new ArrayList<>();
 
-    public FreqRespController(Executor uiExecutor, FreqRespView view) {
-        this.uiExecutor = uiExecutor;
+    public FreqRespController(FreqRespView view) {
         // The view is a passive component owned by this controller: when the
         // worker's deconvolution finishes, drive it directly - clear the old
         // trace, then show both channels - marshalled to the UI thread.  The
@@ -68,7 +64,7 @@ public final class FreqRespController {
         // FREQRESP_MEASUREMENT_STARTED (e.g. the Tune-notch wizard grabbing the
         // audio device) can never wipe this graph.
         onBus(Events.FREQRESP_RESULT_AVAILABLE, (StereoFreqRespResult stereo) ->
-                uiExecutor.execute(() -> {
+                GuiUtil.marshal(() -> {
                     if (stereo == null || view.isDisposed()) return;
                     view.clearResults();
                     view.setLeftResult(stereo.left());
@@ -102,7 +98,7 @@ public final class FreqRespController {
     public synchronized void startMeasurement(StereoCaptureProgress progress) {
         if (isMeasurementRunning()) return;
         if (worker == null) {
-            worker = new FreqRespAnalyzerWorker(uiExecutor);
+            worker = new FreqRespAnalyzerWorker();
         }
         worker.start(progress);
     }

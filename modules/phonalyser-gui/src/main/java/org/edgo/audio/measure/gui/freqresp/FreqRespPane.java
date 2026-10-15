@@ -145,8 +145,7 @@ public final class FreqRespPane extends AbstractPane {
         // Build the view first so it can be injected into the controller, which
         // owns it and drives clear/populate on each finished deconvolution.
         buildPlotRow();
-        Shell paneShell = group.getShell();
-        controller = new FreqRespController(r -> GuiUtil.marshal(paneShell, r), view);
+        controller = new FreqRespController(view);
         buildFreqScrollbarRow();
         buildToolbarRow(wandIcon, playIcon);
 
