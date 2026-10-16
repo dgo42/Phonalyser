@@ -883,6 +883,7 @@ public class FftAnalyzer {
             // previous dual-tone analysis cycle's products.
             outResult.imd                        = null;
             outResult.preCorrectionPeaks         = null;
+            outResult.imdPreCorrectionPeaks      = null;
             // The reference channel's frequencies are the worker's to write
             // after this returns; cleared here for the same reason
             // preCorrectionPeaks is - a pooled slot must not hand the next
@@ -1064,12 +1065,13 @@ public class FftAnalyzer {
         outResult.fundamentalTrueDbFs        = fundTrueDbFs;
         outResult.fundamentalDynExclusionHz  = dynWidthBins * freqRes;
         deriveImd(outResult);
-        // preCorrectionPeaks is owned by the worker (set after analyze
-        // returns when calibration is loaded); reset here so a previous
-        // analysis cycle's value doesn't leak across pool slot recycle.  The
-        // reference channel's two frequencies are the worker's in exactly the
-        // same way.
-        outResult.preCorrectionPeaks = null;
+        // preCorrectionPeaks and imdPreCorrectionPeaks are owned by the view
+        // (set after analyze returns when calibration is loaded); reset here
+        // so a previous analysis cycle's value doesn't leak across pool slot
+        // recycle.  The reference channel's two frequencies are the worker's
+        // in exactly the same way.
+        outResult.preCorrectionPeaks    = null;
+        outResult.imdPreCorrectionPeaks = null;
         outResult.referenceFundamentalHzRefined  = Double.NaN;
         outResult.referenceFundamental2HzRefined = Double.NaN;
         outResult.captureRawPeaks();   // raw F + peak phasors for the DAC-predistortion de-embed

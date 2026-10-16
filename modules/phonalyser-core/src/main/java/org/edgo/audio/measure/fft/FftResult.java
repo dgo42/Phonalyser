@@ -306,6 +306,13 @@ public class FftResult {
      *  holding the fundamental and indices 1..harmonicCount holding
      *  H2..HN.  {@code null} when no calibration is loaded. */
     public double[][] preCorrectionPeaks;
+    /** Pre-correction (BLUE-dot) snapshot of the dual-tone lines, paired with
+     *  this Result for the same reason as {@link #preCorrectionPeaks}.
+     *  Layout: {@code [0] = freqs[], [1] = dBFs[]} holding F1, F2, then the
+     *  lower and the upper product of each order 2..{@link ImdResult#MAX_ORDER}.
+     *  {@code null} when no calibration is loaded or the frame carries no
+     *  intermodulation readout. */
+    public double[][] imdPreCorrectionPeaks;
     /**
      * Half-width of the dynamic fundamental exclusion zone in Hz (one side).
      * For a clean recording this is a few Hz; a signal interruption causes
@@ -511,19 +518,20 @@ public class FftResult {
         c.gateBlockDbFs              = src.gateBlockDbFs;    // debug snapshots - share (not mutated)
         c.gateRejectDbFs             = src.gateRejectDbFs;
         c.gateRejectGates            = src.gateRejectGates;
-        // 2-D array: clone the outer array AND each non-null row so the copy
-        // can be mutated independently of the source (rows are tiny peak
-        // lists - no reuse needed).
-        if (src.preCorrectionPeaks != null) {
-            double[][] rows = src.preCorrectionPeaks;
-            double[][] dst  = new double[rows.length][];
-            for (int i = 0; i < rows.length; i++) {
-                dst[i] = rows[i] != null ? rows[i].clone() : null;
-            }
-            c.preCorrectionPeaks = dst;
-        } else {
-            c.preCorrectionPeaks = null;
+        c.preCorrectionPeaks         = copyRows(src.preCorrectionPeaks);
+        c.imdPreCorrectionPeaks      = copyRows(src.imdPreCorrectionPeaks);
+    }
+
+    /** A copy of a 2-D peak list: the outer array AND each non-null row
+     *  cloned, so the copy can be mutated independently of the source (rows
+     *  are tiny peak lists - no reuse needed); {@code null} stays null. */
+    private double[][] copyRows(double[][] rows) {
+        if (rows == null) return null;
+        double[][] dst = new double[rows.length][];
+        for (int i = 0; i < rows.length; i++) {
+            dst[i] = rows[i] != null ? rows[i].clone() : null;
         }
+        return dst;
     }
 
     /**

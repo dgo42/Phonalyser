@@ -32,8 +32,8 @@ import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
-import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.common.CorrectionStore;
+import org.edgo.audio.measure.gui.fft.predistortion.PredistortionEngine;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.sound.CaptureEndReason;
@@ -43,13 +43,12 @@ import lombok.Getter;
 /**
  * Controller of the FFT pane: owns the {@link FftAnalyzerWorker}'s
  * recording lifecycle and the {@code .fft} spectrum file round-trip.  The generator
- * frequency-lock loops that publish {@link Events#GENERATOR_FREQ_TRIM} /
+ * frequency-lock loops that publish {@code Events.GENERATOR_FREQ_TRIM} /
  * {@code _2} run in the worker, on every analysis cycle; the controller
  * only relays their reset ({@link #resetFrequencyLock}).
  *
- * <p>The worker is constructor-injected - the pane builds it (the worker's
- * result hand-off marshals through the SWT {@code Display}) and hands it
- * over; the controller itself never imports SWT.  The dual-tone IMD products
+ * <p>The controller builds its worker and owns it; the controller itself
+ * never imports SWT.  The dual-tone IMD products
  * travel on the result itself ({@link FftResult#imd}), filled by the
  * statistics recompute of the finalized frame; the controller never
  * references the view - everything it emits goes over the bus.
@@ -63,8 +62,8 @@ public final class FftController {
     /** Analysis engine (capture + FFT + averaging on a daemon thread). */
     private final FftAnalyzerWorker worker;
     /** Calibration entries appended to saved spectra as provenance.  Owned by
-     *  the controller; its mutations publish {@link Events#FFT_CALIBRATION_CHANGED},
-     *  except on the offscreen screenshot copy, whose store is silent. */
+     *  the controller; the FFT tab control fills it from the calibration list
+     *  and re-derives the view itself after every fill. */
     @Getter
     private final CorrectionStore correctionStore;
 
@@ -74,12 +73,9 @@ public final class FftController {
      *  THD mode). */
     public record LoadedSpectrum(FftResult result) {}
 
-    /** @param offScreen the offscreen screenshot copy's controller: its store
-     *                   announces no change, so loading its rows reaches no
-     *                   live view */
-    public FftController(FftAnalyzerWorker worker, boolean offScreen) {
-        this.worker          = worker;
-        this.correctionStore = new CorrectionStore("FFT", offScreen ? null : Events.FFT_CALIBRATION_CHANGED);
+    public FftController() {
+        this.worker          = new FftAnalyzerWorker();
+        this.correctionStore = new CorrectionStore("FFT");
     }
 
     // -------------------------------------------------------------------------
@@ -138,7 +134,7 @@ public final class FftController {
     }
 
     /** True when the audio generator is currently producing a signal
-     *  (bus-resolved {@link Events#GENERATOR_RUNNING} responder). */
+     *  (bus-resolved {@code Events.GENERATOR_RUNNING} responder). */
     public boolean isGeneratorActive() {
         return worker.isGeneratorActive();
     }
@@ -177,6 +173,17 @@ public final class FftController {
      *  statistics reset keeps the converged alignment intact. */
     public void resetFrequencyLock() {
         worker.resetFrequencyLock();
+    }
+
+    /** Hands every published result to {@code engine} from now on - see
+     *  {@link FftAnalyzerWorker#registerPredistortionEngine}. */
+    public void registerPredistortionEngine(PredistortionEngine engine) {
+        worker.registerPredistortionEngine(engine);
+    }
+
+    /** Stops handing results to the registered predistortion engine. */
+    public void unregisterPredistortionEngine() {
+        worker.unregisterPredistortionEngine();
     }
 
     /** Stops the worker - called by {@code UIEngines} at application exit. */

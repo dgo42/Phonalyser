@@ -287,7 +287,7 @@ class FftPilotToneAnalyserTest {
     private Run drive(boolean notchDrift, boolean randomHop, int retrackAtCycle,
                       String label) throws Exception {
         FftAnalyzer       analyzer = new FftAnalyzer();
-        FftAnalyzerWorker worker   = new FftAnalyzerWorker(null);          // headless
+        FftAnalyzerWorker worker   = new FftAnalyzerWorker();          // headless
         FieldUtils.writeField(worker, "pilotReader1", new PilotReader(PILOT1_BIN), true);
         FieldUtils.writeField(worker, "pilotReader2", new PilotReader(PILOT2_BIN), true);
         FieldUtils.writeField(worker, "pilotPair",

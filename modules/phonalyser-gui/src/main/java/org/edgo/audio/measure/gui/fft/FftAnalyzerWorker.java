@@ -26,7 +26,6 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
-import org.eclipse.swt.widgets.Display;
 import org.edgo.audio.measure.common.AppPaths;
 import org.edgo.audio.measure.common.Constants;
 import org.edgo.audio.measure.dsp.FftBinSnap;
@@ -55,6 +54,7 @@ import org.edgo.audio.measure.gui.bus.GeneratorOutput;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.bus.PilotToneRequest;
 import org.edgo.audio.measure.gui.common.DebugSwitches;
+import org.edgo.audio.measure.gui.common.GuiUtil;
 import org.edgo.audio.measure.gui.fft.predistortion.PredistortionEngine;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioBackend;
@@ -75,10 +75,11 @@ import lombok.extern.log4j.Log4j2;
  * {@link FftView}) keep the snapshot and paint from it without
  * touching anything the worker owns.
  *
- * <p>Lifecycle is owner-driven: {@code UIEngines} constructs one worker
- * for the application lifetime (it survives content rebuilds, keeping the
- * averaging accumulator); {@link FftController} drives {@link #start} /
- * {@link #stop}.
+ * <p>Lifecycle is owner-driven: {@link FftController} constructs its worker
+ * and drives {@link #start} / {@link #stop}; the application's controller
+ * lives for the application lifetime (it survives content rebuilds, keeping
+ * the averaging accumulator).  Everything bound for the UI thread is queued
+ * through {@link GuiUtil#post}, in the order it was handed over.
  */
 @Log4j2
 public final class FftAnalyzerWorker {
@@ -109,8 +110,6 @@ public final class FftAnalyzerWorker {
      *  selection is that count plus one again. */
     private static final int MIN_CALC_MAX_HARMONIC = 9;
     private long lastShowNanos;
-
-    private final Display  display;
 
     private final FftAnalyzer analyzer = new FftAnalyzer();
     /** The cross-cycle average: the sums of the frames since the collection's
@@ -882,16 +881,6 @@ public final class FftAnalyzerWorker {
     private double  alignWatchBaseF1Db;
     private double  alignWatchBaseF2Db;
 
-    /**
-     * @param display SWT display used to marshal {@link Events#FFT_RESULT_AVAILABLE}
-     *                publishes back to the UI thread.  Subscribers to that
-     *                event (typically the FFT view's {@code redraw()}) are
-     *                where the post-analysis paint hook now lives.
-     */
-    public FftAnalyzerWorker(Display display) {
-        this.display = display;
-    }
-
     /** Returns the mains comb, (re)building it when the sample rate
      *  changes.  Worker-thread only. */
     private MainsCombFilter mainsComb(int sampleRate) {
@@ -976,20 +965,19 @@ public final class FftAnalyzerWorker {
      *  i18n message-key as the payload - so ONE event presents the distinct
      *  "overrun" vs "discontinuity" messages depending on the caller. */
     private void publishCaptureBanner(String messageKey) {
-        if (display == null || display.isDisposed()) return;
         // While the alignment has nothing settled, nothing is being averaged,
         // and that is what the operator needs to read.  A re-sync notice put
         // up in that state replaces it with a message about an event that is
         // already over, so it is not shown at all until averaging resumes.
         if (phaseAlignUnsettled && !PHASE_ALIGNING_BANNER.equals(messageKey)) return;
-        display.asyncExec(() -> {
+        GuiUtil.post(() -> {
             try {
                 MessageBus.instance().publish(Events.FFT_CAPTURE_RESYNC, messageKey);
             } catch (Exception e) {
                 if (log.isErrorEnabled()) log.error("Can't dispatch {}", Events.FFT_CAPTURE_RESYNC, e);
             }
         });
-        display.wake();
+        GuiUtil.wake();
     }
 
     /** Guard skipped after a discontinuity re-sync, ahead of the first fresh
@@ -1995,10 +1983,7 @@ public final class FftAnalyzerWorker {
                     new PilotLost(r.fundamentalHzRefined));
         }
         paused.set(true);
-        if (display != null && !display.isDisposed()) {
-            display.asyncExec(() ->
-                    MessageBus.instance().publish(Events.FFT_RECORDING_AUTO_STOPPED));
-        }
+        GuiUtil.post(() -> MessageBus.instance().publish(Events.FFT_RECORDING_AUTO_STOPPED));
     }
 
     /** This cycle's time on the capture's own clock, seconds: the window's
@@ -2847,18 +2832,19 @@ public final class FftAnalyzerWorker {
      *  whose own subscribers touch widgets.  Neither may happen on the
      *  worker thread.  Messages keep the order they were handed over in, so
      *  two pilot messages of one analysis cycle reach the generator in the
-     *  order that cycle produced them.  Nothing is sent while no display is
-     *  wired (the offscreen controller). */
+     *  order that cycle produced them, and a message handed over ON the UI
+     *  thread (the stop's pilot take-down and trim reset) still queues behind
+     *  everything the worker posted before it.  Nothing is sent before the
+     *  main shell exists (headless runs). */
     private void publishOnUiThread(String event, Object payload) {
-        if (display == null || display.isDisposed()) return;
-        display.asyncExec(() -> {
+        GuiUtil.post(() -> {
             try {
                 MessageBus.instance().publish(event, payload);
             } catch (Exception e) {
                 if (log.isErrorEnabled()) log.error("Can't dispatch {}", event, e);
             }
         });
-        display.wake();
+        GuiUtil.wake();
     }
 
     /** The alignment afresh, in every aligning mode: the reference channel's
@@ -3440,7 +3426,7 @@ public final class FftAnalyzerWorker {
     // ─── Worker loop ────────────────────────────────────────────────────────
 
     /** Worker-thread body.  Runs analysis on a background thread, posts
-     *  the redraw via {@link Display#asyncExec} so the SWT thread isn't
+     *  the redraw via {@link GuiUtil#post} so the SWT thread isn't
      *  blocked by the FFT compute. */
     private void workerLoop() {
         while (running) {
@@ -3532,10 +3518,7 @@ public final class FftAnalyzerWorker {
         if (rdr.isFinished()) {
             captureEndReason = rdr.takeFinishedReasonForReport();
             running = false;
-            if (display != null && !display.isDisposed()) {
-                display.asyncExec(() ->
-                        MessageBus.instance().publish(Events.FFT_RECORDING_AUTO_STOPPED));
-            }
+            GuiUtil.post(() -> MessageBus.instance().publish(Events.FFT_RECORDING_AUTO_STOPPED));
             return IDLE_CYCLE_MS;
         }
         int sampleRate = rdr.getSampleRate();
@@ -4150,20 +4133,17 @@ public final class FftAnalyzerWorker {
      *  which the FFT pane flips Record off. */
     private void pauseAndAnnounceAutoStop() {
         paused.set(true);
-        if (display != null && !display.isDisposed()) {
-            display.asyncExec(() ->
-                    MessageBus.instance().publish(Events.FFT_RECORDING_AUTO_STOPPED));
-        }
+        GuiUtil.post(() -> MessageBus.instance().publish(Events.FFT_RECORDING_AUTO_STOPPED));
     }
 
     /** Deep-copies {@code newSlot} on the worker thread and publishes
      *  the snapshot on {@link Events#FFT_RESULT_AVAILABLE} via
-     *  {@link Display#asyncExec} so subscribers receive the payload on
+     *  {@link GuiUtil#post} so subscribers receive the payload on
      *  the UI thread.  The copy decouples the worker (which may keep
      *  mutating its working {@code r}) from {@link FftView} (which
      *  paints from the published snapshot for many frames). */
     private void publishResult(FftResult newSlot) {
-        if (display == null || display.isDisposed()) {
+        if (GuiUtil.isHeadless()) {
             resultPool.release(newSlot);
             return;
         }
@@ -4182,12 +4162,12 @@ public final class FftAnalyzerWorker {
             resultPool.release(coalesced);
             return;
         }
-        display.asyncExec(this::drainPendingResult);
+        GuiUtil.post(this::drainPendingResult);
         // Force the SWT main loop to wake from Display.sleep() if it was
-        // dozing.  asyncExec already posts a wake message but on Windows
+        // dozing.  The post already queues a wake message but on Windows
         // the message queue can drop wakes under load - wake() is the
         // belt-and-suspenders nudge.
-        display.wake();
+        GuiUtil.wake();
     }
 
     /** Publishes a parked result to the bus NOW - UI thread only.  The

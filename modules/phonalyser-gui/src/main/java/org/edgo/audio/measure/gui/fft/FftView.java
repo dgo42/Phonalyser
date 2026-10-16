@@ -106,6 +106,9 @@ public final class FftView extends AbstractFreqDomainView {
     /** Bin index of a slot of the line-floor table that holds no distortion
      *  line - a fundamental's slot, or a line the frame does not carry. */
     private static final int NO_LINE_BIN = -1;
+    /** Dots of a dual-tone frame: F1, F2, then the lower and the upper
+     *  product of each order 2..{@link ImdResult#MAX_ORDER}. */
+    private static final int IMD_LINES = 2 + 2 * (ImdResult.MAX_ORDER - 1);
     /** How close, dB, a harmonic's readout stands to its line floor when the
      *  floor hold wrote it: the hold's linear-to-dB round trip, nothing a
      *  measured level lands on by chance. */
@@ -200,8 +203,8 @@ public final class FftView extends AbstractFreqDomainView {
     private double snapshotFill      = -1.0;
 
     /** Loaded {@code .frc} corrections divided out of the spectrum and drawn
-     *  as the overlay; constructor-injected by {@link FftPane} (IoC) and shared
-     *  with the calibration tab so both see the same entries. */
+     *  as the overlay - the store of the {@link FftController} this view is
+     *  built with, the same instance the calibration tab fills. */
     private final CorrectionStore correctionStore;
 
     /** Stage-3 instrumentation for {@link DebugSwitches#SHOW_FFT_ANALYZE_TIME}:
@@ -287,17 +290,6 @@ public final class FftView extends AbstractFreqDomainView {
         }
     };
 
-    /** The loaded correction rows moved (a .frc loaded, dropped, or its
-     *  with-noise flag flipped), so the per-bin response they divide by is
-     *  rebuilt here and the trace redrawn with it.  Rebuilt at once, on the
-     *  geometry of the frame on screen; with no frame yet the next one builds
-     *  it.  Held as a field so dispose unsubscribes the same instance. */
-    private final Consumer<Object> onCalibrationChanged = ignored -> {
-        if (isDisposed()) return;
-        this.calInv = null;
-        if (this.lastResult != null) buildCalInverse(this.lastResult);
-        redraw();
-    };
 
     /** A committed audio-format change moves the capture rate the response is
      *  sampled at, and the first frame at the new rate arrives from a restarted
@@ -467,7 +459,7 @@ public final class FftView extends AbstractFreqDomainView {
     /** The de-embedding response of every loaded cal row, cascaded into ONE
      *  per-bin complex reciprocal ({@code {invRe, invIm}}, bin
      *  {@code 0 .. fftSize/2}) for the analysed channel, and held until an
-     *  input moves: the loaded rows (the store's change event), the analysed
+     *  input moves: the loaded rows ({@link #onCalibrationChanged}), the analysed
      *  channel or the FFT length (both funnel through
      *  {@link #resetStatistics}), the capture rate (a fresh recording), and the
      *  frame's own tone positions and lobe extents ({@link #calInverseFits}).
@@ -497,8 +489,7 @@ public final class FftView extends AbstractFreqDomainView {
      *                   publishes nor subscribes on the bus and does not react
      *                   to preference changes - it only draws the snapshot it
      *                   is given */
-    public FftView(Composite parent, CorrectionStore correctionStore,
-                   FftController controller, boolean offScreen) {
+    public FftView(Composite parent, FftController controller, boolean offScreen) {
         // Pass prefs-driven BACKGROUND + SPECTRUM through the override
         // map so the base allocates the right colour once; everything
         // else uses the light-theme defaults from AbstractMeasurementView.
@@ -511,8 +502,8 @@ public final class FftView extends AbstractFreqDomainView {
                 // L/R channel buttons share the scope's channel colours (cyan/yellow).
                 ColorRole.LEFT_BTN_CHAN,  Preferences.instance().getOscLeftChannelColor(),
                 ColorRole.RIGHT_BTN_CHAN, Preferences.instance().getOscRightChannelColor()));
-        this.correctionStore = correctionStore;
         this.controller      = controller;
+        this.correctionStore = controller.getCorrectionStore();
         this.offScreen       = offScreen;
         // Chapter-level help anchor: Ctrl+F1 anywhere on the spectrum
         // canvas opens fft.html.  The header buttons / THD table /
@@ -774,7 +765,6 @@ public final class FftView extends AbstractFreqDomainView {
         addDisposeListener(e ->
                 bus.unsubscribe(Events.GENERATOR_SIGNAL_CHANGED, onGenChangeForFll));
         bus.subscribe(Events.FFT_ALIGN_MAG_DRIFT, onAlignMagDrift);
-        bus.subscribe(Events.FFT_CALIBRATION_CHANGED, onCalibrationChanged);
         bus.subscribe(Events.AUDIO_FORMAT_CHANGED, onAudioFormatChanged);
         // Window-function changes reset the running statistics - the control
         // writes the pref, the view reacts to the pref, neither calls the other.
@@ -846,7 +836,6 @@ public final class FftView extends AbstractFreqDomainView {
         bus.unsubscribe(Events.FFT_RESULT_AVAILABLE, onResultReady);
         bus.unsubscribe(Events.FFT_CAPTURE_RESYNC, onCaptureResync);
         bus.unsubscribe(Events.FFT_ALIGN_MAG_DRIFT, onAlignMagDrift);
-        bus.unsubscribe(Events.FFT_CALIBRATION_CHANGED, onCalibrationChanged);
         bus.unsubscribe(Events.AUDIO_FORMAT_CHANGED, onAudioFormatChanged);
         disposePalette();
         // monoFont / monoBoldFont / chanButtonFont are shared instances
@@ -894,6 +883,19 @@ public final class FftView extends AbstractFreqDomainView {
         // "N average(s)" / "NN%" instead of this idle clone's controller 0.
         this.snapshotCompleted = source.getAveragesInWindow();
         this.snapshotFill      = source.getNextFrameProgress();
+    }
+
+    /** The loaded correction rows moved (a .frc loaded, dropped, or its
+     *  with-noise flag flipped) - the FFT tab control calls this after every
+     *  rebuild of the store, so the per-bin response they divide by is
+     *  rebuilt here and the trace redrawn with it.  Rebuilt at once, on the
+     *  geometry of the frame on screen; with no frame yet the next one builds
+     *  it. */
+    public void onCalibrationChanged() {
+        if (isDisposed()) return;
+        this.calInv = null;
+        if (this.lastResult != null) buildCalInverse(this.lastResult);
+        redraw();
     }
 
     /** Averages currently inside the average (or the snapshot override on an
@@ -1105,6 +1107,14 @@ public final class FftView extends AbstractFreqDomainView {
             }
             r.preCorrectionPeaks = new double[][] { preFreqs, preDbFs };
             logRenderStep("3.5 blue dots");
+        }
+        // 5. The BLUE dots of the dual-tone lines, from the readouts step 3
+        //    recomputed and the response step 2 corrected with - stored on
+        //    the result like the harmonics', so whatever shows this frame
+        //    (the screenshot copy included) draws them without a response of
+        //    its own.
+        if (calibrated && r.imd != null) {
+            r.imdPreCorrectionPeaks = imdPreCorrectionPeaks(r);
         }
 
 
@@ -1773,15 +1783,7 @@ public final class FftView extends AbstractFreqDomainView {
         // values - the snapshot was deep-copied at publish time, so
         // BLUE and RED can never end up from different cycles.
         double[][] before = r.preCorrectionPeaks;
-        if (before != null && before.length == 2
-                && before[0] != null && before[1] != null) {
-            gc.setBackground(color(ColorRole.BEFORE_CAL_DOT));
-            int n = Math.min(before[0].length, before[1].length);
-            for (int i = 0; i < n; i++) {
-                plotDotAt(gc, plot, before[0][i], before[1][i],
-                        unit, freqMin, freqMax, magTop, magBot, logFreq);
-            }
-        }
+        drawBeforeCalDots(gc, plot, before, unit, freqMin, freqMax, magTop, magBot, logFreq);
 
         // Each plotDotAt gates on the dot's magnitude vs the visible
         // range and skips drawing when it falls outside - that hides
@@ -2294,6 +2296,66 @@ public final class FftView extends AbstractFreqDomainView {
         drawOutlinedText(gc, text, lx, ly);
     }
 
+    /** Paints a BLUE "before-cal" dot at every (freq, dBFS) pair of
+     *  {@code before} - layout {@code [0] = freqs[], [1] = dBFs[]} - for the
+     *  red post-cal dots painted afterwards to sit on top.  Nothing for a
+     *  {@code null} or malformed list. */
+    private void drawBeforeCalDots(GC gc, Rectangle plot, double[][] before,
+                                   MagnitudeUnit unit,
+                                   double freqMin, double freqMax,
+                                   double magTop, double magBot,
+                                   boolean logFreq) {
+        if (before == null || before.length != 2 || before[0] == null || before[1] == null) return;
+        gc.setBackground(color(ColorRole.BEFORE_CAL_DOT));
+        int n = Math.min(before[0].length, before[1].length);
+        for (int i = 0; i < n; i++) {
+            plotDotAt(gc, plot, before[0][i], before[1][i],
+                    unit, freqMin, freqMax, magTop, magBot, logFreq);
+        }
+    }
+
+    /** The dual-tone lines' frequencies in dot order: F1, F2, then the lower
+     *  and the upper product of each order 2..{@link ImdResult#MAX_ORDER}. */
+    private double[] imdLineHz(ImdResult imd) {
+        double[] hz = new double[IMD_LINES];
+        hz[0] = imd.f1Hz;
+        hz[1] = imd.f2Hz;
+        int idx = 2;
+        for (int k = 2; k <= ImdResult.MAX_ORDER; k++) {
+            hz[idx++] = imd.dnLHz[k];
+            hz[idx++] = imd.dnHHz[k];
+        }
+        return hz;
+    }
+
+    /** The dual-tone lines' levels as read off the spectrum, in the order of
+     *  {@link #imdLineHz}: the tones' read levels, then the products'. */
+    private double[] imdMeasuredDbFs(ImdResult imd) {
+        double[] dbFs = new double[IMD_LINES];
+        dbFs[0] = imd.f1DbFs;
+        dbFs[1] = imd.f2DbFs;
+        int idx = 2;
+        for (int k = 2; k <= ImdResult.MAX_ORDER; k++) {
+            dbFs[idx++] = imd.dnLDbFs[k];
+            dbFs[idx++] = imd.dnHDbFs[k];
+        }
+        return dbFs;
+    }
+
+    /** The dual-tone lines' levels before the {@code .frc} correction, as
+     *  {@link FftResult#imdPreCorrectionPeaks} lays them out: each line's
+     *  measured post-correction level plus the cascade's gain at its own bin
+     *  - what the correction took off that bin, added back - so blue stands
+     *  exactly where the measurement stood before the correction. */
+    private double[][] imdPreCorrectionPeaks(FftResult r) {
+        double[] hz   = imdLineHz(r.imd);
+        double[] dbFs = imdMeasuredDbFs(r.imd);
+        for (int i = 0; i < hz.length; i++) {
+            dbFs[i] += calGainDbAt(r, hz[i]);
+        }
+        return new double[][] { hz, dbFs };
+    }
+
     /** Paints F1, F2 and the per-order dnL / dnH IMD-product dots +
      *  labels on the spectrum.  Same visual treatment as
      *  {@link #drawHarmonicDots} so the user sees consistent marker
@@ -2308,45 +2370,24 @@ public final class FftView extends AbstractFreqDomainView {
                              double freqMin, double freqMax,
                              double magTop, double magBot,
                              boolean logFreq) {
-        // Aggregate every dot's (freq, post-cal dBFs) so the blue
-        // pre-cal and red post-cal passes walk the same list.  Order:
-        // F1, F2, dnL[2..5], dnH[2..5].  The tones stand at their displayed
-        // level - each tone's share of the manual fundamental when one is
-        // set, where the lobe lift puts its lobe - the products at the level
-        // read off the spectrum; measuredDbFs keeps the tones' read level
-        // for the blue dot underneath.
-        int count = 2 + 2 * (ImdResult.MAX_ORDER - 1);
-        double[] hz   = new double[count];
-        double[] dbFs = new double[count];
-        hz[0]   = imd.f1Hz;  dbFs[0] = dbFsOfMagnitude(imd.f1Mag);
-        hz[1]   = imd.f2Hz;  dbFs[1] = dbFsOfMagnitude(imd.f2Mag);
-        int idx = 2;
-        for (int k = 2; k <= ImdResult.MAX_ORDER; k++) {
-            hz[idx]   = imd.dnLHz[k];
-            dbFs[idx] = imd.dnLDbFs[k];
-            idx++;
-            hz[idx]   = imd.dnHHz[k];
-            dbFs[idx] = imd.dnHDbFs[k];
-            idx++;
-        }
-        double[] measuredDbFs = dbFs.clone();
-        measuredDbFs[0] = imd.f1DbFs;
-        measuredDbFs[1] = imd.f2DbFs;
+        // Every dot's (freq, post-cal dBFs), in the order of imdLineHz.  The
+        // tones stand at their displayed level - each tone's share of the
+        // manual fundamental when one is set, where the lobe lift puts its
+        // lobe - the products at the level read off the spectrum;
+        // measuredDbFs keeps the tones' read level.
+        double[] hz           = imdLineHz(imd);
+        double[] measuredDbFs = imdMeasuredDbFs(imd);
+        double[] dbFs         = measuredDbFs.clone();
+        dbFs[0] = dbFsOfMagnitude(imd.f1Mag);
+        dbFs[1] = dbFsOfMagnitude(imd.f2Mag);
+        int count = hz.length;
 
-        // Blue "before-cal" dots first so the red post-cal dots sit on
-        // top.  Only drawn when at least one calibration file is
-        // loaded - same gate the THD path uses (preCorrectionPeaks
-        // null vs. non-null).  The lift is the cascade's gain at each
-        // product's own bin, taken from the response the spectrum was
-        // corrected with, so blue stands exactly where the measurement
-        // stood before the correction.
-        if (!correctionStore.getEntries().isEmpty()) {
-            gc.setBackground(color(ColorRole.BEFORE_CAL_DOT));
-            for (int i = 0; i < count; i++) {
-                double preDbFs = measuredDbFs[i] + calGainDbAt(r, hz[i]);
-                plotDotAt(gc, plot, hz[i], preDbFs,
-                        unit, freqMin, freqMax, magTop, magBot, logFreq);
-            }
+        // Blue "before-cal" dots first so the red post-cal dots sit on top -
+        // the frame's own snapshot, present while a calibration is loaded
+        // (finalizeResult), the same as the THD path's.
+        if (r.imdPreCorrectionPeaks != null) {
+            drawBeforeCalDots(gc, plot, r.imdPreCorrectionPeaks,
+                    unit, freqMin, freqMax, magTop, magBot, logFreq);
         } else if (Double.isFinite(r.fundamentalTrueDbFs)) {
             // With a manual fundamental and no .frc cal the tone lobes are
             // lifted to their shares of it and the red dots land there - so

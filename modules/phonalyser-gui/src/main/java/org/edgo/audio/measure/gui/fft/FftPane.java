@@ -38,12 +38,10 @@ import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.AbstractPane;
 import org.edgo.audio.measure.gui.common.AbstractTabControl;
 import org.edgo.audio.measure.gui.common.CalibrationDialog;
-import org.edgo.audio.measure.gui.common.CorrectionStore;
 import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.fft.predistortion.PredistortionWizardDialog;
-import org.edgo.audio.measure.gui.generator.GeneratorController;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.widgets.FlatScrollbar;
 import org.edgo.audio.measure.gui.widgets.PaneTitle;
@@ -82,13 +80,7 @@ public final class FftPane extends AbstractPane {
      *  accumulator keeps counting through a language / font change); the
      *  offscreen screenshot clone builds its own idle instance. */
     private final FftController controller;
-    /** The generator controller the predistortion wizard drives - stored so
-     *  {@link #openPredistortionForCapture()} can construct the wizard. */
-    private final GeneratorController genController;
-    /** The live analyser worker the predistortion wizard registers its
-     *  engine on; {@code null} on the offscreen clone, which never opens the
-     *  wizard. */
-    private final FftAnalyzerWorker worker;
+
     private FlatScrollbar   freqScrollbar;
     private FlatScrollbar   magScrollbar;
 
@@ -97,6 +89,10 @@ public final class FftPane extends AbstractPane {
     private final Image recordDim;
     private final Image recordLit;
     private Button recordButton;
+    /** The predistortion wizard's button - live pane only, {@code null} on the
+     *  screenshot copy.  Enabled only while the analyser records: the wizard
+     *  measures the running FFT. */
+    private Button wizardButton;
 
     /** The self-contained tile-tab folder hosting every settings / presets /
      *  calibration / save-load tab; see {@link FftTabControl}.  The pane keeps
@@ -148,9 +144,8 @@ public final class FftPane extends AbstractPane {
      * the Record LED lights up and the view simply picks up the worker's
      * next published result.
      */
-    public FftPane(Composite parent, GeneratorController genController, FftController controller,
-                   FftAnalyzerWorker worker) {
-        this(parent, false, genController, controller, worker);
+    public FftPane(Composite parent, FftController controller) {
+        this(parent, false, controller);
     }
 
     /**
@@ -160,16 +155,14 @@ public final class FftPane extends AbstractPane {
      * on the bus, so the copy never reaches the live pane.
      */
     public FftPane(Composite parent) {
-        this(parent, true, null, null, null);
+        this(parent, true, null);
     }
 
     /** Builds + shows the DAC-predistortion wizard for a help capture and
      *  returns it, so an automation script can drive it (start,
-     *  screenshot).  The live pane owns the wizard's
-     *  collaborators, so it constructs the wizard here rather than exposing
-     *  them.  Returns {@code null} on the offscreen (non-live) pane. */
+     *  screenshot).  The pane owns the wizard's collaborators, so it
+     *  constructs the wizard here rather than exposing them. */
     public PredistortionWizardDialog openPredistortionForCapture() {
-        if (genController == null) return null;
         return openPredistortionWizard();
     }
 
@@ -180,8 +173,7 @@ public final class FftPane extends AbstractPane {
     private PredistortionWizardDialog openPredistortionWizard() {
         Preferences.instance().setFftCoherentAveraging(true);
         PredistortionWizardDialog d = new PredistortionWizardDialog(
-                getGroup().getShell(), controller, view,
-                controller.getCorrectionStore(), worker);
+                getGroup().getShell(), controller, view);
         d.buildAndShow();
         return d;
     }
@@ -194,8 +186,7 @@ public final class FftPane extends AbstractPane {
         return toolbarTabs == null ? null : toolbarTabs.openAdcCalibrationForCapture();
     }
 
-    private FftPane(Composite parent, boolean offScreen, GeneratorController genController,
-                    FftController controller, FftAnalyzerWorker worker) {
+    private FftPane(Composite parent, boolean offScreen, FftController controller) {
         super(parent);
         // FFT-length changes, capture acquire / release, and the
         // generator-running query all flow through the MessageBus - no
@@ -225,15 +216,12 @@ public final class FftPane extends AbstractPane {
         // The live pane receives the app-lifetime controller (built in
         // UIEngines), which owns the correction store.  The offscreen
         // screenshot clone (offScreen) builds its own idle controller (worker
-        // never started) and takes that controller's silent store.
+        // never started) and takes that controller's own store.
         if (offScreen) {
-            controller = new FftController(new FftAnalyzerWorker(d), true);
+            controller = new FftController();
         }
         this.controller = controller;
-        this.genController = genController;
-        this.worker = worker;
-        CorrectionStore correctionStore = controller.getCorrectionStore();
-        view = new FftView(plotRow, correctionStore, controller, offScreen);
+        view = new FftView(plotRow, controller, offScreen);
         magScrollbar = new FlatScrollbar(plotRow, SWT.VERTICAL);
         magScrollbar.setMinimum(0);
         magScrollbar.setMaximum(SCROLL_RANGE);
@@ -296,18 +284,16 @@ public final class FftPane extends AbstractPane {
         // the chart, scrollbars and Record button.  Cross-pane concerns (stop
         // recording on file load, open the screenshot dialog) are routed back
         // here over the MessageBus.
-        toolbarTabs = new FftTabControl(toolbarRow, view, offScreen, correctionStore,
-                controller);
-        toolbarTabs.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
         // Collapsing the tab body (strip double-click / Enter, or the
-        // screenshot path) frees vertical space - re-flow the pane so the
-        // chart above reclaims it.
-        toolbarTabs.setOwner(this);
+        // screenshot path) frees vertical space - the control's owner (this
+        // pane) re-flows so the chart above reclaims it.
+        toolbarTabs = new FftTabControl(toolbarRow, view, offScreen, controller, this);
+        toolbarTabs.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
 
         // Predistortion-wizard button (live pane only) - left of Record,
         // mirroring the Frequency-Response pane's wizard button.
-        if (!offScreen && genController != null) {
-            Button wizardButton = createActionButton(toolbarRow, SWT.PUSH);
+        if (!offScreen) {
+            wizardButton = createActionButton(toolbarRow, SWT.PUSH);
             wizardButton.setImage(IconUtils.icon(d, Icon.WAND));
             wizardButton.setToolTipText(I18n.t("predistortion.button.wizard.tooltip"));
             wizardButton.addListener(SWT.Selection, e -> openPredistortionWizard());
@@ -319,15 +305,18 @@ public final class FftPane extends AbstractPane {
         recordButton.setImage(recordDim);
         recordButton.setToolTipText(I18n.t("fft.record.tooltip"));
 
-        // ---- View wiring.  The analyser lives inside FftView itself
-        // (was previously a separate FftController); the pane just
-        // drives the lifecycle (start / stop / setBuffer / reset).
+        // ---- Wiring.  The analyser runs in the controller's worker; the
+        // pane drives its recording through the Record button.
         //
         // MessageBus subscriptions back to the pane:
-        //   - FFT_RANGE_CHANGED: view publishes after pan / zoom or
-        //     auto-setup / maximize -> realign the scrollbars.
-        //   - FFT_RECORDING_AUTO_STOPPED: view publishes when its
-        //     stop-after-N counter trips -> release record state.
+        //   - FFT_RANGE_CHANGED: the view publishes after pan / zoom and
+        //     auto-setup / maximize, the tab control after a preset is
+        //     applied -> realign the scrollbars.
+        //   - FFT_RECORDING_AUTO_STOPPED: the worker publishes when the
+        //     stop-after-N count is reached, the capture ended from below
+        //     (device lost / delivery stalled), the pilot lines stayed
+        //     unreadable, or the predistortion run settled -> release the
+        //     record state.
         //   - FFT_RECORDING_STOP_REQUESTED / FFT_SCREENSHOT_REQUESTED:
         //     the FftTabControl publishes these for the pane to service.
         rangeChangedListener        = ignored -> syncFftPan();
@@ -370,6 +359,7 @@ public final class FftPane extends AbstractPane {
             recordButton.setSelection(true);
             recordButton.setImage(recordLit);
         }
+        updateWizardEnabled();
 
         // The controller deliberately keeps running across a pane teardown
         // (a content rebuild must not stop the analyser or wipe its
@@ -436,7 +426,7 @@ public final class FftPane extends AbstractPane {
     }
 
     @Override
-    protected AbstractTabControl tabStrip() {
+    protected AbstractTabControl<?> tabStrip() {
         return toolbarTabs;
     }
 
@@ -532,10 +522,12 @@ public final class FftPane extends AbstractPane {
         controller.startRecording();
         if (!controller.isRecording()) {
             recordButton.setSelection(false);
+            updateWizardEnabled();
             return;
         }
         recordButton.setSelection(true);
         recordButton.setImage(recordLit);
+        updateWizardEnabled();
     }
 
     /** Programmatically engages Record and lights the LED - the
@@ -604,6 +596,15 @@ public final class FftPane extends AbstractPane {
         view.clearWarningBanner();   // a re-sync / overrun warning is moot once stopped
         recordButton.setSelection(false);
         recordButton.setImage(recordDim);
+        updateWizardEnabled();
+    }
+
+    /** Enables the predistortion wizard's button exactly while the analyser
+     *  records - the wizard measures the running FFT. */
+    private void updateWizardEnabled() {
+        if (wizardButton != null && !wizardButton.isDisposed()) {
+            wizardButton.setEnabled(controller.isRecording());
+        }
     }
 
     // -------------------------------------------------------------------------

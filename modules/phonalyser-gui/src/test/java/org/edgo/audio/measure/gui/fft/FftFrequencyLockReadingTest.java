@@ -126,7 +126,7 @@ class FftFrequencyLockReadingTest {
     @ParameterizedTest
     @EnumSource(value = WindowType.class, names = {"RECT", "BH7"})
     void theLockIsFedThePhaseStepReadingAndNotTheOneFrameEstimate(WindowType window) throws Exception {
-        FftAnalyzerWorker worker = new FftAnalyzerWorker(null);   // headless
+        FftAnalyzerWorker worker = new FftAnalyzerWorker();   // headless
         double[] tone = tone(TONE_HZ, FFT_SIZE + 2 * HOP);
 
         FftResult first = measured(worker, window, tone, 0);

@@ -368,7 +368,7 @@ class FftPhaseAlignAccumulatorTest {
         double[] reference = channel(SEED + 8, total, offBinPos, 0, referencePhi, null);
 
         FftAnalyzer       analyzer = new FftAnalyzer();
-        FftAnalyzerWorker worker   = new FftAnalyzerWorker(null);
+        FftAnalyzerWorker worker   = new FftAnalyzerWorker();
         double[] win    = new double[WIN_LEN];
         double[] refWin = new double[WIN_LEN];
         // The analysed and the reference window the worker's frame read
@@ -445,7 +445,7 @@ class FftPhaseAlignAccumulatorTest {
     private double[] accumulateSlipped(double[] analysed, double[] reference, int[] slips)
             throws Exception {
         FftAnalyzer       analyzer = new FftAnalyzer();
-        FftAnalyzerWorker worker   = new FftAnalyzerWorker(null);
+        FftAnalyzerWorker worker   = new FftAnalyzerWorker();
         double[] win    = new double[WIN_LEN];
         double[] refWin = new double[WIN_LEN];
         if (reference != null) {
@@ -558,7 +558,7 @@ class FftPhaseAlignAccumulatorTest {
      */
     @Test
     void aChangeOfTheGeneratedSignalStartsTheAlignmentAfresh() throws Exception {
-        FftAnalyzerWorker worker = new FftAnalyzerWorker(null);
+        FftAnalyzerWorker worker = new FftAnalyzerWorker();
         FieldUtils.writeField(worker, "pilotFirstTaken",    true, true);
         FieldUtils.writeField(worker, "pilotRefFirstTaken", true, true);
 
@@ -585,7 +585,7 @@ class FftPhaseAlignAccumulatorTest {
      */
     @Test
     void aChangeOfTheAlignmentModeArmsTheRestart() throws Exception {
-        FftAnalyzerWorker worker = new FftAnalyzerWorker(null);
+        FftAnalyzerWorker worker = new FftAnalyzerWorker();
         Preferences prefs = Preferences.instance();
         prefs.setTransientMode(true);   // the setting is written through the live singleton
         FundamentalPhaseAlignment previous = prefs.getFftFundamentalPhaseAlignment();
@@ -739,7 +739,7 @@ class FftPhaseAlignAccumulatorTest {
      *  first sample, where the analysis-cycle loop's drawn hop would
      *  otherwise put it. */
     private FftAnalyzerWorker pilotWorker() throws Exception {
-        FftAnalyzerWorker worker = new FftAnalyzerWorker(null);
+        FftAnalyzerWorker worker = new FftAnalyzerWorker();
         FieldUtils.writeField(worker, "pilotReader1", new PilotReader(PILOT_BIN), true);
         FieldUtils.writeField(worker, "pilotReader2", new PilotReader(PILOT2_BIN), true);
         FieldUtils.writeField(worker, "pilotPair",
@@ -1055,7 +1055,7 @@ class FftPhaseAlignAccumulatorTest {
         int total = (CYCLES - 1) * HOP + WIN_LEN;
         double[] analysed = channel(SEED + 3, total, FUND_BIN, HARMONICS, 0.0, null);
         FftAnalyzer       analyzer = new FftAnalyzer();
-        FftAnalyzerWorker worker   = new FftAnalyzerWorker(null);
+        FftAnalyzerWorker worker   = new FftAnalyzerWorker();
         double[] win = new double[WIN_LEN];
         FftResult r  = null;
         long base = 0;
@@ -1177,7 +1177,7 @@ class FftPhaseAlignAccumulatorTest {
         double[] analysed = channel(SEED + 6, total, FUND_BIN, HARMONICS, 0.0, excess);
 
         FftAnalyzer       analyzer = new FftAnalyzer();
-        FftAnalyzerWorker worker   = new FftAnalyzerWorker(null);
+        FftAnalyzerWorker worker   = new FftAnalyzerWorker();
         double[] win = new double[WIN_LEN];
         FftResult r  = null;
         long base = 0;
@@ -1257,7 +1257,7 @@ class FftPhaseAlignAccumulatorTest {
      *  tones' own bins - every tone is on-bin, so the peak bin IS the level. */
     private double[] accumulate(double[] analysed, CyclePhiF phiF) {
         FftAnalyzer       analyzer = new FftAnalyzer();
-        FftAnalyzerWorker worker   = new FftAnalyzerWorker(null);     // headless
+        FftAnalyzerWorker worker   = new FftAnalyzerWorker();     // headless
         double[] win = new double[WIN_LEN];
         FftResult r  = null;
         long base = 0;

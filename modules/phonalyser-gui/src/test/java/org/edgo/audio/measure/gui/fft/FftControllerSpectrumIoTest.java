@@ -61,9 +61,10 @@ class FftControllerSpectrumIoTest {
     Path tmp;
 
     private FftController io() {
-        // saveSpectrum/loadSpectrum use neither the worker nor (with no
-        // calibration entries to list) the correction store.
-        return new FftController(null, true);
+        // saveSpectrum/loadSpectrum use neither the worker (built, never
+        // started) nor (with no calibration entries to list) the correction
+        // store.
+        return new FftController();
     }
 
     /** Synthetic half-spectrum: −150 dBFS floor, one −10 dBFS peak at

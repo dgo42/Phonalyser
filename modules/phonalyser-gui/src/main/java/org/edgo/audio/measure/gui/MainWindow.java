@@ -143,7 +143,7 @@ public final class MainWindow {
         // IconUtils is disposed automatically on shell teardown.
         IconUtils.registerShell(shell);
 
-        this.engines = new UIEngines(display);
+        this.engines = new UIEngines();
         shell.addDisposeListener(e -> engines.shutdown());
         // Prime the device catalog off the UI thread - the server's boot order
         // (enumerate first, setup sweep after) on one background thread, so

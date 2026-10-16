@@ -18,7 +18,6 @@
 
 package org.edgo.audio.measure.gui.fft;
 
-import java.io.File;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -30,8 +29,6 @@ import java.util.function.Consumer;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.custom.CTabFolder;
-import org.eclipse.swt.custom.CTabItem;
-import org.eclipse.swt.custom.ScrolledComposite;
 import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.layout.FillLayout;
 import org.eclipse.swt.layout.GridData;
@@ -45,8 +42,6 @@ import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
 import org.edgo.audio.measure.bind.Property;
-import org.edgo.audio.measure.dsp.FreqRespCalHelper;
-import org.edgo.audio.measure.dsp.StereoFreqRespCalibration;
 import org.edgo.audio.measure.enums.AlignGenerator;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.FftOverlap;
@@ -58,9 +53,8 @@ import org.edgo.audio.measure.fft.ImdResult;
 import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
-import org.edgo.audio.measure.gui.common.AbstractTabControl;
+import org.edgo.audio.measure.gui.common.AbstractCalibrationTabControl;
 import org.edgo.audio.measure.gui.common.CalibrationDialog;
-import org.edgo.audio.measure.gui.common.CorrectionStore;
 import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.common.IconUtils;
@@ -70,7 +64,6 @@ import org.edgo.audio.measure.gui.widgets.NumericStepModel;
 import org.edgo.audio.measure.gui.widgets.PresetBar;
 import org.edgo.audio.measure.gui.widgets.TileTabFolder;
 import org.edgo.audio.measure.gui.widgets.UnitFamily;
-import org.edgo.audio.measure.preferences.CalibrationEntry;
 import org.edgo.audio.measure.preferences.FftPreset;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioBackend;
@@ -99,7 +92,10 @@ import lombok.extern.log4j.Log4j2;
  * The {@link FftView} is shared with the pane and passed in at construction.
  */
 @Log4j2
-public final class FftTabControl extends AbstractTabControl {
+public final class FftTabControl extends AbstractCalibrationTabControl<FftPane> {
+
+    /** Message-key prefix of the calibration tab's texts. */
+    private static final String CALIBRATION_KEY_PREFIX = "fft";
 
     /** Powers-of-2 from 2^13 (8192) to 2^22 (4,194,304) with their labels. */
     private static final int[]    FFT_LENGTH_VALUES = {
@@ -167,10 +163,6 @@ public final class FftTabControl extends AbstractTabControl {
 
     private final FftView view;
 
-    /** Loaded {@code .frc} correction store, constructor-injected by
-     *  {@link FftPane} (IoC) and shared with the {@link FftView}. */
-    private final CorrectionStore correctionStore;
-
     /** Controller owning the {@code .fft} spectrum file round-trip (and the
      *  analyser lifecycle); constructor-injected by {@link FftPane}. */
     private final FftController controller;
@@ -211,12 +203,6 @@ public final class FftTabControl extends AbstractTabControl {
     private Button             manualFundEnable;
     private NumericStepField   manualFundField;
 
-    private Consumer<String>         calFileSavedListener;
-
-    private Composite             fftCalRowsContainer;
-    private ScrolledComposite     fftCalRowsScroll;
-    private final List<FftCalRow> fftCalRows = new ArrayList<>();
-
     /** The combo's offered subset of {@link #FFT_LENGTH_VALUES} /
      *  {@link #FFT_LENGTH_LABELS} - truncated at
      *  {@link #SMALL_HEAP_MAX_FFT_LENGTH} on a small heap, the full list
@@ -225,11 +211,12 @@ public final class FftTabControl extends AbstractTabControl {
     private final String[] offeredFftLengthLabels;
 
     public FftTabControl(Composite parent, FftView view, boolean offScreen,
-                         CorrectionStore correctionStore,
-                         FftController controller) {
-        super(parent, SWT.NONE);
+                         FftController controller, FftPane owner) {
+        super(parent, SWT.NONE, owner, controller.getCorrectionStore(),
+                Preferences.instance().getFftCalibrations(),
+                Preferences.instance().fftLoadFolderProperty(),
+                CALIBRATION_KEY_PREFIX, true);
         this.view = view;
-        this.correctionStore = correctionStore;
         this.controller = controller;
         this.offScreen = offScreen;
         int lengthCap = Runtime.getRuntime().maxMemory() < SMALL_HEAP_BYTES
@@ -269,7 +256,7 @@ public final class FftTabControl extends AbstractTabControl {
         buildThdTab(tabs);
         buildPresetsTab(tabs);
         buildUtilityTab(tabs);
-        buildCalibrationTab(tabs);
+        buildCalibrationTab();
         if (!offScreen) {
             buildSaveToTab(tabs);
             buildLoadFromTab(tabs);
@@ -283,10 +270,7 @@ public final class FftTabControl extends AbstractTabControl {
 
         wireHelpAnchors();
 
-        // Push the initially-loaded active rows into the store last - the view
-        // (built before this control) already holds the same store instance, so
-        // the change events this fires find it ready.
-        syncFftStoreFromRows();
+        followCalibrations();
     }
 
     /** The live control's bus subscriptions, each unsubscribed on dispose. */
@@ -310,14 +294,9 @@ public final class FftTabControl extends AbstractTabControl {
             distMaxField.setMax(nyquist);
         };
         MessageBus.instance().subscribe(Events.AUDIO_FORMAT_CHANGED, audioFormatListener);
-        // A .frc just saved to disk: if any loaded FFT calibration row points at
-        // it, re-read it so the new curve applies without re-browsing.
-        calFileSavedListener = path -> onCalibrationFileSaved(path);
-        MessageBus.instance().subscribe(Events.CALIBRATION_FILE_SAVED, calFileSavedListener);
         addDisposeListener(e -> {
             MessageBus.instance().unsubscribe(Events.GENERATOR_SIGNAL_CHANGED, genChangedListener);
             MessageBus.instance().unsubscribe(Events.AUDIO_FORMAT_CHANGED, audioFormatListener);
-            MessageBus.instance().unsubscribe(Events.CALIBRATION_FILE_SAVED, calFileSavedListener);
         });
     }
 
@@ -1194,16 +1173,9 @@ public final class FftTabControl extends AbstractTabControl {
                 tiles.add(TileTabFolder.Tile.text("manF", I18n.t("fft.tile.manualFund")));
             }
         } else if (tabIndex == TAB_CALIBRATION) {
-            // "loaded" / "N loaded" when at least one loaded .frc is active -
-            // the store only holds active+loaded entries (see
-            // syncFftStoreFromRows), mirroring the FreqResp pane's tile.
-            int n = correctionStore.getEntries().size();
-            if (n == 1) {
-                tiles.add(TileTabFolder.Tile.text(I18n.t("calibration.tile.loaded"),
-                        I18n.t("calibration.tile.loaded.tooltip")));
-            } else if (n > 1) {
-                tiles.add(TileTabFolder.Tile.text(I18n.t("calibration.tile.loadedN", n),
-                        I18n.t("calibration.tile.loadedN.tooltip", n)));
+            TileTabFolder.Tile tile = getCalibrationTile();
+            if (tile != null) {
+                tiles.add(tile);
             }
         } else if (tabIndex == TAB_PRESETS) {
             // Show the number of saved presets when there are any - a hint
@@ -1262,281 +1234,16 @@ public final class FftTabControl extends AbstractTabControl {
     }
 
     // =========================================================================
-    // Load-calibration tab - multi-row .frc loader (mirrors FreqRespPane).
+    // Load-calibration tab - the rows live in the base class
     // =========================================================================
 
-    private static final class FftCalRow {
-        Composite                composite;
-        Text                     pathField;
-        /** "Active" toggle - two-way bound to {@code entry.active()}; the
-         *  calibration is only added to {@link CorrectionStore} when this
-         *  is checked AND a file is loaded. */
-        Button                   activeCheck;
-        /** "With noise" toggle - two-way bound to {@code entry.withNoise()};
-         *  when checked this row's correction is applied to every FFT bin
-         *  (noise floor included).  Only meaningful when active AND a file is
-         *  loaded; disabled otherwise. */
-        Button                   noiseCheck;
-        StereoFreqRespCalibration calibration;
-        /** Source of truth for path + Active + With-noise; lives in
-         *  {@code Preferences.getFftCalibrations()}. */
-        CalibrationEntry         entry;
-
-        private FftCalRow() {
-        }
-    }
-
-    private void buildCalibrationTab(CTabFolder folder) {
-        CTabItem item = new CTabItem(folder, SWT.NONE);
-        item.setText(I18n.t("fft.tab.calibration"));
-
-        fftCalRowsScroll = new ScrolledComposite(folder, SWT.V_SCROLL);
-        fftCalRowsScroll.setExpandHorizontal(true);
-        fftCalRowsScroll.setExpandVertical(true);
-        item.setControl(fftCalRowsScroll);
-
-        fftCalRowsContainer = new Composite(fftCalRowsScroll, SWT.NONE);
-        fftCalRowsScroll.setContent(fftCalRowsContainer);
-        GridLayout gl = new GridLayout(1, false);
-        gl.marginWidth = 8; gl.marginHeight = 6;
-        gl.verticalSpacing = 4;
-        fftCalRowsContainer.setLayout(gl);
-
-        Preferences prefs = Preferences.instance();
-        List<CalibrationEntry> cals = prefs.getFftCalibrations();
-        if (cals.isEmpty()) {
-            prefs.addFftCalibration(new CalibrationEntry());  // row 0 always present
-        }
-        for (CalibrationEntry entry : cals) {
-            FftCalRow r = createFftCalRowUi(entry);
-            String p = entry.getPath();
-            if (p != null && !p.isEmpty()) loadFileIntoFftCalRow(r, p, false);
-            updateFftCalRowEnable(r);
-        }
-        // The store is populated from these rows by the syncFftStoreFromRows()
-        // call at the end of the constructor, after every tab is built.
-    }
-
-    /** Builds and appends a fresh row.  7-column grid: pathField,
-     *  activeCheck, noiseCheck, load, clear, add, remove.  Remove is
-     *  {@code setVisible(false)} on row 0 so its column stays reserved
-     *  and the buttons line up vertically across rows.
-     *
-     *  <p>The two checkboxes feed {@link #syncFftStoreFromRows}:
-     *  <ul>
-     *    <li>"Active" - entry is only added to the calibration store
-     *        when checked AND a file is loaded.  Toggling it
-     *        rebuilds the store immediately.</li>
-     *    <li>"With noise" - when checked, this row's correction is
-     *        applied to every FFT bin (noise floor included);
-     *        otherwise only harmonic / dot bins are corrected.  Only
-     *        meaningful when Active is on; disabled otherwise.</li>
-     *  </ul> */
-    private FftCalRow createFftCalRowUi(CalibrationEntry entry) {
-        boolean isRow0 = fftCalRows.isEmpty();
-
-        Composite row = new Composite(fftCalRowsContainer, SWT.NONE);
-        row.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-        GridLayout rl = new GridLayout(7, false);
-        rl.marginWidth = 0; rl.marginHeight = 0; rl.horizontalSpacing = 6;
-        row.setLayout(rl);
-
-        Text pathField = new Text(row, SWT.BORDER | SWT.READ_ONLY);
-        GridData pgd = new GridData(SWT.FILL, SWT.CENTER, true, false);
-        pgd.widthHint = 320;
-        pathField.setLayoutData(pgd);
-        pathField.setText(I18n.t("freqResp.calibration.path.none"));
-        pathField.setToolTipText(I18n.t("fft.calibration.path.tooltip"));
-
-        Button activeCheck = new Button(row, SWT.CHECK);
-        activeCheck.setText(I18n.t("fft.calibration.active"));
-        activeCheck.setToolTipText(I18n.t("fft.calibration.active.tooltip"));
-
-        Button noiseCheck = new Button(row, SWT.CHECK);
-        noiseCheck.setText(I18n.t("fft.calibration.withNoise"));
-        noiseCheck.setToolTipText(I18n.t("fft.calibration.withNoise.tooltip"));
-
-        Image folderIcon = IconUtils.icon(row.getDisplay(), Icon.FOLDER_OPEN);
-        Button loadBtn = new Button(row, SWT.PUSH);
-        if (folderIcon != null) loadBtn.setImage(folderIcon);
-        GridData loadGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
-        loadGd.heightHint = IconUtils.FILE_BUTTON_HEIGHT;
-        loadBtn.setLayoutData(loadGd);
-        loadBtn.setToolTipText(I18n.t("freqResp.calibration.load.tooltip"));
-
-        Image xmark = IconUtils.icon(row.getDisplay(), Icon.RECTANGLE_XMARK);
-        Button clearBtn = new Button(row, SWT.PUSH);
-        if (xmark != null) clearBtn.setImage(xmark);
-        GridData clearGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
-        clearGd.heightHint = IconUtils.FILE_BUTTON_HEIGHT;
-        clearBtn.setLayoutData(clearGd);
-        clearBtn.setToolTipText(I18n.t("freqResp.calibration.clear.tooltip"));
-
-        Image plus = IconUtils.icon(row.getDisplay(), Icon.PLUS);
-        Button addBtn = new Button(row, SWT.PUSH);
-        if (plus != null) addBtn.setImage(plus);
-        GridData addGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
-        addGd.heightHint = IconUtils.FILE_BUTTON_HEIGHT;
-        addBtn.setLayoutData(addGd);
-        addBtn.setToolTipText(I18n.t("freqResp.calibration.add.tooltip"));
-
-        Image minus = IconUtils.icon(row.getDisplay(), Icon.MINUS);
-        Button removeBtn = new Button(row, SWT.PUSH);
-        if (minus != null) removeBtn.setImage(minus);
-        GridData removeGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
-        removeGd.heightHint = IconUtils.FILE_BUTTON_HEIGHT;
-        removeBtn.setLayoutData(removeGd);
-        removeBtn.setToolTipText(I18n.t("freqResp.calibration.remove.tooltip"));
-        if (isRow0) removeBtn.setVisible(false);
-
-        FftCalRow r = new FftCalRow();
-        r.composite   = row;
-        r.pathField   = pathField;
-        r.activeCheck = activeCheck;
-        r.noiseCheck  = noiseCheck;
-        r.entry       = entry;
-        fftCalRows.add(r);
-        updateFftCalRowEnable(r);
-
-        Bindings.check(activeCheck, entry.active());
-        Bindings.check(noiseCheck,  entry.withNoise());
-        Bindings.onChange(activeCheck, entry.active(), v -> {
-            updateFftCalRowEnable(r);
-            syncFftStoreFromRows();
-        });
-        Bindings.onChange(noiseCheck, entry.withNoise(), v -> syncFftStoreFromRows());
-
-        loadBtn.addListener(SWT.Selection,  e -> userLoadInFftCalRow(r));
-        clearBtn.addListener(SWT.Selection, e -> userClearFftCalRow(r));
-        addBtn.addListener(SWT.Selection,   e -> userAddFftCalRow());
-        if (!isRow0) removeBtn.addListener(SWT.Selection, e -> userRemoveFftCalRow(r));
-
-        relayoutFftCalRows();
-        return r;
-    }
-
-    /** Keeps the row's two checkboxes' enabled state in sync with the
-     *  current row state - Active needs a loaded file, With-noise
-     *  needs both a file and an active row.  Called from row
-     *  creation, file load, file clear, and the Active checkbox
-     *  listener. */
-    private void updateFftCalRowEnable(FftCalRow r) {
-        boolean fileLoaded = r.entry.getPath() != null && r.calibration != null;
-        if (r.activeCheck != null && !r.activeCheck.isDisposed()) {
-            r.activeCheck.setEnabled(fileLoaded);
-        }
-        if (r.noiseCheck != null && !r.noiseCheck.isDisposed()) {
-            r.noiseCheck.setEnabled(fileLoaded && r.entry.active().get());
-        }
-    }
-
-    private void relayoutFftCalRows() {
-        if (fftCalRowsContainer != null && !fftCalRowsContainer.isDisposed()) {
-            fftCalRowsContainer.layout(true, true);
-        }
-        if (fftCalRowsScroll != null && !fftCalRowsScroll.isDisposed() && fftCalRowsContainer != null) {
-            fftCalRowsScroll.setMinSize(fftCalRowsContainer.computeSize(SWT.DEFAULT, SWT.DEFAULT));
-        }
-    }
-
-    private void userLoadInFftCalRow(FftCalRow r) {
-        Preferences prefs = Preferences.instance();
-        FileDialog fd = new FileDialog(getShell(), SWT.OPEN);
-        fd.setText(I18n.t("freqResp.calibration.dialog"));
-        fd.setFilterExtensions(new String[]{ "*.frc", "*.csv", "*.*" });
-        String memFolder = prefs.getFftLoadFolder();
-        if (memFolder != null) fd.setFilterPath(memFolder);
-        String picked = fd.open();
-        if (picked == null) return;
-        if (!loadFileIntoFftCalRow(r, picked, true)) return;
-        String parent = new File(picked).getParent();
-        if (parent != null) prefs.setFftLoadFolder(parent);
-        syncFftStoreFromRows();
-        prefs.save();
-    }
-
-    private void userClearFftCalRow(FftCalRow r) {
-        r.calibration = null;
-        r.entry.setPath(null);
-        r.pathField.setText(I18n.t("freqResp.calibration.path.none"));
-        r.pathField.setToolTipText(null);
-        // Clearing the file forces the two checkboxes back to disabled
-        // (their "applies when active && file selected" rule).  Active
-        // stays SELECTED in the UI so the row re-applies as soon as
-        // the user picks a new file: an active checkbox with no file
-        // loaded takes effect the moment a file loads.
-        updateFftCalRowEnable(r);
-        syncFftStoreFromRows();
-        Preferences.instance().save();
-    }
-
-    private void userAddFftCalRow() {
-        CalibrationEntry entry = new CalibrationEntry();
-        Preferences.instance().addFftCalibration(entry);
-        createFftCalRowUi(entry);
-    }
-
-    private void userRemoveFftCalRow(FftCalRow r) {
-        if (fftCalRows.size() <= 1) return;
-        int idx = fftCalRows.indexOf(r);
-        if (idx <= 0) return;
-        fftCalRows.remove(idx);
-        Preferences.instance().removeFftCalibration(r.entry);
-        r.composite.dispose();
-        relayoutFftCalRows();
-        syncFftStoreFromRows();
-    }
-
-    private boolean loadFileIntoFftCalRow(FftCalRow r, String picked, boolean showErrors) {
-        try {
-            StereoFreqRespCalibration cal = FreqRespCalHelper.loadFrc(picked);
-            r.calibration = cal;
-            r.entry.setPath(picked);
-            r.pathField.setText(picked);
-            r.pathField.setToolTipText(picked);
-            // File just loaded - refresh the checkboxes' enabled state
-            // (Active becomes enable-able; With-noise follows Active).
-            updateFftCalRowEnable(r);
-            return true;
-        } catch (Exception ex) {
-            log.warn("FFT calibration load failed: {}", picked, ex);
-            if (showErrors) {
-                Dialogs.error(getShell(),
-                        I18n.t("freqResp.calibration.dialog"),
-                        I18n.t("freqResp.error.calibration.load").replace("{0}",
-                                ex.getMessage() != null ? ex.getMessage()
-                                                        : ex.getClass().getSimpleName()));
-            }
-            return false;
-        }
-    }
-
-    /** Re-reads any loaded calibration row that references the just-saved
-     *  {@code .frc} ({@link Events#CALIBRATION_FILE_SAVED}) and re-pushes the
-     *  store, so the new curve takes effect immediately. */
-    private void onCalibrationFileSaved(String path) {
-        if (isDisposed() || path == null) return;
-        boolean reloaded = false;
-        for (FftCalRow r : fftCalRows) {
-            if (r.entry.matchesPath(path) && loadFileIntoFftCalRow(r, r.entry.getPath(), false)) {
-                reloaded = true;
-            }
-        }
-        if (reloaded) syncFftStoreFromRows();
-    }
-
-    private void syncFftStoreFromRows() {
-        correctionStore.clearAll();
-        for (FftCalRow r : fftCalRows) {
-            // Only push entries that have a loaded file AND the user
-            // has checked "Active" - the per-row With-noise flag rides
-            // with the entry into the store.
-            if (r.calibration != null && r.entry.getPath() != null && r.entry.active().get()) {
-                correctionStore.addEntry(r.calibration, r.entry.getPath(), r.entry.withNoise().get());
-            }
-        }
-        // Reflect the active-loaded count in the Load-calibration tab tile.
-        if (toolbarTabs != null) toolbarTabs.refreshTab(TAB_CALIBRATION);
+    /** The store was rebuilt from the rows (the calibration tab lives in the
+     *  base): the view rebuilds the per-bin response it divides by, and the
+     *  calibration tile counts the store's entries anew. */
+    @Override
+    protected void onCalibrationsSynced() {
+        view.onCalibrationChanged();
+        toolbarTabs.refreshTab(TAB_CALIBRATION);
     }
 
     // =========================================================================

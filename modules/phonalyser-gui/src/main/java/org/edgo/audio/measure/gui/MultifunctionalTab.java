@@ -157,8 +157,7 @@ public final class MultifunctionalTab {
         vSplit.setSashWidth(4);
         this.oscPane = new ScopePane(vSplit, engines.getScopeController());
 
-        fftPane = new FftPane(vSplit, engines.getGeneratorController(),
-                engines.getFftController(), engines.getFftWorker());
+        fftPane = new FftPane(vSplit, engines.getFftController());
 
         // Title-bar collapse clicks are broadcast through the MessageBus
         // by each pane.  Store the handlers as fields so the matching

@@ -18,8 +18,6 @@
 
 package org.edgo.audio.measure.gui;
 
-import org.eclipse.swt.widgets.Display;
-import org.edgo.audio.measure.gui.fft.FftAnalyzerWorker;
 import org.edgo.audio.measure.gui.fft.FftController;
 import org.edgo.audio.measure.gui.generator.GeneratorController;
 import org.edgo.audio.measure.gui.scope.ScopeController;
@@ -33,7 +31,7 @@ import lombok.Getter;
  * Application-lifetime bundle of the three audio engines - the generator
  * playback ({@link GeneratorController}), the oscilloscope's capture
  * handshake ({@link ScopeController}) and the FFT analyser
- * ({@link FftController} with its {@link FftAnalyzerWorker}).
+ * ({@link FftController}, which owns its analyser worker).
  *
  * <p>Built once by {@link MainWindow} and injected down through
  * {@link MainTab} / {@link MultifunctionalTab} into the panes, so the
@@ -47,15 +45,12 @@ public final class UIEngines {
     @Getter private final GeneratorController generatorController;
     @Getter private final ScopeController     scopeController;
     @Getter private final FftController       fftController;
-    /** The FFT analyser's worker - the predistortion wizard registers its
-     *  engine on it. */
-    @Getter private final FftAnalyzerWorker   fftWorker;
     /** The app-lifetime device-list snapshot the Preferences dialog is served
      *  from - primed once in the background at start-up.  Lives here with the
      *  engines because it shares their lifetime and their consumers. */
     @Getter private final DeviceCatalog       deviceCatalog;
 
-    public UIEngines(Display display) {
+    public UIEngines() {
         // Eager init of the SharedCapture singleton so its MessageBus
         // responder is registered BEFORE any pane fires a CAPTURE_ACQUIRE
         // request - otherwise the request returns null and the user
@@ -71,8 +66,7 @@ public final class UIEngines {
         // around at the asking end.
         generatorController = new GeneratorController();
         scopeController     = new ScopeController();
-        fftWorker           = new FftAnalyzerWorker(display);
-        fftController       = new FftController(fftWorker, false);
+        fftController       = new FftController();
         deviceCatalog       = new DeviceCatalog(AudioBackend.instance());
     }
 

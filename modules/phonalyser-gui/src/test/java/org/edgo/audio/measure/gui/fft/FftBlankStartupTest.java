@@ -145,7 +145,7 @@ class FftBlankStartupTest {
         start.mangle(sig, winLen);
 
         FftAnalyzer       analyzer = new FftAnalyzer();
-        FftAnalyzerWorker worker   = new FftAnalyzerWorker(null);      // headless
+        FftAnalyzerWorker worker   = new FftAnalyzerWorker();      // headless
         double[] win = new double[winLen];
 
         double lastFund = Double.NEGATIVE_INFINITY;
