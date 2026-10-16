@@ -23,14 +23,37 @@ package org.edgo.audio.measure.gui.scope;
  * unit prefix based on the current value's magnitude and renders cur /
  * avg / min / max / σ in that same prefix so the column entries line
  * up vertically.
+ *
+ * <p>The texts are formatted with the default locale when the row is built;
+ * the scaled numbers behind them are kept, so {@link #reformatted()} renders
+ * the same readings again after a language switch.
  */
 public final class MeasurementRow {
 
     public final String name;
     public final String cur, avg, min, max, sigma;
+    /** The scaled numbers the texts above were formatted from. */
+    private final double curVal, avgVal, minVal, maxVal, sigmaVal;
+    /** A frequency row formats through {@link #fmtFreq}, every other row through {@link #fmt}. */
+    private final boolean frequency;
 
-    private MeasurementRow(String name, String cur, String avg, String min, String max, String sigma) {
-        this.name = name; this.cur = cur; this.avg = avg; this.min = min; this.max = max; this.sigma = sigma;
+    private MeasurementRow(String name, boolean frequency,
+                           double cur, double avg, double min, double max, double sigma) {
+        this.name = name; this.frequency = frequency;
+        this.curVal = cur; this.avgVal = avg; this.minVal = min; this.maxVal = max; this.sigmaVal = sigma;
+        this.cur = format(cur); this.avg = format(avg); this.min = format(min);
+        this.max = format(max); this.sigma = format(sigma);
+    }
+
+    /** The same readings formatted again with the current default locale.  The
+     *  numbers are not re-measured, so a held (frozen) table keeps its values
+     *  and only the number format follows the language. */
+    public MeasurementRow reformatted() {
+        return new MeasurementRow(name, frequency, curVal, avgVal, minVal, maxVal, sigmaVal);
+    }
+
+    private String format(double v) {
+        return frequency ? fmtFreq(v) : fmt(v);
     }
 
     public static MeasurementRow forVolts(String base, double curVal, MeasurementStats s) {
@@ -54,12 +77,12 @@ public final class MeasurementRow {
     }
 
     public static MeasurementRow forFreq(String base, double curVal, MeasurementStats s) {
-        return new MeasurementRow(base + ", Hz",
-                fmtFreq(curVal),
-                fmtFreq(s.getMean()),
-                fmtFreq(s.getMin()),
-                fmtFreq(s.getMax()),
-                fmtFreq(s.getSigma()));
+        return new MeasurementRow(base + ", Hz", true,
+                curVal,
+                s.getMean(),
+                s.getMin(),
+                s.getMax(),
+                s.getSigma());
     }
 
     /**
@@ -89,12 +112,12 @@ public final class MeasurementRow {
     }
 
     private static MeasurementRow scaled(String name, double scale, double cur, MeasurementStats s) {
-        return new MeasurementRow(name,
-                fmt(cur * scale),
-                fmt(s.getMean()  * scale),
-                fmt(s.getMin()   * scale),
-                fmt(s.getMax()   * scale),
-                fmt(s.getSigma() * scale));
+        return new MeasurementRow(name, false,
+                cur * scale,
+                s.getMean()  * scale,
+                s.getMin()   * scale,
+                s.getMax()   * scale,
+                s.getSigma() * scale);
     }
 
     private static String fmt(double v) {

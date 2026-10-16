@@ -25,7 +25,9 @@ import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.widgets.Composite;
 import org.edgo.audio.measure.enums.MagnitudeUnit;
+import org.edgo.audio.measure.gui.i18n.I18n;
 
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -71,6 +73,10 @@ public abstract class AbstractFreqDomainView extends AbstractMeasurementView {
     /** Canvas width / height the {@link #traceBuffer} was built for -
      *  a resize always forces a rebuild. */
     private int   traceBufferW, traceBufferH;
+    /** UI locale the {@link #traceBuffer} was rendered in.  Its tick labels
+     *  and captions are translated / locale-formatted text, so a language
+     *  switch always forces a rebuild. */
+    private Locale traceBufferLocale;
 
     /** Forwards to {@link AbstractMeasurementView#AbstractMeasurementView(Composite, int, Map)}
      *  so frequency-domain subclasses (FftView / FreqRespView) can pass
@@ -92,7 +98,8 @@ public abstract class AbstractFreqDomainView extends AbstractMeasurementView {
      * <p>The subclass computes the fingerprint by hashing in every
      * input that affects pixels: viewport bounds, data-identity hashes,
      * prefs toggles.  Two paints with the same fingerprint MUST produce
-     * the same image.
+     * the same image.  The UI locale is part of the key on top of the
+     * fingerprint, so the subclass does not hash it in.
      *
      * @param dstGc        destination GC (the live paint event's GC)
      * @param area         canvas client area
@@ -105,9 +112,11 @@ public abstract class AbstractFreqDomainView extends AbstractMeasurementView {
     protected final void paintCachedStatic(GC dstGc, Rectangle area,
                                            long fingerprint,
                                            StaticRenderer renderer) {
+        Locale locale = I18n.getLocale();
         if (traceBuffer == null || traceBuffer.isDisposed()
                 || traceBufferW != area.width || traceBufferH != area.height
-                || traceBufferFingerprint != fingerprint) {
+                || traceBufferFingerprint != fingerprint
+                || !locale.equals(traceBufferLocale)) {
             if (traceBuffer != null && !traceBuffer.isDisposed()) traceBuffer.dispose();
             traceBuffer = new Image(getDisplay(),
                     Math.max(1, area.width), Math.max(1, area.height));
@@ -120,6 +129,7 @@ public abstract class AbstractFreqDomainView extends AbstractMeasurementView {
             traceBufferFingerprint = fingerprint;
             traceBufferW = area.width;
             traceBufferH = area.height;
+            traceBufferLocale = locale;
         }
         dstGc.drawImage(traceBuffer, 0, 0);
     }

@@ -195,6 +195,10 @@ public class TileTabFolder extends CTabFolder {
     private int        customTabs;
     private TileSource tileSource;
     private String[]   tabLabels    = new String[0];
+    /** True once {@link #init()} has captured the custom tabs' labels into
+     *  {@link #tabLabels}; from then on a custom tab's caption lives there,
+     *  not in its blanked {@link CTabItem} text. */
+    private boolean    labelsCaptured;
     private Image[]    spacerImages = new Image[0];
     private final List<Region> regions = new ArrayList<>();
     private boolean    collapsed;
@@ -222,7 +226,12 @@ public class TileTabFolder extends CTabFolder {
     /** Captures each custom tab's label (then clears the {@link CTabItem}
      *  text so the renderer's top-aligned label is the only one drawn),
      *  sizes the strip and spacer images, and wires the paint / hover /
-     *  collapse listeners.  Call after the tabs are built. */
+     *  collapse listeners.  Tiles and tooltips are resolved from the
+     *  {@link TileSource} at paint / size time; on a language switch each
+     *  custom tab is re-fitted to its new text width once, by its caption
+     *  binding through {@link #setTabLabel} - which is why every tile-bearing
+     *  tab's caption is bound ({@link AbstractTabControl#groupCell}).  Call
+     *  after the tabs are built. */
     public void init() {
         if (isDisposed()) {
             return;
@@ -231,6 +240,7 @@ public class TileTabFolder extends CTabFolder {
             tabLabels[i] = getItem(i).getText();
             getItem(i).setText("");
         }
+        labelsCaptured = true;
         setTabHeight(tabStripHeight);
         for (int i = 0; i < customTabs && i < getItemCount(); i++) {
             updateSpacerImage(i);
@@ -249,6 +259,28 @@ public class TileTabFolder extends CTabFolder {
         updateSpacerImage(tabIndex);
         layout(true, true);
         redraw();
+    }
+
+    /** Re-fits every custom tab - see {@link #refreshTab(int)}. */
+    public void refreshTabs() {
+        for (int i = 0; i < customTabs; i++) {
+            refreshTab(i);
+        }
+    }
+
+    /** Sets the caption of tab {@code index}.  Before {@link #init()}, and
+     *  for a trailing (non-custom) tab, it is the {@link CTabItem} text.  A
+     *  custom tab's text is blanked by {@link #init()} and its caption drawn
+     *  by the renderer from {@link #tabLabels} - setting the item text there
+     *  would draw it twice - so after {@link #init()} the caption is stored
+     *  there and the tab re-fitted to its new width. */
+    public void setTabLabel(int index, String label) {
+        if (!labelsCaptured || index >= customTabs) {
+            getItem(index).setText(label);
+            return;
+        }
+        tabLabels[index] = label;
+        refreshTab(index);
     }
 
     /** True when the tab body is collapsed to just the strip. */

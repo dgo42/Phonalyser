@@ -36,6 +36,7 @@ import org.eclipse.swt.widgets.Listener;
 import org.eclipse.swt.widgets.Menu;
 import org.eclipse.swt.widgets.MenuItem;
 import org.edgo.audio.measure.enums.GenSignalForm;
+import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.i18n.I18n;
@@ -94,7 +95,8 @@ public final class SignalFormCombo extends Composite {
 
         textLabel = new Label(this, SWT.NONE);
         textLabel.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, true));
-        textLabel.setText(labelFor(current));
+        showLabel();
+        Bindings.onChange(textLabel, I18n.localeProperty(), l -> showLabel());
 
         // Drop-arrow drawn as an SVG label - the native SWT.ARROW|DOWN
         // Button renders inconsistently across GTK / win32 (a tiny pixel
@@ -144,7 +146,7 @@ public final class SignalFormCombo extends Composite {
         if (f == null || f == current) return;
         current = f;
         iconLabel.setImage(IconUtils.icon(getDisplay(), Icon.valueOf("SIGNAL_" + current.name())));
-        textLabel.setText(labelFor(current));
+        showLabel();
         layout();
         fire();
     }
@@ -163,6 +165,12 @@ public final class SignalFormCombo extends Composite {
     /** The localized display label for {@code form}. */
     private String labelFor(GenSignalForm form) {
         return I18n.t("generator.signalForm." + form.name());
+    }
+
+    /** Shows the selected form's label in the closed display - on selection
+     *  and again on a language switch. */
+    private void showLabel() {
+        textLabel.setText(labelFor(current));
     }
 
     /**

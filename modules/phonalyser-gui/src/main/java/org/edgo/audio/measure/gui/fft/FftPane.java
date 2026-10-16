@@ -33,6 +33,7 @@ import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Display;
 import org.edgo.audio.measure.common.Constants;
 import org.edgo.audio.measure.fft.FftResult;
+import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.AbstractPane;
@@ -76,9 +77,8 @@ public final class FftPane extends AbstractPane {
     /** Controller owning the analyser worker, the frequency-lock loops and
      *  the .fft file round-trip; injected into the view + tab control.
      *  The live pane receives the app-lifetime instance (built in
-     *  {@code UIEngines}, survives content rebuilds - the averaging
-     *  accumulator keeps counting through a language / font change); the
-     *  offscreen screenshot clone builds its own idle instance. */
+     *  {@code UIEngines}); the offscreen screenshot clone builds its own
+     *  idle instance. */
     private final FftController controller;
 
     private FlatScrollbar   freqScrollbar;
@@ -140,9 +140,8 @@ public final class FftPane extends AbstractPane {
     /**
      * Constructs the live pane around the injected app-lifetime engine -
      * the Record toggle drives {@code controller}; when it is already
-     * recording (this is a rebuilt pane after a language / font change)
-     * the Record LED lights up and the view simply picks up the worker's
-     * next published result.
+     * recording the Record LED lights up and the view simply picks up the
+     * worker's next published result.
      */
     public FftPane(Composite parent, FftController controller) {
         this(parent, false, controller);
@@ -201,9 +200,9 @@ public final class FftPane extends AbstractPane {
         gl.marginWidth  = 0; gl.marginHeight = 0; gl.verticalSpacing = 2;
         group.setLayout(gl);
         title = new PaneTitle(group, Events.PANE_ID_FFT,
-                I18n.t("fft.title.expanded"),
-                I18n.t("fft.title.collapsed"),
-                I18n.t("fft.pane.toggle.tooltip"));
+                "fft.title.expanded",
+                "fft.title.collapsed",
+                "fft.pane.toggle.tooltip");
 
         // ---- Plot row: FftView fills the available area, with the vertical
         // magnitude scrollbar pinned to the right edge AND the magnitude-unit
@@ -227,7 +226,7 @@ public final class FftPane extends AbstractPane {
         magScrollbar.setMaximum(SCROLL_RANGE);
         magScrollbar.setThumb(SCROLL_RANGE / 4);
         magScrollbar.setSelection(0);
-        magScrollbar.setToolTipText(I18n.t("fft.scrollbar.magnitude.tooltip"));
+        Bindings.text(magScrollbar, "fft.scrollbar.magnitude.tooltip", magScrollbar::setToolTipText);
         magScrollbar.addSelectionListener(e -> applyMagScrollbar());
 
         FormData vfd = new FormData();
@@ -267,7 +266,7 @@ public final class FftPane extends AbstractPane {
         freqScrollbar.setMaximum(SCROLL_RANGE);
         freqScrollbar.setThumb(SCROLL_RANGE / 4);
         freqScrollbar.setSelection(0);
-        freqScrollbar.setToolTipText(I18n.t("fft.scrollbar.frequency.tooltip"));
+        Bindings.text(freqScrollbar, "fft.scrollbar.frequency.tooltip", freqScrollbar::setToolTipText);
         freqScrollbar.addSelectionListener(e -> applyFreqScrollbar());
 
         // ---- Toolbar row: the FftTabControl (left, grabs space) + Record
@@ -295,7 +294,7 @@ public final class FftPane extends AbstractPane {
         if (!offScreen) {
             wizardButton = createActionButton(toolbarRow, SWT.PUSH);
             wizardButton.setImage(IconUtils.icon(d, Icon.WAND));
-            wizardButton.setToolTipText(I18n.t("predistortion.button.wizard.tooltip"));
+            Bindings.text(wizardButton, "predistortion.button.wizard.tooltip", wizardButton::setToolTipText);
             wizardButton.addListener(SWT.Selection, e -> openPredistortionWizard());
             wizardButton.setData("helpAnchor", "fft.html#fft-predistortion");
         }
@@ -303,7 +302,7 @@ public final class FftPane extends AbstractPane {
         recordButton = createActionButton(toolbarRow, SWT.TOGGLE);
         recordButton.setSize(new Point(ACTION_BOX_SIZE, ACTION_BOX_SIZE));
         recordButton.setImage(recordDim);
-        recordButton.setToolTipText(I18n.t("fft.record.tooltip"));
+        Bindings.text(recordButton, "fft.record.tooltip", recordButton::setToolTipText);
 
         // ---- Wiring.  The analyser runs in the controller's worker; the
         // pane drives its recording through the Record button.

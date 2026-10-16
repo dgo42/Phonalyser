@@ -19,12 +19,12 @@
 package org.edgo.audio.measure.gui.common;
 
 import org.eclipse.swt.SWT;
-import org.eclipse.swt.custom.CTabFolder;
 import org.eclipse.swt.custom.CTabItem;
 import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Display;
 
+import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.registry.UiRegistry;
 import org.edgo.audio.measure.gui.widgets.TileTabFolder;
 
@@ -99,9 +99,12 @@ public abstract class AbstractTabControl<P extends AbstractPane> extends Composi
         }
     }
 
-    /** Builds a tab in {@code folder} with the given title and returns its
-     *  content {@link Composite} (the {@link CTabItem#setControl} target) for
-     *  the caller to lay out and populate.
+    /** Builds a tab in {@code folder} captioned with the translation of
+     *  {@code titleKey} and returns its content {@link Composite} (the
+     *  {@link CTabItem#setControl} target) for the caller to lay out and
+     *  populate.  The caption follows the UI language through
+     *  {@link TileTabFolder#setTabLabel}, which also covers a custom tab whose
+     *  item text {@link TileTabFolder#init()} has blanked.
      *
      *  <p>Creation order is load-bearing: the content composite is created and
      *  assigned to the item via {@code setControl} <em>before</em> any content
@@ -109,10 +112,10 @@ public abstract class AbstractTabControl<P extends AbstractPane> extends Composi
      *  stray folder child while the content is built corrupts the folder's
      *  collapsed tab-height computation (the strip then prints clipped at the
      *  bottom).  Every tile-bearing tab must come through here. */
-    protected Composite groupCell(CTabFolder folder, String title) {
+    protected Composite groupCell(TileTabFolder folder, String titleKey) {
         Composite c = new Composite(folder, SWT.NONE);
         CTabItem item = new CTabItem(folder, SWT.NONE);
-        item.setText(title);
+        Bindings.text(item, titleKey, label -> folder.setTabLabel(folder.indexOf(item), label));
         item.setControl(c);
         return c;
     }

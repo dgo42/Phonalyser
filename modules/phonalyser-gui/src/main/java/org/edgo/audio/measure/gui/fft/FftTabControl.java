@@ -28,7 +28,6 @@ import java.util.Map;
 import java.util.function.Consumer;
 
 import org.eclipse.swt.SWT;
-import org.eclipse.swt.custom.CTabFolder;
 import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.layout.FillLayout;
 import org.eclipse.swt.layout.GridData;
@@ -362,23 +361,25 @@ public final class FftTabControl extends AbstractCalibrationTabControl<FftPane> 
     // Settings tab
     // =========================================================================
 
-    private void buildSettingsTab(CTabFolder folder) {
-        Composite g = groupCell(folder, I18n.t("fft.tab.settings"));
+    private void buildSettingsTab(TileTabFolder folder) {
+        Composite g = groupCell(folder, "fft.tab.settings");
         GridLayout gl = new GridLayout(4, false);
         gl.marginWidth = 6; gl.marginHeight = 4;
         gl.horizontalSpacing = 2; gl.verticalSpacing = 4;
         g.setLayout(gl);
         Preferences prefs = Preferences.instance();
 
-        addLabel(g, I18n.t("fft.settings.length"));
+        addLabel(g, "fft.settings.length");
         fftLengthCombo = new Combo(g, SWT.READ_ONLY);
         fftLengthCombo.setItems(offeredFftLengthLabels);
         fftLengthCombo.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
-        String lengthTip = I18n.t("fft.settings.length.tooltip");
-        if (offeredFftLengths.length < FFT_LENGTH_VALUES.length) {
-            lengthTip += "\n" + I18n.t("fft.settings.length.heapCapped");
-        }
-        fftLengthCombo.setToolTipText(lengthTip);
+        Bindings.text(fftLengthCombo, () -> {
+            String lengthTip = I18n.t("fft.settings.length.tooltip");
+            if (offeredFftLengths.length < FFT_LENGTH_VALUES.length) {
+                lengthTip += "\n" + I18n.t("fft.settings.length.heapCapped");
+            }
+            return lengthTip;
+        }, fftLengthCombo::setToolTipText);
         // Index-mapped combo: the selection index maps through FFT_LENGTH_VALUES
         // to the actual length, so it can't use the ordinal-based Bindings.combo.
         // The two-way mirror is hand-wired but follows the same contract: seed
@@ -398,19 +399,20 @@ public final class FftTabControl extends AbstractCalibrationTabControl<FftPane> 
                     v -> MessageBus.instance().publish(Events.FFT_LENGTH_CHANGED));
         }
 
-        addLabel(g, I18n.t("fft.settings.window"));
+        addLabel(g, "fft.settings.window");
         windowCombo = new Combo(g, SWT.READ_ONLY);
-        for (WindowType w : WindowType.values()) windowCombo.add(I18n.t(w.labelKey()));
+        Bindings.items(windowCombo, () -> Arrays.stream(WindowType.values())
+                .map(w -> I18n.t(w.labelKey())).toArray(String[]::new));
         windowCombo.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
-        windowCombo.setToolTipText(I18n.t("fft.settings.window.tooltip"));
+        Bindings.text(windowCombo, "fft.settings.window.tooltip", windowCombo::setToolTipText);
         Bindings.combo(windowCombo, prefs.fftWindowProperty(), WindowType.values());
         Bindings.onChange(toolbarTabs, prefs.fftWindowProperty(), w -> toolbarTabs.refreshTab(TAB_FFT_SETTINGS));
 
-        addLabel(g, I18n.t("fft.settings.overlap"));
+        addLabel(g, "fft.settings.overlap");
         overlapCombo = new Combo(g, SWT.READ_ONLY);
         for (FftOverlap ov : FftOverlap.values()) overlapCombo.add(ov.label);
         overlapCombo.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
-        overlapCombo.setToolTipText(I18n.t("fft.settings.overlap.tooltip"));
+        Bindings.text(overlapCombo, "fft.settings.overlap.tooltip", overlapCombo::setToolTipText);
         Bindings.combo(overlapCombo, prefs.fftOverlapProperty(), FftOverlap.values());
         // Overlap only changes the hop, not the spectrum/accumulator - refresh
         // the tab tile but DON'T reset the average; the worker adapts next
@@ -418,7 +420,7 @@ public final class FftTabControl extends AbstractCalibrationTabControl<FftPane> 
         Bindings.onChange(toolbarTabs, prefs.fftOverlapProperty(),
                 v -> toolbarTabs.refreshTab(TAB_FFT_SETTINGS));
 
-        addLabel(g, I18n.t("fft.settings.averages"));
+        addLabel(g, "fft.settings.averages");
         // List stepper: wheel / arrow keys snap to the next / previous
         // preset (Off, 1, 2 ... 128, ∞) while manual typing still accepts any
         // count ≥ 0 (and the ∞ / inf token, since max is unbounded).
@@ -429,7 +431,7 @@ public final class FftTabControl extends AbstractCalibrationTabControl<FftPane> 
         // 1 shows as a plain "1".
         averagesField.setNamedValue(AVERAGES_OFF, NumericStepModel.OFF_LABEL);
         averagesField.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
-        averagesField.setToolTipText(I18n.t("fft.settings.averages.tooltip"));
+        Bindings.text(averagesField, "fft.settings.averages.tooltip", averagesField::setToolTipText);
         Bindings.stepField(averagesField, prefs.fftAveragesProperty());
         // Pane-local effects only - the tab tile and the stop-after gate.  No
         // reset here: the worker resets the average only on a ring↔∞ switch or a
@@ -457,12 +459,12 @@ public final class FftTabControl extends AbstractCalibrationTabControl<FftPane> 
         stopRow.setLayout(stopRowLayout);
 
         stopAfterNEnable = new Button(stopRow, SWT.CHECK);
-        stopAfterNEnable.setText(I18n.t("fft.settings.stopAfterN"));
-        stopAfterNEnable.setToolTipText(I18n.t("fft.settings.stopAfterN.tooltip"));
+        Bindings.text(stopAfterNEnable, "fft.settings.stopAfterN", stopAfterNEnable::setText);
+        Bindings.text(stopAfterNEnable, "fft.settings.stopAfterN.tooltip", stopAfterNEnable::setToolTipText);
         Bindings.check(stopAfterNEnable, prefs.fftStopAfterNEnabledProperty());
         stopAfterNField = new NumericStepField(stopRow, UnitFamily.NONE,
                 STOP_AFTER_MIN, STOP_AFTER_MAX, STOP_AFTER_WHEEL_STEP, 1, 0, 70);
-        stopAfterNField.setToolTipText(I18n.t("fft.settings.stopAfterN.tooltip"));
+        Bindings.text(stopAfterNField, "fft.settings.stopAfterN.tooltip", stopAfterNField::setToolTipText);
         Bindings.stepFieldInt(stopAfterNField, prefs.fftStopAfterNProperty());
         // Initial enabled state reflects both "stop-after" toggle AND the rule
         // that the row is only meaningful when averages is "forever" (a finite N
@@ -485,14 +487,14 @@ public final class FftTabControl extends AbstractCalibrationTabControl<FftPane> 
         // FundamentalPhaseAlignment order, which is what Bindings.combo maps
         // the selection index onto.  (The mains-suppression preference has no
         // control on this tab; it keeps its stored value.)
-        addLabel(g, I18n.t("fft.settings.phaseAlign"));
+        addLabel(g, "fft.settings.phaseAlign");
         Combo phaseAlignCombo = new Combo(g, SWT.READ_ONLY);
-        phaseAlignCombo.setItems(new String[] {
+        Bindings.items(phaseAlignCombo, () -> new String[] {
                 I18n.t("fft.settings.phaseAlign.none"),
                 I18n.t("fft.settings.phaseAlign.reference"),
                 I18n.t("fft.settings.phaseAlign.pilot") });
         phaseAlignCombo.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
-        phaseAlignCombo.setToolTipText(I18n.t("fft.settings.phaseAlign.tooltip"));
+        Bindings.text(phaseAlignCombo, "fft.settings.phaseAlign.tooltip", phaseAlignCombo::setToolTipText);
         Bindings.combo(phaseAlignCombo, prefs.fftFundamentalPhaseAlignmentProperty(),
                 FundamentalPhaseAlignment.values());
         // Reference-channel alignment reads the second input, which a combined
@@ -512,11 +514,11 @@ public final class FftTabControl extends AbstractCalibrationTabControl<FftPane> 
         // visible CTabFolder client area).
         // Row: Get fundamental from generator (span 2) | Align generator
         fundFromGenCheck = new Button(g, SWT.CHECK);
-        fundFromGenCheck.setText(I18n.t("fft.settings.fundFromGen"));
+        Bindings.text(fundFromGenCheck, "fft.settings.fundFromGen", fundFromGenCheck::setText);
         GridData fgGd = new GridData(SWT.LEFT, SWT.CENTER, false, false);
         fgGd.horizontalSpan = 2;
         fundFromGenCheck.setLayoutData(fgGd);
-        fundFromGenCheck.setToolTipText(I18n.t("fft.settings.fundFromGen.tooltip"));
+        Bindings.text(fundFromGenCheck, "fft.settings.fundFromGen.tooltip", fundFromGenCheck::setToolTipText);
         Bindings.check(fundFromGenCheck, prefs.fftFundFromGeneratorProperty());
 
         // "Align generator" - None / FLL - only meaningful when both
@@ -525,14 +527,14 @@ public final class FftTabControl extends AbstractCalibrationTabControl<FftPane> 
         // a mode is selected the loop only fires if the other two are also on - see
         // FftAnalyzerWorker.applyFrequencyLock.
         Label algLbl = new Label(g, SWT.NONE);
-        algLbl.setText(I18n.t("fft.settings.alignGen"));
+        Bindings.text(algLbl, "fft.settings.alignGen", algLbl::setText);
         algLbl.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
         alignGenCombo = new Combo(g, SWT.DROP_DOWN | SWT.READ_ONLY);
         for (AlignGenerator ag : AlignGenerator.values()) {
             alignGenCombo.add(ag.label);
         }
         alignGenCombo.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
-        alignGenCombo.setToolTipText(I18n.t("fft.settings.alignGen.tooltip"));
+        Bindings.text(alignGenCombo, "fft.settings.alignGen.tooltip", alignGenCombo::setToolTipText);
         // Selecting an active mode resets its loop so each session converges
         // fresh; NONE deliberately holds everything - that side-effect lives in
         // the view, which subscribes to this same pref.  Here it's a plain
@@ -541,11 +543,11 @@ public final class FftTabControl extends AbstractCalibrationTabControl<FftPane> 
 
         // Row: Coherent averaging (span 2) | Log freq | Detect time discontinuity
         coherentCheck = new Button(g, SWT.CHECK);
-        coherentCheck.setText(I18n.t("fft.settings.coherent"));
+        Bindings.text(coherentCheck, "fft.settings.coherent", coherentCheck::setText);
         GridData cohGd = new GridData(SWT.LEFT, SWT.CENTER, false, false);
         cohGd.horizontalSpan = 2;
         coherentCheck.setLayoutData(cohGd);
-        coherentCheck.setToolTipText(I18n.t("fft.settings.coherent.tooltip"));
+        Bindings.text(coherentCheck, "fft.settings.coherent.tooltip", coherentCheck::setToolTipText);
         Bindings.check(coherentCheck, prefs.fftCoherentAveragingProperty());
         // Pane-local tab-tile refresh; the accumulator reset (coherent ↔
         // incoherent changes its semantics) lives in the view, which subscribes
@@ -563,17 +565,18 @@ public final class FftTabControl extends AbstractCalibrationTabControl<FftPane> 
         // each spans ONE column (not two) so no extra row is added (the tab must
         // stay inside the FFT-pane height).
         logFreqCheck = new Button(g, SWT.CHECK);
-        logFreqCheck.setText(I18n.t("fft.settings.logFreq"));
+        Bindings.text(logFreqCheck, "fft.settings.logFreq", logFreqCheck::setText);
         logFreqCheck.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
-        logFreqCheck.setToolTipText(I18n.t("fft.settings.logFreq.tooltip"));
+        Bindings.text(logFreqCheck, "fft.settings.logFreq.tooltip", logFreqCheck::setToolTipText);
         // Pure repaint side-effect (axis remap) lives in the view, which
         // subscribes to this same pref - a plain two-way value bind here.
         Bindings.check(logFreqCheck, prefs.fftLogFreqAxisProperty());
 
         detectTimeDiscCheck = new Button(g, SWT.CHECK);
-        detectTimeDiscCheck.setText(I18n.t("fft.settings.detectTimeDiscontinuity"));
+        Bindings.text(detectTimeDiscCheck, "fft.settings.detectTimeDiscontinuity", detectTimeDiscCheck::setText);
         detectTimeDiscCheck.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
-        detectTimeDiscCheck.setToolTipText(I18n.t("fft.settings.detectTimeDiscontinuity.tooltip"));
+        Bindings.text(detectTimeDiscCheck, "fft.settings.detectTimeDiscontinuity.tooltip",
+                detectTimeDiscCheck::setToolTipText);
         // Checked (the default) runs the time-domain discontinuity gate;
         // unchecking it lets a small or non-sinusoidal signal keep producing an
         // FFT - the gate would otherwise reject every such block.  The worker
@@ -652,8 +655,8 @@ public final class FftTabControl extends AbstractCalibrationTabControl<FftPane> 
     // THD tab
     // =========================================================================
 
-    private void buildThdTab(CTabFolder folder) {
-        Composite g = groupCell(folder, I18n.t("fft.tab.thd"));
+    private void buildThdTab(TileTabFolder folder) {
+        Composite g = groupCell(folder, "fft.tab.thd");
         GridLayout gl = new GridLayout(4, false);
         gl.marginWidth = 6; gl.marginHeight = 4;
         gl.horizontalSpacing = 6; gl.verticalSpacing = 4;
@@ -666,15 +669,15 @@ public final class FftTabControl extends AbstractCalibrationTabControl<FftPane> 
         // spans the remaining 3 columns of the 4-column grid so the
         // row layout matches the other rows.
         distMinEnable = new Button(g, SWT.CHECK);
-        distMinEnable.setText(I18n.t("fft.thd.distMin"));
-        distMinEnable.setToolTipText(I18n.t("fft.thd.distMin.tooltip"));
+        Bindings.text(distMinEnable, "fft.thd.distMin", distMinEnable::setText);
+        Bindings.text(distMinEnable, "fft.thd.distMin.tooltip", distMinEnable::setToolTipText);
         distMinField = new NumericStepField(g, UnitFamily.FREQUENCY,
                 0, Preferences.instance().current().getInputSampleRate() / 2.0,
                 FREQ_MAX_DECIMALS, 90);
         GridData distMinFieldGd = new GridData(SWT.LEFT, SWT.CENTER, false, false);
         distMinFieldGd.horizontalSpan = 3;
         distMinField.setLayoutData(distMinFieldGd);
-        distMinField.setToolTipText(I18n.t("fft.thd.distMin.tooltip"));
+        Bindings.text(distMinField, "fft.thd.distMin.tooltip", distMinField::setToolTipText);
         distMinField.setEnabled(prefs.isFftDistMinEnabled());
         Bindings.check(distMinEnable, prefs.fftDistMinEnabledProperty());
         Bindings.stepField(distMinField, prefs.fftDistMinHzProperty());
@@ -690,15 +693,15 @@ public final class FftTabControl extends AbstractCalibrationTabControl<FftPane> 
 
         // Row: distortion low-pass.
         distMaxEnable = new Button(g, SWT.CHECK);
-        distMaxEnable.setText(I18n.t("fft.thd.distMax"));
-        distMaxEnable.setToolTipText(I18n.t("fft.thd.distMax.tooltip"));
+        Bindings.text(distMaxEnable, "fft.thd.distMax", distMaxEnable::setText);
+        Bindings.text(distMaxEnable, "fft.thd.distMax.tooltip", distMaxEnable::setToolTipText);
         distMaxField = new NumericStepField(g, UnitFamily.FREQUENCY,
                 0, Preferences.instance().current().getInputSampleRate() / 2.0,
                 FREQ_MAX_DECIMALS, 90);
         GridData distMaxFieldGd = new GridData(SWT.LEFT, SWT.CENTER, false, false);
         distMaxFieldGd.horizontalSpan = 3;
         distMaxField.setLayoutData(distMaxFieldGd);
-        distMaxField.setToolTipText(I18n.t("fft.thd.distMax.tooltip"));
+        Bindings.text(distMaxField, "fft.thd.distMax.tooltip", distMaxField::setToolTipText);
         distMaxField.setEnabled(prefs.isFftDistMaxEnabled());
         Bindings.check(distMaxEnable, prefs.fftDistMaxEnabledProperty());
         Bindings.stepField(distMaxField, prefs.fftDistMaxHzProperty());
@@ -715,8 +718,8 @@ public final class FftTabControl extends AbstractCalibrationTabControl<FftPane> 
         // the harmonic-count row.  Checkbox text replaces the
         // separate Label here too.
         manualFundEnable = new Button(g, SWT.CHECK);
-        manualFundEnable.setText(I18n.t("fft.thd.manualFund"));
-        manualFundEnable.setToolTipText(I18n.t("fft.thd.manualFund.tooltip"));
+        Bindings.text(manualFundEnable, "fft.thd.manualFund", manualFundEnable::setText);
+        Bindings.text(manualFundEnable, "fft.thd.manualFund.tooltip", manualFundEnable::setToolTipText);
         // Single field that accepts the value AND a unit suffix -
         // e.g. "1.5 V", "1500 mV", "-3.5 dBV".  The value is canonical Vrms;
         // unit parsing / display switching is the field's own concern.  The
@@ -727,7 +730,7 @@ public final class FftTabControl extends AbstractCalibrationTabControl<FftPane> 
         GridData manualFundFieldGd = new GridData(SWT.LEFT, SWT.CENTER, false, false);
         manualFundFieldGd.horizontalSpan = 3;
         manualFundField.setLayoutData(manualFundFieldGd);
-        manualFundField.setToolTipText(I18n.t("fft.thd.manualFund.tooltip"));
+        Bindings.text(manualFundField, "fft.thd.manualFund.tooltip", manualFundField::setToolTipText);
         manualFundField.setEnabled(prefs.isFftManualFundEnabled());
         Bindings.check(manualFundEnable, prefs.fftManualFundEnabledProperty());
         // Toggling also enables/disables the companion field and drives the
@@ -737,17 +740,17 @@ public final class FftTabControl extends AbstractCalibrationTabControl<FftPane> 
             toolbarTabs.refreshTab(TAB_THD_SETTINGS);
         });
 
-        addLabel(g, I18n.t("fft.thd.maxThd"));
+        addLabel(g, "fft.thd.maxThd");
         thdMaxHarmField = new NumericStepField(g, UnitFamily.NONE,
                 THD_HARM_MIN, THD_HARM_MAX, 1, 1, 0, 60);
         thdMaxHarmField.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
-        thdMaxHarmField.setToolTipText(I18n.t("fft.thd.maxThd.tooltip"));
+        Bindings.text(thdMaxHarmField, "fft.thd.maxThd.tooltip", thdMaxHarmField::setToolTipText);
         Bindings.stepFieldInt(thdMaxHarmField, prefs.fftThdMaxHarmonicProperty());
         // Drives the 'H{n}' THD tile.  No view redraw/reset.
         Bindings.onChange(toolbarTabs, prefs.fftThdMaxHarmonicProperty(),
                 v -> toolbarTabs.refreshTab(TAB_THD_SETTINGS));
 
-        addLabel(g, I18n.t("fft.thd.maxCalc"));
+        addLabel(g, "fft.thd.maxCalc");
         // Minimum 9 - the THD overlay table is laid out for the H2..H9
         // range and shrinking below that leaves empty rows on the
         // bottom that look like a rendering bug.  Value N means "calc
@@ -755,7 +758,7 @@ public final class FftTabControl extends AbstractCalibrationTabControl<FftPane> 
         calcMaxHarmField = new NumericStepField(g, UnitFamily.NONE,
                 CALC_HARM_MIN, CALC_HARM_MAX, 1, 1, 0, 60);
         calcMaxHarmField.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
-        calcMaxHarmField.setToolTipText(I18n.t("fft.thd.maxCalc.tooltip"));
+        Bindings.text(calcMaxHarmField, "fft.thd.maxCalc.tooltip", calcMaxHarmField::setToolTipText);
         // The external THD window's row count tracks this value (resize so the
         // harmonic rows aren't clipped) - that side-effect lives in the view,
         // subscribed to this same pref.  The min-9 floor at the old write site
@@ -784,8 +787,8 @@ public final class FftTabControl extends AbstractCalibrationTabControl<FftPane> 
     // Presets tab
     // =========================================================================
 
-    private void buildPresetsTab(CTabFolder folder) {
-        Composite g = groupCell(folder, I18n.t("fft.tab.presets"));
+    private void buildPresetsTab(TileTabFolder folder) {
+        Composite g = groupCell(folder, "fft.tab.presets");
         g.setLayout(new FillLayout());
         new PresetBar<FftPreset>(g, "fft.presets", "fft.html#fft-tab-presets",
                 new PresetBar.Store<>() {
@@ -877,8 +880,8 @@ public final class FftTabControl extends AbstractCalibrationTabControl<FftPane> 
     // Utility tab
     // =========================================================================
 
-    private void buildUtilityTab(CTabFolder folder) {
-        Composite g = groupCell(folder, I18n.t("fft.tab.utility"));
+    private void buildUtilityTab(TileTabFolder folder) {
+        Composite g = groupCell(folder, "fft.tab.utility");
         GridLayout gl = new GridLayout(4, false);
         gl.marginWidth = 6; gl.marginHeight = 4; gl.horizontalSpacing = 6;
         g.setLayout(gl);
@@ -889,7 +892,7 @@ public final class FftTabControl extends AbstractCalibrationTabControl<FftPane> 
         shotGd.widthHint = IconUtils.ACTION_BUTTON_PX;
         shotGd.heightHint = IconUtils.ACTION_BUTTON_PX;
         shotBtn.setLayoutData(shotGd);
-        shotBtn.setToolTipText(I18n.t("fft.utility.screenshot.tooltip"));
+        Bindings.text(shotBtn, "fft.utility.screenshot.tooltip", shotBtn::setToolTipText);
         // The screenshot dialog clones the whole pane offscreen, so the pane
         // owns it; ask it to open via the bus.
         shotBtn.addListener(SWT.Selection, e -> MessageBus.instance().publish(Events.FFT_SCREENSHOT_REQUESTED));
@@ -900,7 +903,7 @@ public final class FftTabControl extends AbstractCalibrationTabControl<FftPane> 
         calGd.widthHint = IconUtils.ACTION_BUTTON_PX;
         calGd.heightHint = IconUtils.ACTION_BUTTON_PX;
         calBtn.setLayoutData(calGd);
-        calBtn.setToolTipText(I18n.t("fft.utility.calibrate.tooltip"));
+        Bindings.text(calBtn, "fft.utility.calibrate.tooltip", calBtn::setToolTipText);
         calBtn.addListener(SWT.Selection, e -> openCalibrationDialog());
     }
 
@@ -980,8 +983,8 @@ public final class FftTabControl extends AbstractCalibrationTabControl<FftPane> 
     // Save / Load CSV
     // =========================================================================
 
-    private void buildSaveToTab(CTabFolder folder) {
-        Composite g = groupCell(folder, I18n.t("fft.tab.save"));
+    private void buildSaveToTab(TileTabFolder folder) {
+        Composite g = groupCell(folder, "fft.tab.save");
         GridLayout gl = new GridLayout(2, false);
         gl.marginWidth = 6; gl.marginHeight = 4; gl.horizontalSpacing = 6;
         g.setLayout(gl);
@@ -990,7 +993,9 @@ public final class FftTabControl extends AbstractCalibrationTabControl<FftPane> 
         Text pathField = new Text(g, SWT.BORDER | SWT.READ_ONLY);
         String saved = prefs.getFftSavePath();
         pathField.setText(saved == null ? "" : saved);
-        pathField.setToolTipText(saved != null && !saved.isEmpty() ? saved : I18n.t("fft.save.path.tooltip"));
+        showPathTooltip(pathField, "fft.save.path.tooltip");
+        Bindings.onChange(pathField, I18n.localeProperty(),
+                l -> showPathTooltip(pathField, "fft.save.path.tooltip"));
         pathField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
 
         // Single floppy-disk button collapses the old browse-then-save
@@ -1005,7 +1010,7 @@ public final class FftTabControl extends AbstractCalibrationTabControl<FftPane> 
         GridData saveGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
         saveGd.heightHint = IconUtils.FILE_BUTTON_HEIGHT;
         save.setLayoutData(saveGd);
-        save.setToolTipText(I18n.t("fft.save.write.tooltip"));
+        Bindings.text(save, "fft.save.write.tooltip", save::setToolTipText);
         save.addListener(SWT.Selection, e -> {
             FftResult r = view.getLastResult();
             if (r == null) {
@@ -1047,7 +1052,7 @@ public final class FftTabControl extends AbstractCalibrationTabControl<FftPane> 
             if (chosen == null) return;
             if (!chosen.toLowerCase().endsWith(".fft")) chosen = chosen + ".fft";
             pathField.setText(chosen);
-            pathField.setToolTipText(chosen);
+            showPathTooltip(pathField, "fft.save.path.tooltip");
             prefs.setFftSavePath(chosen);
             Path parent = Paths.get(chosen).getParent();
             prefs.setFftSaveFolder(parent == null ? null : parent.toString());
@@ -1061,8 +1066,8 @@ public final class FftTabControl extends AbstractCalibrationTabControl<FftPane> 
         });
     }
 
-    private void buildLoadFromTab(CTabFolder folder) {
-        Composite g = groupCell(folder, I18n.t("fft.tab.load"));
+    private void buildLoadFromTab(TileTabFolder folder) {
+        Composite g = groupCell(folder, "fft.tab.load");
         GridLayout gl = new GridLayout(2, false);
         gl.marginWidth = 6; gl.marginHeight = 4; gl.horizontalSpacing = 6;
         g.setLayout(gl);
@@ -1071,7 +1076,9 @@ public final class FftTabControl extends AbstractCalibrationTabControl<FftPane> 
         Text pathField = new Text(g, SWT.BORDER | SWT.READ_ONLY);
         String saved = prefs.getFftLoadPath();
         pathField.setText(saved == null ? "" : saved);
-        pathField.setToolTipText(saved != null && !saved.isEmpty() ? saved : I18n.t("fft.load.path.tooltip"));
+        showPathTooltip(pathField, "fft.load.path.tooltip");
+        Bindings.onChange(pathField, I18n.localeProperty(),
+                l -> showPathTooltip(pathField, "fft.load.path.tooltip"));
         pathField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
 
         Image folderIcon = IconUtils.icon(g.getDisplay(), Icon.FOLDER_OPEN);
@@ -1080,7 +1087,7 @@ public final class FftTabControl extends AbstractCalibrationTabControl<FftPane> 
         GridData browseGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
         browseGd.heightHint = IconUtils.FILE_BUTTON_HEIGHT;
         browse.setLayoutData(browseGd);
-        browse.setToolTipText(I18n.t("fft.load.browse.tooltip"));
+        Bindings.text(browse, "fft.load.browse.tooltip", browse::setToolTipText);
         browse.addListener(SWT.Selection, e -> {
             FileDialog d = new FileDialog(getShell(), SWT.OPEN);
             d.setFilterExtensions(new String[]{"*.fft", "*.csv", "*.*"});
@@ -1090,7 +1097,7 @@ public final class FftTabControl extends AbstractCalibrationTabControl<FftPane> 
             String chosen = d.open();
             if (chosen != null) {
                 pathField.setText(chosen);
-                pathField.setToolTipText(chosen);
+                showPathTooltip(pathField, "fft.load.path.tooltip");
                 prefs.setFftLoadPath(chosen);
                 prefs.setFftLoadFolder(Paths.get(chosen).getParent() == null ? null
                         : Paths.get(chosen).getParent().toString());
@@ -1098,6 +1105,14 @@ public final class FftTabControl extends AbstractCalibrationTabControl<FftPane> 
                 loadSpectrumFft(chosen);
             }
         });
+    }
+
+    /** Shows the tooltip of a Save-to / Load-from path field for what it
+     *  holds: the path itself, or the translation of {@code hintKey} while the
+     *  field is empty. */
+    private void showPathTooltip(Text pathField, String hintKey) {
+        String path = pathField.getText();
+        pathField.setToolTipText(path.isEmpty() ? I18n.t(hintKey) : path);
     }
 
     /** Loads a spectrum {@code .fft} file via the controller, stops live
@@ -1250,9 +1265,10 @@ public final class FftTabControl extends AbstractCalibrationTabControl<FftPane> 
     // Helpers
     // =========================================================================
 
-    private void addLabel(Composite parent, String text) {
+    /** Adds a field label showing the translation of {@code key}. */
+    private void addLabel(Composite parent, String key) {
         Label l = new Label(parent, SWT.NONE);
-        l.setText(text);
+        Bindings.text(l, key, l::setText);
         l.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
     }
 }

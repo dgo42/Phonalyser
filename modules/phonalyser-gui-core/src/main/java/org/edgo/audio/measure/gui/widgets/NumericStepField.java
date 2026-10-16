@@ -33,7 +33,9 @@ import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Event;
 import org.eclipse.swt.widgets.Listener;
 import org.eclipse.swt.widgets.Text;
+import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.common.Icon;
+import org.edgo.audio.measure.gui.i18n.I18n;
 
 /**
  * Editable numeric field with unit handling, stepping and clamping - the one
@@ -213,6 +215,9 @@ public final class NumericStepField extends Composite {
         field.addListener(SWT.FocusOut,         e -> commitText());
 
         refresh();
+        // The shown text and the step hint carry the translated unit suffix
+        // (UnitFamily.Unit#suffix), so a language switch re-renders both.
+        Bindings.onChange(this, I18n.localeProperty(), l -> refresh());
     }
 
     @Override

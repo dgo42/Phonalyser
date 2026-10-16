@@ -51,7 +51,7 @@ public final class HelpImagesFull extends AbstractAutomationScript {
 
     private static final double SETTLE_SECONDS = 25;
     private static final double SETTLE_TAB      = 0.4;
-    private static final double SETTLE_REBUILD  = 1.2;
+    private static final double SETTLE_LAYOUT   = 1.2;
 
     // Window size (height tall enough to avoid a vertical scrollbar, which would
     // steal 16 px of width) and the 330 px generator pane come from the launch
@@ -115,7 +115,7 @@ public final class HelpImagesFull extends AbstractAutomationScript {
         language(lang);
         activate("multifunctional");          // bring its top tab to front (else background = width 0)
         collapseScopeAndFftTabs();
-        waitSeconds(SETTLE_REBUILD);
+        waitSeconds(SETTLE_LAYOUT);
         captureMultifunctional(dir + "multifunctional.png");
         captureGeneratorCropped(dir + "generator-pane.png");
         snapshotScopePane(PANE_W, PANE_H, dir + "oscilloscope-pane.png");
@@ -125,24 +125,25 @@ public final class HelpImagesFull extends AbstractAutomationScript {
         captureTabs("multifunctional/scope/tabs", SCOPE_TABS, dir);
         captureTabs("multifunctional/fft/tabs", FFT_TABS, dir);
 
-        // --- generator variants (set form, rebuild, crop).  The rebuild resets
-        //     the top tab to the prefs default, so re-front the multifunctional
-        //     tab each time or the generator pane captures at width 0. ---
+        // --- generator variants (set form, settle, crop).  The pane follows
+        //     the form preference live; the multifunctional tab is re-fronted
+        //     each time so the generator pane is never captured from a
+        //     background tab, where it has width 0. ---
         setGeneratorForm("DUAL_TONE");
         language(lang);
         activate("multifunctional");
-        waitSeconds(SETTLE_REBUILD);
+        waitSeconds(SETTLE_LAYOUT);
         captureGeneratorCropped(dir + "Generator - dual tone.png");
         setGeneratorForm("LOG_SWEEP");
         language(lang);
         activate("multifunctional");
-        waitSeconds(SETTLE_REBUILD);
+        waitSeconds(SETTLE_LAYOUT);
         captureGeneratorCropped(dir + "Generator - sweep mode.png");
 
         // --- frequency-response pane + its settings tabs (separate top tab) ---
         activate("frequencyResponse");
         activate("frequencyResponse/tabs/settings");
-        waitSeconds(SETTLE_REBUILD);
+        waitSeconds(SETTLE_LAYOUT);
         screenshot("frequencyResponse", dir + "freqresp-pane.png");
         captureTabs("frequencyResponse/tabs", FR_TABS, dir);
 
@@ -150,7 +151,7 @@ public final class HelpImagesFull extends AbstractAutomationScript {
         //     onActivate, so the screenshottable control is the tab folder at
         //     "preferences" - activate the tab, then snapshot that base path. ---
         openPreferences();
-        waitSeconds(SETTLE_REBUILD);
+        waitSeconds(SETTLE_LAYOUT);
         for (String[] tab : PREF_TABS) {
             activate("preferences/tabs/" + tab[0]);
             waitSeconds(SETTLE_TAB);

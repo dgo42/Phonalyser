@@ -161,7 +161,8 @@ public abstract class AbstractCalibrationTabControl<P extends AbstractPane> exte
         calRowsScroll.setExpandHorizontal(true);
         calRowsScroll.setExpandVertical(true);
         CTabItem item = new CTabItem(toolbarTabs, SWT.NONE);
-        item.setText(text("tab.calibration"));
+        Bindings.text(item, key("tab.calibration"),
+                label -> toolbarTabs.setTabLabel(toolbarTabs.indexOf(item), label));
         item.setControl(calRowsScroll);
 
         calRowsContainer = new Composite(calRowsScroll, SWT.NONE);
@@ -253,18 +254,16 @@ public abstract class AbstractCalibrationTabControl<P extends AbstractPane> exte
         GridData pgd = new GridData(SWT.FILL, SWT.CENTER, true, false);
         pgd.widthHint = 320;
         pathField.setLayoutData(pgd);
-        pathField.setText(text("calibration.path.none"));
-        pathField.setToolTipText(text("calibration.path.tooltip"));
 
         Button activeCheck = new Button(row, SWT.CHECK);
-        activeCheck.setText(text("calibration.active"));
-        activeCheck.setToolTipText(text("calibration.active.tooltip"));
+        Bindings.text(activeCheck, key("calibration.active"), activeCheck::setText);
+        Bindings.text(activeCheck, key("calibration.active.tooltip"), activeCheck::setToolTipText);
 
         Button noiseCheck = null;
         if (withNoiseColumn) {
             noiseCheck = new Button(row, SWT.CHECK);
-            noiseCheck.setText(text("calibration.withNoise"));
-            noiseCheck.setToolTipText(text("calibration.withNoise.tooltip"));
+            Bindings.text(noiseCheck, key("calibration.withNoise"), noiseCheck::setText);
+            Bindings.text(noiseCheck, key("calibration.withNoise.tooltip"), noiseCheck::setToolTipText);
         }
 
         Image folderIcon = IconUtils.icon(row.getDisplay(), Icon.FOLDER_OPEN);
@@ -273,7 +272,7 @@ public abstract class AbstractCalibrationTabControl<P extends AbstractPane> exte
         GridData loadGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
         loadGd.heightHint = IconUtils.FILE_BUTTON_HEIGHT;
         loadBtn.setLayoutData(loadGd);
-        loadBtn.setToolTipText(text("calibration.load.tooltip"));
+        Bindings.text(loadBtn, key("calibration.load.tooltip"), loadBtn::setToolTipText);
 
         Image xmark = IconUtils.icon(row.getDisplay(), Icon.RECTANGLE_XMARK);
         Button clearBtn = new Button(row, SWT.PUSH);
@@ -281,7 +280,7 @@ public abstract class AbstractCalibrationTabControl<P extends AbstractPane> exte
         GridData clearGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
         clearGd.heightHint = IconUtils.FILE_BUTTON_HEIGHT;
         clearBtn.setLayoutData(clearGd);
-        clearBtn.setToolTipText(text("calibration.clear.tooltip"));
+        Bindings.text(clearBtn, key("calibration.clear.tooltip"), clearBtn::setToolTipText);
 
         Image plus = IconUtils.icon(row.getDisplay(), Icon.PLUS);
         Button addBtn = new Button(row, SWT.PUSH);
@@ -289,7 +288,7 @@ public abstract class AbstractCalibrationTabControl<P extends AbstractPane> exte
         GridData addGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
         addGd.heightHint = IconUtils.FILE_BUTTON_HEIGHT;
         addBtn.setLayoutData(addGd);
-        addBtn.setToolTipText(text("calibration.add.tooltip"));
+        Bindings.text(addBtn, key("calibration.add.tooltip"), addBtn::setToolTipText);
 
         Image minus = IconUtils.icon(row.getDisplay(), Icon.MINUS);
         Button removeBtn = new Button(row, SWT.PUSH);
@@ -297,7 +296,7 @@ public abstract class AbstractCalibrationTabControl<P extends AbstractPane> exte
         GridData removeGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
         removeGd.heightHint = IconUtils.FILE_BUTTON_HEIGHT;
         removeBtn.setLayoutData(removeGd);
-        removeBtn.setToolTipText(text("calibration.remove.tooltip"));
+        Bindings.text(removeBtn, key("calibration.remove.tooltip"), removeBtn::setToolTipText);
 
         CalRow r = new CalRow();
         r.composite   = row;
@@ -306,6 +305,8 @@ public abstract class AbstractCalibrationTabControl<P extends AbstractPane> exte
         r.noiseCheck  = noiseCheck;
         r.removeBtn   = removeBtn;
         r.entry       = entry;
+        showPath(r);
+        Bindings.onChange(pathField, I18n.localeProperty(), l -> showPath(r));
         updateCalRowEnable(r);
 
         // A toggle reaches the store through the calibration list's change.
@@ -338,14 +339,21 @@ public abstract class AbstractCalibrationTabControl<P extends AbstractPane> exte
     private void showLoaded(CalRow r, String path, StereoFreqRespCalibration cal) {
         r.calibration = cal;
         r.loadedPath  = cal != null ? path : null;
-        if (cal != null) {
-            r.pathField.setText(path);
-            r.pathField.setToolTipText(path);
+        showPath(r);
+        updateCalRowEnable(r);
+    }
+
+    /** Shows the row's path field for the row's state: the loaded file's path,
+     *  or the translated no-file text while it holds no calibration.  Re-run on
+     *  a language switch. */
+    private void showPath(CalRow r) {
+        if (r.calibration != null) {
+            r.pathField.setText(r.loadedPath);
+            r.pathField.setToolTipText(r.loadedPath);
         } else {
             r.pathField.setText(text("calibration.path.none"));
             r.pathField.setToolTipText(text("calibration.path.tooltip"));
         }
-        updateCalRowEnable(r);
     }
 
     /** Keeps the row's checkboxes' enabled state in sync with the row - Active
@@ -456,6 +464,11 @@ public abstract class AbstractCalibrationTabControl<P extends AbstractPane> exte
 
     /** The text of {@code key} under this control's message-key prefix. */
     private String text(String key) {
-        return I18n.t(keyPrefix + "." + key);
+        return I18n.t(key(key));
+    }
+
+    /** The full message key of {@code key} under this control's prefix. */
+    private String key(String key) {
+        return keyPrefix + "." + key;
     }
 }

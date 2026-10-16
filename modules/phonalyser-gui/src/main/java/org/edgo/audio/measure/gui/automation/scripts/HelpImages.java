@@ -27,8 +27,8 @@ import org.edgo.audio.measure.gui.automation.AbstractAutomationScript;
  * Documentation-screenshot run: starts the generator, the oscilloscope
  * and the FFT, lets the measurement settle, then captures the three panes
  * once per UI language - all from ONE measurement, so the plotted curves
- * are pixel-identical across languages (the engines survive the
- * language-switch rebuild).
+ * are pixel-identical across languages (the language switch re-translates
+ * in place; the panes and the engines run on).
  *
  * <p>Launch {@link GuiMain} from a working directory holding the prepared
  * {@code preferences.yaml}, with {@code -Dswt.autoScale=100} and

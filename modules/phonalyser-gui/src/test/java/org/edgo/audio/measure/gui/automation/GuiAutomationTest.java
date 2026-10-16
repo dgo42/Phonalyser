@@ -61,7 +61,7 @@ class GuiAutomationTest {
 
     private static final String[] LANGUAGES = { "en", "de" };
     private static final String[] PANE_IMAGES = { "generator.png", "scope.png", "fft.png" };
-    /** Generous ceiling for the whole scripted run (two language rebuilds
+    /** Generous ceiling for the whole scripted run (two language switches
      *  plus six offscreen pane renders). */
     private static final long   RUN_TIMEOUT_MS = 120_000;
     private static final long   POLL_MS        = 10;

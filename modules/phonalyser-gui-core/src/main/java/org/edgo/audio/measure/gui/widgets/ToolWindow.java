@@ -31,6 +31,7 @@ import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Listener;
 import org.eclipse.swt.widgets.Shell;
+import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.common.ShellIcons;
 
@@ -136,8 +137,16 @@ public final class ToolWindow {
         return (toolbar != null) ? buttonHeight + CONTENT_GAP : 0;
     }
 
+    /** Sets a computed title - one its owner shows again itself when the
+     *  inputs change (a language switch included). */
     public void setTitle(String title) {
         shell.setText(title);
+    }
+
+    /** Shows the translation of {@code titleKey} as the window title, now and
+     *  on every language switch, for the life of the window. */
+    public void setTitleKey(String titleKey) {
+        Bindings.text(shell, titleKey, shell::setText);
     }
 
     /** Owner sets the table's content size; the window adds the button row + window trim. */
@@ -164,12 +173,14 @@ public final class ToolWindow {
 
     /** Adds a top-row button (e.g. the scope's stats-toggle / reset).  A toggle uses the
      *  window's text colour for its icon; a push uses {@code accent} (e.g. red reset).
-     *  {@code onClick} ({@link SWT#Selection}) signals the owner to act. */
+     *  The tooltip is the translation of {@code tooltipKey} and follows the UI
+     *  language.  {@code onClick} ({@link SWT#Selection}) signals the owner to act. */
     public void addButton(Icon normal, Icon active, boolean toggle, boolean on,
-                          Color accent, String tooltip, Listener onClick) {
+                          Color accent, String tooltipKey, Listener onClick) {
         ToolButton b = toggle
-                ? toolbar().toggleButton(normal, active, accent, tooltip, on)
-                : toolbar().pushButton(normal, active, accent, tooltip);
+                ? toolbar().toggleButton(normal, active, accent, null, on)
+                : toolbar().pushButton(normal, active, accent, null);
+        Bindings.text(b, tooltipKey, b::setToolTipText);
         b.addListener(SWT.Selection, onClick);
         toolbar.setSize(toolbar.computeSize(SWT.DEFAULT, SWT.DEFAULT));
     }

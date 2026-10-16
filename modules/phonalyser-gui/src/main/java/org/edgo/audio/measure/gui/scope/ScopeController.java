@@ -27,7 +27,6 @@ import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.GuiUtil;
-import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.scope.gl.GlScopeSurface;
 import org.edgo.audio.measure.gui.sound.SharedCapture;
 import org.edgo.audio.measure.gui.sound.SignalBufferReader;
@@ -327,7 +326,7 @@ public final class ScopeController {
             UiRegistry.instance().register(HISTOGRAM_PATH, plot);
             return plot;
         });
-        w.setTitle(I18n.t("scope.histogram.window.title"));
+        w.setTitleKey("scope.histogram.window.title");
         w.addCloseListener(e -> Preferences.instance().setOscShowHistogram(false));
         histogramWindow = w;
         w.setSize(HIST_WIN_W, HIST_WIN_H);

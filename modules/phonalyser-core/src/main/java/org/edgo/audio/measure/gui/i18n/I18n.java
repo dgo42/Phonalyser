@@ -34,6 +34,7 @@ import java.util.MissingResourceException;
 import java.util.ResourceBundle;
 import java.util.stream.Stream;
 
+import org.edgo.audio.measure.bind.Property;
 import org.edgo.audio.measure.common.AppPaths;
 
 import lombok.experimental.UtilityClass;
@@ -83,22 +84,30 @@ public class I18n {
 
     private static volatile ResourceBundle bundle =
             ResourceBundle.getBundle(BUNDLE_NAME, Locale.getDefault(), BUNDLE_CL);
-    private static volatile Locale currentLocale = Locale.getDefault();
+    /** The active UI locale.  Announced only after the bundle has been
+     *  swapped, so a listener's {@link #t} already reads the new language. */
+    private static final Property<Locale> LOCALE = new Property<>(Locale.getDefault());
 
     /** Switches the active locale.  Re-resolves the bundle so subsequent
-     *  {@link #t} calls return strings from the new language.  Widgets
-     *  already created keep their previous text - a restart (or a manual
-     *  re-layout) is needed to pick up the new strings everywhere. */
+     *  {@link #t} calls return strings from the new language, then announces
+     *  the locale on {@link #localeProperty()}: widgets bound through
+     *  {@code Bindings.text} / {@code Bindings.items} follow it in place. */
     public static void setLocale(Locale locale) {
         if (locale == null) return;
         Locale.setDefault(locale);
-        currentLocale = locale;
         bundle = ResourceBundle.getBundle(BUNDLE_NAME, locale, BUNDLE_CL);
+        LOCALE.set(locale);
         log.info("UI language: {}", locale);
     }
 
     public static Locale getLocale() {
-        return currentLocale;
+        return LOCALE.get();
+    }
+
+    /** The observable active locale - fires on every real language switch,
+     *  after the bundle swap. */
+    public static Property<Locale> localeProperty() {
+        return LOCALE;
     }
 
     /** Returns the translated string for {@code key}.  When {@code args}

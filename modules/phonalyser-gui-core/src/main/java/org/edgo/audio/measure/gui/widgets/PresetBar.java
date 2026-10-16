@@ -28,6 +28,7 @@ import org.eclipse.swt.widgets.Combo;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Display;
 
+import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.i18n.I18n;
 
@@ -97,7 +98,7 @@ public final class PresetBar<P> extends Composite {
         setLayout(gl);
 
         combo = new Combo(this, SWT.DROP_DOWN);   // editable so a new name can be typed
-        combo.setToolTipText(I18n.t(prefix + ".combo.tooltip"));
+        Bindings.text(combo, prefix + ".combo.tooltip", combo::setToolTipText);
         GridData comboGd = new GridData(SWT.FILL, SWT.CENTER, true, false);
         comboGd.widthHint = COMBO_WIDTH;
         combo.setLayoutData(comboGd);
@@ -132,8 +133,8 @@ public final class PresetBar<P> extends Composite {
 
     private Button button(String key, Runnable action) {
         Button b = new Button(this, SWT.PUSH);
-        b.setText(I18n.t(key));
-        b.setToolTipText(I18n.t(key + ".tooltip"));
+        Bindings.text(b, key, b::setText);
+        Bindings.text(b, key + ".tooltip", b::setToolTipText);
         b.addListener(SWT.Selection, e -> action.run());
         return b;
     }

@@ -29,12 +29,16 @@ import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.Canvas;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Group;
+import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
+import org.edgo.audio.measure.gui.i18n.I18n;
 
 /**
  * Clickable pane title bar.  Owns its collapsed / expanded state, the
- * two text variants, and the leading arrow it paints next to the text
+ * message keys of its two text variants (resolved at paint / size time, so
+ * the title follows the UI language), and the leading arrow it paints next
+ * to the text
  * (▼ when expanded, ▶ when collapsed).  Paints horizontally by default;
  * when the host container is narrower than the title's horizontal
  * extent (e.g. the pane has been collapsed inside a horizontal
@@ -72,9 +76,9 @@ import org.edgo.audio.measure.gui.bus.MessageBus;
  *   Composite group = new Composite(parent, SWT.BORDER);
  *   group.setLayout(new GridLayout(1, false));
  *   PaneTitle title = new PaneTitle(group, Events.PANE_ID_GENERATOR,
- *           I18n.t("generator.title.expanded"),
- *           I18n.t("generator.title.collapsed"),
- *           I18n.t("generator.pane.toggle.tooltip"));
+ *           "generator.title.expanded",
+ *           "generator.title.collapsed",
+ *           "generator.pane.toggle.tooltip");
  *
  *   MessageBus.instance().subscribe(
  *           Events.paneTitleClick(Events.PANE_ID_GENERATOR),
@@ -95,8 +99,8 @@ public final class PaneTitle extends Canvas {
     private static final int ARROW_GAP = 4;
 
     @Getter private final int id;
-    private final String expandedText;
-    private final String collapsedText;
+    private final String expandedKey;
+    private final String collapsedKey;
     private final String clickEventName;
     /** When true, the title behaves as a static label: no arrow is drawn,
      *  clicking does nothing, and the hand cursor is suppressed.  Used by
@@ -117,24 +121,27 @@ public final class PaneTitle extends Canvas {
      * @param id              identifier published on the bus when the
      *                        title is clicked.  Subscribers route by ID
      *                        - see {@link Events#PANE_ID_GENERATOR} etc.
-     * @param expandedText    text painted while expanded.  Any leading
-     *                        ▼ / ▶ glyph is stripped - the arrow is
-     *                        drawn from the collapsed flag, not from
+     * @param expandedKey     message key of the text painted while
+     *                        expanded, resolved at paint time.  The arrow
+     *                        is drawn from the collapsed flag, not from
      *                        the text.
-     * @param collapsedText   text painted while collapsed.  Same
-     *                        leading-arrow stripping.
-     * @param tooltip         hover tooltip; {@code null} to skip.
+     * @param collapsedKey    message key of the text painted while
+     *                        collapsed, resolved at paint time.
+     * @param tooltipKey      message key of the hover tooltip, which
+     *                        follows the UI language; {@code null} to skip.
      */
     public PaneTitle(Composite container, int id,
-                     String expandedText, String collapsedText, String tooltip) {
+                     String expandedKey, String collapsedKey, String tooltipKey) {
         super(container, SWT.DOUBLE_BUFFERED);
         if (container instanceof Group g) g.setText("");
         this.id             = id;
-        this.expandedText   = expandedText;
-        this.collapsedText  = collapsedText;
+        this.expandedKey    = expandedKey;
+        this.collapsedKey   = collapsedKey;
         this.clickEventName = Events.paneTitleClick(id);
         addPaintListener(e -> paintTitle(e.gc));
-        if (tooltip != null) setToolTipText(tooltip);
+        if (tooltipKey != null) Bindings.text(this, tooltipKey, this::setToolTipText);
+        // The row width follows the text: a language switch re-lays out too.
+        Bindings.onChange(this, I18n.localeProperty(), l -> relayoutAndRedraw());
         int cols = (container.getLayout() instanceof GridLayout gl) ? gl.numColumns : 1;
         GridData gd = new GridData(SWT.FILL, SWT.BEGINNING, true, false);
         gd.horizontalSpan = Math.max(1, cols);
@@ -201,7 +208,7 @@ public final class PaneTitle extends Canvas {
     }
 
     private String currentText() {
-        return collapsed ? collapsedText : expandedText;
+        return I18n.t(collapsed ? collapsedKey : expandedKey);
     }
 
     private void paintTitle(GC gc) {

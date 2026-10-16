@@ -28,7 +28,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
 import org.eclipse.swt.SWT;
-import org.eclipse.swt.custom.CTabFolder;
 import org.eclipse.swt.graphics.Font;
 import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Image;
@@ -567,14 +566,14 @@ public final class ScopeTabControl extends AbstractTabControl<ScopePane> {
     // Toolbar group builders
     // -------------------------------------------------------------------------
 
-    private void buildLeftGroup(CTabFolder folder) {
-        Composite g = groupCell(folder, I18n.t("scope.tab.left"));
+    private void buildLeftGroup(TileTabFolder folder) {
+        Composite g = groupCell(folder, "scope.tab.left");
         g.setLayout(rowLayoutHorizontal(6));
 
         Preferences prefs = Preferences.instance();
 
         leftToggle = squareToggle(g, "L");
-        leftToggle.setToolTipText(I18n.t("scope.left.toggle.tooltip"));
+        Bindings.text(leftToggle, "scope.left.toggle.tooltip", leftToggle::setToolTipText);
         Bindings.check(leftToggle, prefs.oscLeftChannelEnabledProperty());
         Bindings.onChange(toolbarTabs, prefs.oscLeftChannelEnabledProperty(), v -> {
             controller.redrawViews();
@@ -585,7 +584,7 @@ public final class ScopeTabControl extends AbstractTabControl<ScopePane> {
                 V_PER_DIV_MIN, V_PER_DIV_MAX, OscParse.voltsPerDivTargets(),
                 PER_DIV_MAX_DECIMALS, 90);
         leftScale.setValue(prefs.getOscLeftVoltsPerDiv());
-        leftScale.setToolTipText(I18n.t("scope.left.scale.tooltip"));
+        Bindings.text(leftScale, "scope.left.scale.tooltip", leftScale::setToolTipText);
         // Coupled write: the offset fraction is re-derived from the OLD V/div
         // (preserveCanvasMiddle needs the pre-change value), so this can't use
         // Bindings.stepSelector - the offset must be set before V/div changes
@@ -617,7 +616,7 @@ public final class ScopeTabControl extends AbstractTabControl<ScopePane> {
         // scope-zoom gesture alone, not the per-channel V/div field.
 
         leftAc = squareToggle(g, "AC");
-        leftAc.setToolTipText(I18n.t("scope.left.ac.tooltip"));
+        Bindings.text(leftAc, "scope.left.ac.tooltip", leftAc::setToolTipText);
         Bindings.check(leftAc, prefs.oscLeftAcModeProperty());
         Bindings.onChange(toolbarTabs, prefs.oscLeftAcModeProperty(), v -> {
             controller.redrawViews();
@@ -627,7 +626,7 @@ public final class ScopeTabControl extends AbstractTabControl<ScopePane> {
         Image sincImg = createSincFractionImage(g.getDisplay());
         leftSinc = new Button(g, SWT.CHECK);
         leftSinc.setImage(sincImg);
-        leftSinc.setToolTipText(I18n.t("scope.sinc.tooltip"));
+        Bindings.text(leftSinc, "scope.sinc.tooltip", leftSinc::setToolTipText);
         Bindings.check(leftSinc, prefs.oscLeftSincInterpEnabledProperty());
         Bindings.onChange(toolbarTabs, prefs.oscLeftSincInterpEnabledProperty(), v -> {
             controller.redrawViews();
@@ -636,28 +635,30 @@ public final class ScopeTabControl extends AbstractTabControl<ScopePane> {
         leftSinc.addDisposeListener(e -> sincImg.dispose());
 
         leftResidual = new Button(g, SWT.CHECK);
-        leftResidual.setText(I18n.t("scope.residual.label"));
-        leftResidual.setToolTipText(I18n.t("scope.left.residual.tooltip"));
+        Bindings.text(leftResidual, "scope.residual.label", leftResidual::setText);
+        Bindings.text(leftResidual, "scope.left.residual.tooltip", leftResidual::setToolTipText);
         Bindings.check(leftResidual, prefs.oscLeftResidualEnabledProperty());
         Bindings.onChange(toolbarTabs, prefs.oscLeftResidualEnabledProperty(), v -> {
             controller.redrawViews();
             toolbarTabs.refreshTab(TAB_LEFT);
         });
 
-        new Label(g, SWT.NONE).setText(I18n.t("scope.mains.label"));
+        Label leftMainsLabel = new Label(g, SWT.NONE);
+        Bindings.text(leftMainsLabel, "scope.mains.label", leftMainsLabel::setText);
         leftMains = new Combo(g, SWT.READ_ONLY);
         leftMains.setItems(MainsSuppression.LABELS);
-        leftMains.setToolTipText(I18n.t("scope.mains.tooltip"));
+        Bindings.text(leftMains, "scope.mains.tooltip", leftMains::setToolTipText);
         Bindings.combo(leftMains, prefs.oscLeftMainsSuppressionProperty(), MainsSuppression.values());
         Bindings.onChange(toolbarTabs, prefs.oscLeftMainsSuppressionProperty(), v -> {
             controller.redrawViews();
             toolbarTabs.refreshTab(TAB_LEFT);
         });
 
-        new Label(g, SWT.NONE).setText(I18n.t("scope.lpf.label"));
+        Label leftLpfLabel = new Label(g, SWT.NONE);
+        Bindings.text(leftLpfLabel, "scope.lpf.label", leftLpfLabel::setText);
         leftLpf = new Combo(g, SWT.READ_ONLY);
         leftLpf.setItems(LpfMode.LABELS);
-        leftLpf.setToolTipText(I18n.t("scope.lpf.tooltip"));
+        Bindings.text(leftLpf, "scope.lpf.tooltip", leftLpf::setToolTipText);
         Bindings.combo(leftLpf, prefs.oscLeftLpfProperty(), LpfMode.values());
         Bindings.onChange(toolbarTabs, prefs.oscLeftLpfProperty(), v -> {
             controller.redrawViews();
@@ -665,14 +666,14 @@ public final class ScopeTabControl extends AbstractTabControl<ScopePane> {
         });
     }
 
-    private void buildRightGroup(CTabFolder folder) {
-        Composite g = groupCell(folder, I18n.t("scope.tab.right"));
+    private void buildRightGroup(TileTabFolder folder) {
+        Composite g = groupCell(folder, "scope.tab.right");
         g.setLayout(rowLayoutHorizontal(6));
 
         Preferences prefs = Preferences.instance();
 
         rightToggle = squareToggle(g, "R");
-        rightToggle.setToolTipText(I18n.t("scope.right.toggle.tooltip"));
+        Bindings.text(rightToggle, "scope.right.toggle.tooltip", rightToggle::setToolTipText);
         Bindings.check(rightToggle, prefs.oscRightChannelEnabledProperty());
         Bindings.onChange(toolbarTabs, prefs.oscRightChannelEnabledProperty(), v -> {
             controller.redrawViews();
@@ -683,7 +684,7 @@ public final class ScopeTabControl extends AbstractTabControl<ScopePane> {
                 V_PER_DIV_MIN, V_PER_DIV_MAX, OscParse.voltsPerDivTargets(),
                 PER_DIV_MAX_DECIMALS, 90);
         rightScale.setValue(prefs.getOscRightVoltsPerDiv());
-        rightScale.setToolTipText(I18n.t("scope.right.scale.tooltip"));
+        Bindings.text(rightScale, "scope.right.scale.tooltip", rightScale::setToolTipText);
         // Coupled write (see leftScale): offset re-derived from the OLD V/div,
         // so no Bindings helper fits.  Both prefs are bound + auto-save, so the
         // explicit save() is retired.
@@ -704,7 +705,7 @@ public final class ScopeTabControl extends AbstractTabControl<ScopePane> {
         // listener above) - coupling is the ctrl+wheel scope zoom alone.
 
         rightAc = squareToggle(g, "AC");
-        rightAc.setToolTipText(I18n.t("scope.right.ac.tooltip"));
+        Bindings.text(rightAc, "scope.right.ac.tooltip", rightAc::setToolTipText);
         Bindings.check(rightAc, prefs.oscRightAcModeProperty());
         Bindings.onChange(toolbarTabs, prefs.oscRightAcModeProperty(), v -> {
             controller.redrawViews();
@@ -714,7 +715,7 @@ public final class ScopeTabControl extends AbstractTabControl<ScopePane> {
         Image sincImg = createSincFractionImage(g.getDisplay());
         rightSinc = new Button(g, SWT.CHECK);
         rightSinc.setImage(sincImg);
-        rightSinc.setToolTipText(I18n.t("scope.sinc.tooltip"));
+        Bindings.text(rightSinc, "scope.sinc.tooltip", rightSinc::setToolTipText);
         Bindings.check(rightSinc, prefs.oscRightSincInterpEnabledProperty());
         Bindings.onChange(toolbarTabs, prefs.oscRightSincInterpEnabledProperty(), v -> {
             controller.redrawViews();
@@ -723,28 +724,30 @@ public final class ScopeTabControl extends AbstractTabControl<ScopePane> {
         rightSinc.addDisposeListener(e -> sincImg.dispose());
 
         rightResidual = new Button(g, SWT.CHECK);
-        rightResidual.setText(I18n.t("scope.residual.label"));
-        rightResidual.setToolTipText(I18n.t("scope.right.residual.tooltip"));
+        Bindings.text(rightResidual, "scope.residual.label", rightResidual::setText);
+        Bindings.text(rightResidual, "scope.right.residual.tooltip", rightResidual::setToolTipText);
         Bindings.check(rightResidual, prefs.oscRightResidualEnabledProperty());
         Bindings.onChange(toolbarTabs, prefs.oscRightResidualEnabledProperty(), v -> {
             controller.redrawViews();
             toolbarTabs.refreshTab(TAB_RIGHT);
         });
 
-        new Label(g, SWT.NONE).setText(I18n.t("scope.mains.label"));
+        Label rightMainsLabel = new Label(g, SWT.NONE);
+        Bindings.text(rightMainsLabel, "scope.mains.label", rightMainsLabel::setText);
         rightMains = new Combo(g, SWT.READ_ONLY);
         rightMains.setItems(MainsSuppression.LABELS);
-        rightMains.setToolTipText(I18n.t("scope.mains.tooltip"));
+        Bindings.text(rightMains, "scope.mains.tooltip", rightMains::setToolTipText);
         Bindings.combo(rightMains, prefs.oscRightMainsSuppressionProperty(), MainsSuppression.values());
         Bindings.onChange(toolbarTabs, prefs.oscRightMainsSuppressionProperty(), v -> {
             controller.redrawViews();
             toolbarTabs.refreshTab(TAB_RIGHT);
         });
 
-        new Label(g, SWT.NONE).setText(I18n.t("scope.lpf.label"));
+        Label rightLpfLabel = new Label(g, SWT.NONE);
+        Bindings.text(rightLpfLabel, "scope.lpf.label", rightLpfLabel::setText);
         rightLpf = new Combo(g, SWT.READ_ONLY);
         rightLpf.setItems(LpfMode.LABELS);
-        rightLpf.setToolTipText(I18n.t("scope.lpf.tooltip"));
+        Bindings.text(rightLpf, "scope.lpf.tooltip", rightLpf::setToolTipText);
         Bindings.combo(rightLpf, prefs.oscRightLpfProperty(), LpfMode.values());
         Bindings.onChange(toolbarTabs, prefs.oscRightLpfProperty(), v -> {
             controller.redrawViews();
@@ -752,15 +755,15 @@ public final class ScopeTabControl extends AbstractTabControl<ScopePane> {
         });
     }
 
-    private void buildHorizontalGroup(CTabFolder folder) {
-        Composite g = groupCell(folder, I18n.t("scope.tab.horizontal"));
+    private void buildHorizontalGroup(TileTabFolder folder) {
+        Composite g = groupCell(folder, "scope.tab.horizontal");
         g.setLayout(rowLayoutHorizontal(6));
 
         Preferences prefs = Preferences.instance();
         timeScale = new NumericStepField(g, UnitFamily.TIME_PER_DIV,
                 T_PER_DIV_MIN, T_PER_DIV_MAX, OscParse.timePerDivTargets(),
                 PER_DIV_MAX_DECIMALS, 90);
-        timeScale.setToolTipText(I18n.t("scope.time.scale.tooltip"));
+        Bindings.text(timeScale, "scope.time.scale.tooltip", timeScale::setToolTipText);
         Bindings.stepField(timeScale, prefs.oscTimePerDivProperty());
         // viewCenterFrames is the primary state and does NOT change on
         // t/div - only the window's width changes.  applyViewState
@@ -780,8 +783,8 @@ public final class ScopeTabControl extends AbstractTabControl<ScopePane> {
         rowSpacer.setLayoutData(new RowData(0, SQUARE_BUTTON));
     }
 
-    private void buildTriggerGroup(CTabFolder folder) {
-        Composite g = groupCell(folder, I18n.t("scope.tab.trigger"));
+    private void buildTriggerGroup(TileTabFolder folder) {
+        Composite g = groupCell(folder, "scope.tab.trigger");
         triggerGroup = g;
         g.setLayout(rowLayoutHorizontal(10));
 
@@ -791,8 +794,8 @@ public final class ScopeTabControl extends AbstractTabControl<ScopePane> {
         chSet.setLayout(flushRowLayoutHorizontal(2));
         chL = squareToggle(chSet, "L");
         chR = squareToggle(chSet, "R");
-        chL.setToolTipText(I18n.t("scope.trigger.channel.left.tooltip"));
-        chR.setToolTipText(I18n.t("scope.trigger.channel.right.tooltip"));
+        Bindings.text(chL, "scope.trigger.channel.left.tooltip", chL::setToolTipText);
+        Bindings.text(chR, "scope.trigger.channel.right.tooltip", chR::setToolTipText);
         makeDependentGroup(chL, chR);
         Map<Button, Channel> chMap = new LinkedHashMap<>();
         chMap.put(chL, Channel.L);
@@ -816,8 +819,8 @@ public final class ScopeTabControl extends AbstractTabControl<ScopePane> {
         edgeSet.setLayout(flushRowLayoutHorizontal(2));
         edgeRise = squareToggle(edgeSet, "↑");
         edgeFall = squareToggle(edgeSet, "↓");
-        edgeRise.setToolTipText(I18n.t("scope.trigger.edge.rise.tooltip"));
-        edgeFall.setToolTipText(I18n.t("scope.trigger.edge.fall.tooltip"));
+        Bindings.text(edgeRise, "scope.trigger.edge.rise.tooltip", edgeRise::setToolTipText);
+        Bindings.text(edgeFall, "scope.trigger.edge.fall.tooltip", edgeFall::setToolTipText);
         makeDependentGroup(edgeRise, edgeFall);
         Map<Button, TriggerEdge> edgeMap = new LinkedHashMap<>();
         edgeMap.put(edgeRise, TriggerEdge.RISE);
@@ -836,8 +839,8 @@ public final class ScopeTabControl extends AbstractTabControl<ScopePane> {
         typeSet.setLayout(flushRowLayoutHorizontal(2));
         typeEdge   = squareToggle(typeSet, "E");
         typeGlitch = squareToggle(typeSet, "G");
-        typeEdge  .setToolTipText(I18n.t("scope.trigger.type.edge.tooltip"));
-        typeGlitch.setToolTipText(I18n.t("scope.trigger.type.glitch.tooltip"));
+        Bindings.text(typeEdge,   "scope.trigger.type.edge.tooltip",   typeEdge::setToolTipText);
+        Bindings.text(typeGlitch, "scope.trigger.type.glitch.tooltip", typeGlitch::setToolTipText);
         makeDependentGroup(typeEdge, typeGlitch);
         Map<Button, TriggerType> typeMap = new LinkedHashMap<>();
         typeMap.put(typeEdge,   TriggerType.EDGE);
@@ -870,9 +873,9 @@ public final class ScopeTabControl extends AbstractTabControl<ScopePane> {
         modeAuto   = squareToggle(modeSet, "A");
         modeNormal = squareToggle(modeSet, "N");
         modeSingle = squareToggle(modeSet, "S");
-        modeAuto  .setToolTipText(I18n.t("scope.trigger.auto"));
-        modeNormal.setToolTipText(I18n.t("scope.trigger.normal"));
-        modeSingle.setToolTipText(I18n.t("scope.trigger.single"));
+        Bindings.text(modeAuto,   "scope.trigger.auto",   modeAuto::setToolTipText);
+        Bindings.text(modeNormal, "scope.trigger.normal", modeNormal::setToolTipText);
+        Bindings.text(modeSingle, "scope.trigger.single", modeSingle::setToolTipText);
         makeDependentGroup(modeAuto, modeNormal, modeSingle);
         Map<Button, TriggerMode> modeMap = new LinkedHashMap<>();
         modeMap.put(modeAuto,   TriggerMode.AUTO);
@@ -886,7 +889,7 @@ public final class ScopeTabControl extends AbstractTabControl<ScopePane> {
         triggerStartBtn.setImage(triggerPlayIcon);
         // Image is cached and owned by IconUtils - disposed when the
         // main shell tears down, not on button dispose.
-        triggerStartBtn.setToolTipText(I18n.t("scope.trigger.start.tooltip"));
+        Bindings.text(triggerStartBtn, "scope.trigger.start.tooltip", triggerStartBtn::setToolTipText);
         triggerStartBtn.setLayoutData(new RowData(SQUARE_BUTTON, SQUARE_BUTTON));
         triggerStartBtn.setEnabled(modeSingle.getSelection());
         // Toggle: pressed = a single shot is armed (display frozen, waiting);
@@ -910,13 +913,13 @@ public final class ScopeTabControl extends AbstractTabControl<ScopePane> {
         // label toggles the checkbox itself instead of doing nothing
         // (or accidentally focussing the numeric field next to it).
         hysteresisEnable = new Button(hystSet, SWT.CHECK);
-        hysteresisEnable.setText(I18n.t("scope.trigger.hysteresis"));
-        hysteresisEnable.setToolTipText(I18n.t("scope.trigger.hysteresis.tooltip"));
+        Bindings.text(hysteresisEnable, "scope.trigger.hysteresis", hysteresisEnable::setText);
+        Bindings.text(hysteresisEnable, "scope.trigger.hysteresis.tooltip", hysteresisEnable::setToolTipText);
 
         hysteresisSel = new NumericStepField(hystSet, UnitFamily.DIVISIONS,
                 0, HYST_MAX_DIV, HYST_STEP_DIV, HYST_STEP_DIV, 1, 50);
         hysteresisSel.setValue(prefs.getOscTriggerHysteresisDiv());
-        hysteresisSel.setToolTipText(I18n.t("scope.trigger.hysteresis.tooltip"));
+        Bindings.text(hysteresisSel, "scope.trigger.hysteresis.tooltip", hysteresisSel::setToolTipText);
         hysteresisSel.setEnabled(prefs.isOscTriggerHysteresisEnabled());
         hysteresisSel.addSelectionListener(e -> {
             prefs.setOscTriggerHysteresisDiv(hysteresisSel.getValue());
@@ -935,8 +938,10 @@ public final class ScopeTabControl extends AbstractTabControl<ScopePane> {
         // GENERATOR_SIGNAL_CHANGED below so toggling the generator
         // form live updates the enabled state.
         reconstructedBeatBtn = new Button(g, SWT.CHECK);
-        reconstructedBeatBtn.setText(I18n.t("scope.trigger.reconstructedBeat"));
-        reconstructedBeatBtn.setToolTipText(I18n.t("scope.trigger.reconstructedBeat.tooltip"));
+        Bindings.text(reconstructedBeatBtn, "scope.trigger.reconstructedBeat",
+                reconstructedBeatBtn::setText);
+        Bindings.text(reconstructedBeatBtn, "scope.trigger.reconstructedBeat.tooltip",
+                reconstructedBeatBtn::setToolTipText);
         // Enabled state follows the generator form (DUAL_TONE), driven by
         // syncReconstructedBeatEnabled on GENERATOR_SIGNAL_CHANGED - not a
         // Preferences binding.  Only the checked value binds to the pref.
@@ -970,8 +975,8 @@ public final class ScopeTabControl extends AbstractTabControl<ScopePane> {
      * overwrites if the name already exists).  Load reads back the named
      * preset and pushes every value into the UI controls and prefs.
      */
-    private void buildPresetsGroup(CTabFolder folder) {
-        Composite g = groupCell(folder, I18n.t("scope.tab.presets"));
+    private void buildPresetsGroup(TileTabFolder folder) {
+        Composite g = groupCell(folder, "scope.tab.presets");
         g.setLayout(new FillLayout());
         new PresetBar<OscPreset>(g, "scope.presets", "oscilloscope.html#scope-tab-presets",
                 new PresetBar.Store<>() {
@@ -1062,10 +1067,7 @@ public final class ScopeTabControl extends AbstractTabControl<ScopePane> {
         prefs.setOscTriggerPositionFrac(p.getTriggerPositionFrac());
         prefs.setOscTriggerLevelFrac   (p.getTriggerLevelFrac());
         prefs.save();
-        toolbarTabs.refreshTab(TAB_LEFT);
-        toolbarTabs.refreshTab(TAB_RIGHT);
-        toolbarTabs.refreshTab(TAB_HORIZONTAL);
-        toolbarTabs.refreshTab(TAB_TRIGGER);
+        toolbarTabs.refreshTabs();
         controller.redrawViews();
     }
 
@@ -1119,12 +1121,12 @@ public final class ScopeTabControl extends AbstractTabControl<ScopePane> {
      * button is square (h = w = SQUARE_BUTTON).  Calibrate starts disabled
      * and is gated by the pane via {@link #setCalibrateEnabled(boolean)}.
      */
-    private void buildScreenshotGroup(CTabFolder folder, Image cameraIcon, Image crosshairIcon) {
-        Composite g = groupCell(folder, I18n.t("scope.tab.utility"));
+    private void buildScreenshotGroup(TileTabFolder folder, Image cameraIcon, Image crosshairIcon) {
+        Composite g = groupCell(folder, "scope.tab.utility");
         g.setLayout(rowLayoutHorizontal(6));
         Button shotBtn = new Button(g, SWT.PUSH);
         shotBtn.setImage(cameraIcon);
-        shotBtn.setToolTipText(I18n.t("scope.screenshot.tooltip"));
+        Bindings.text(shotBtn, "scope.screenshot.tooltip", shotBtn::setToolTipText);
         shotBtn.setLayoutData(new RowData(IconUtils.ACTION_BUTTON_PX, IconUtils.ACTION_BUTTON_PX));
         // The screenshot dialog clones the whole pane offscreen, so the pane
         // owns it - reach it through the owner.
@@ -1132,7 +1134,7 @@ public final class ScopeTabControl extends AbstractTabControl<ScopePane> {
 
         calibrateButton = new Button(g, SWT.PUSH);
         calibrateButton.setImage(crosshairIcon);
-        calibrateButton.setToolTipText(I18n.t("scope.calibrate.tooltip"));
+        Bindings.text(calibrateButton, "scope.calibrate.tooltip", calibrateButton::setToolTipText);
         calibrateButton.setLayoutData(new RowData(IconUtils.ACTION_BUTTON_PX, IconUtils.ACTION_BUTTON_PX));
         calibrateButton.setEnabled(false);
         calibrateButton.addListener(SWT.Selection, e -> openCalibrationDialog());
@@ -1206,9 +1208,9 @@ public final class ScopeTabControl extends AbstractTabControl<ScopePane> {
      * duration step field + save (floppy-disk).  Clear button removed:
      * the group is deliberately a minimal three-control set.
      */
-    private void buildScopeSaveToGroup(CTabFolder folder) {
+    private void buildScopeSaveToGroup(TileTabFolder folder) {
         Preferences prefs = Preferences.instance();
-        Composite g = groupCell(folder, I18n.t("scope.save.title"));
+        Composite g = groupCell(folder, "scope.save.title");
         GridLayout gl = new GridLayout(4, false);
         gl.marginWidth = 6; gl.marginHeight = 4;
         gl.horizontalSpacing = 4;
@@ -1227,14 +1229,14 @@ public final class ScopeTabControl extends AbstractTabControl<ScopePane> {
         GridData browseGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
         browseGd.heightHint = IconUtils.FILE_BUTTON_HEIGHT;
         browse.setLayoutData(browseGd);
-        browse.setToolTipText(I18n.t("scope.save.browse.tooltip"));
+        Bindings.text(browse, "scope.save.browse.tooltip", browse::setToolTipText);
         browse.addListener(SWT.Selection, e -> openScopeSaveBrowse(pathField));
 
         NumericStepField durField = new NumericStepField(g, UnitFamily.TIME,
                 SAVE_DURATION_MIN_SEC, TIME_MAX_SEC, TIME_MAX_DECIMALS,
                 54);     // 60% of the previous 90 px width
         durField.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
-        durField.setToolTipText(I18n.t("scope.save.duration.tooltip"));
+        Bindings.text(durField, "scope.save.duration.tooltip", durField::setToolTipText);
         Bindings.stepField(durField, prefs.oscSaveDurationSecondsProperty());
 
         Button save = new Button(g, SWT.PUSH);
@@ -1242,7 +1244,7 @@ public final class ScopeTabControl extends AbstractTabControl<ScopePane> {
         GridData saveGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
         saveGd.heightHint = IconUtils.FILE_BUTTON_HEIGHT;
         save.setLayoutData(saveGd);
-        save.setToolTipText(I18n.t("scope.save.tooltip"));
+        Bindings.text(save, "scope.save.tooltip", save::setToolTipText);
         save.addListener(SWT.Selection, e -> doScopeSave(pathField.getText(), durField.getValue()));
     }
 
@@ -1253,9 +1255,9 @@ public final class ScopeTabControl extends AbstractTabControl<ScopePane> {
      * worker coordination), stops live recording if running, and
      * attaches the static waveform to the scope views.
      */
-    private void buildScopeOpenSignalGroup(CTabFolder folder) {
+    private void buildScopeOpenSignalGroup(TileTabFolder folder) {
         Preferences prefs = Preferences.instance();
-        Composite g = groupCell(folder, I18n.t("scope.openSignal.title"));
+        Composite g = groupCell(folder, "scope.openSignal.title");
         GridLayout gl = new GridLayout(2, false);
         gl.marginWidth = 6; gl.marginHeight = 4;
         gl.horizontalSpacing = 4;
@@ -1274,7 +1276,7 @@ public final class ScopeTabControl extends AbstractTabControl<ScopePane> {
         GridData browseGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
         browseGd.heightHint = IconUtils.FILE_BUTTON_HEIGHT;
         browse.setLayoutData(browseGd);
-        browse.setToolTipText(I18n.t("scope.openSignal.browse.tooltip"));
+        Bindings.text(browse, "scope.openSignal.browse.tooltip", browse::setToolTipText);
         browse.addListener(SWT.Selection, e -> doOpenSignalBrowse());
     }
 

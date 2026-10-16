@@ -595,7 +595,7 @@ public final class FreqRespTabControl extends AbstractCalibrationTabControl<Freq
     // -------------------------------------------------------------------------
 
     private void buildSettingsTab() {
-        Composite g = groupCell(toolbarTabs, I18n.t("freqResp.tab.settings"));
+        Composite g = groupCell(toolbarTabs, "freqResp.tab.settings");
         GridLayout gl = new GridLayout(4, false);
         gl.marginWidth = 6; gl.marginHeight = 4;
         gl.horizontalSpacing = 6; gl.verticalSpacing = 4;
@@ -606,10 +606,10 @@ public final class FreqRespTabControl extends AbstractCalibrationTabControl<Freq
         // The stored band comes down to the ceiling BEFORE the fields are built,
         // so the two-way binds below seed an already-legal value.
         clampSweepBandToCeiling();
-        addLabel(g, I18n.t("freqResp.settings.start"));
+        addLabel(g, "freqResp.settings.start");
         NumericStepField startField = freqField(g);
         startField.setMax(sweepBandCeilingHz());
-        startField.setToolTipText(I18n.t("freqResp.settings.start.tooltip"));
+        Bindings.text(startField, "freqResp.settings.start.tooltip", startField::setToolTipText);
         // Two-way bind; the floor clamp (≥ 1 Hz) and the tab-tile refresh ride
         // an onChange on the same pref, so a direct text entry below the floor
         // is corrected in the pref (which echoes back to the field).
@@ -619,10 +619,10 @@ public final class FreqRespTabControl extends AbstractCalibrationTabControl<Freq
             toolbarTabs.refreshTab(TAB_FREQRESP_SETTINGS);
         });
 
-        addLabel(g, I18n.t("freqResp.settings.stop"));
+        addLabel(g, "freqResp.settings.stop");
         NumericStepField stopField = freqField(g);
         stopField.setMax(sweepBandCeilingHz());
-        stopField.setToolTipText(I18n.t("freqResp.settings.stop.tooltip"));
+        Bindings.text(stopField, "freqResp.settings.stop.tooltip", stopField::setToolTipText);
         // Cross-field clamp: stop must stay at least start + 1.  A plain
         // two-way bind would lose it, so it is re-applied on the pref via
         // onChange (the re-set echoes to the field through the stepField bind).
@@ -634,7 +634,7 @@ public final class FreqRespTabControl extends AbstractCalibrationTabControl<Freq
         });
 
         // ---- Row 2: amplitude (Vrms) + duration ----------------------------
-        addLabel(g, I18n.t("freqResp.settings.amplitude"));
+        addLabel(g, "freqResp.settings.amplitude");
         // No-clip ceiling for the sweep stimulus: the sweep is a sine, so full
         // scale sits at fsPeak·rawRms(sweep) = fsPeak/√2 - V, dBV and dBFS all
         // trim to it (0 dBFS is exactly the top).  The field holds V RMS, so
@@ -656,7 +656,7 @@ public final class FreqRespTabControl extends AbstractCalibrationTabControl<Freq
             ampField.setMax(audio.calibrationOrDefault(false).fsRms(Channel.L));
             ampField.seedPair(prefs.getFreqRespAmplitude());
         });
-        ampField.setToolTipText(I18n.t("freqResp.settings.amplitude.tooltip"));
+        Bindings.text(ampField, "freqResp.settings.amplitude.tooltip", ampField::setToolTipText);
         // The field carries the pair the operator entered; the store resolves it
         // to Vrms at use.  Seed first, then wire, so the seed cannot re-enter
         // the pref write.
@@ -685,11 +685,15 @@ public final class FreqRespTabControl extends AbstractCalibrationTabControl<Freq
         fftSizeLabel.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
         Combo fftSizeCombo = new Combo(g, SWT.READ_ONLY);
         for (String s : offeredFftSizeLabels) fftSizeCombo.add(s);
-        String sizeTip = I18n.t("freqResp.settings.fftSize.tooltip");
-        if (offeredFftSizes.length < FFT_SIZE_VALUES.length) {
-            sizeTip += "\n" + I18n.t("freqResp.settings.fftSize.heapCapped");
-        }
-        fftSizeCombo.setToolTipText(sizeTip);
+        // The heap cap is fixed for the process; only the language moves
+        // the tooltip.
+        Bindings.text(fftSizeCombo, () -> {
+            String sizeTip = I18n.t("freqResp.settings.fftSize.tooltip");
+            if (offeredFftSizes.length < FFT_SIZE_VALUES.length) {
+                sizeTip += "\n" + I18n.t("freqResp.settings.fftSize.heapCapped");
+            }
+            return sizeTip;
+        }, fftSizeCombo::setToolTipText);
         fftSizeCombo.setLayoutData(comboFillGd());
         // Index-mapped combo (selection index -> FFT_SIZE_VALUES[idx] sample
         // count), so it can't use the ordinal-based Bindings.combo - the
@@ -706,29 +710,30 @@ public final class FreqRespTabControl extends AbstractCalibrationTabControl<Freq
             refreshFftSizeLabel();
             toolbarTabs.refreshTab(TAB_FREQRESP_SETTINGS);
         });
+        Bindings.onChange(fftSizeLabel, I18n.localeProperty(), l -> refreshFftSizeLabel());
         refreshFftSizeLabel();
 
         // ---- Row 3: sweep points + lead-in ---------------------------------
-        addLabel(g, I18n.t("freqResp.settings.points"));
+        addLabel(g, "freqResp.settings.points");
         // List field replacing the old preset dropdown + "Manual..." prompt:
         // the wheel jumps along the power-of-2 presets (plus the runtime
         // "Nyquist/2" entry, shown as text), free typing covers everything
         // between.
         NumericStepField pointsField = new NumericStepField(g, UnitFamily.NONE,
                 SWEEP_POINTS_MIN, SWEEP_POINTS_MAX, sweepPointSeries(), 0, 110);
-        pointsField.setNamedValue(nyquistPointCount(),
-                I18n.t("freqResp.settings.points.halfScale"));
-        pointsField.setToolTipText(I18n.t("freqResp.settings.points.tooltip"));
+        showHalfScalePoints(pointsField);
+        Bindings.onChange(pointsField, I18n.localeProperty(), l -> showHalfScalePoints(pointsField));
+        Bindings.text(pointsField, "freqResp.settings.points.tooltip", pointsField::setToolTipText);
         pointsField.setLayoutData(comboGd());
         Bindings.stepFieldInt(pointsField, prefs.freqRespSweepPointsProperty());
         Bindings.onChange(toolbarTabs, prefs.freqRespSweepPointsProperty(),
                 v -> toolbarTabs.refreshTab(TAB_FREQRESP_SETTINGS));
 
-        addLabel(g, I18n.t("freqResp.settings.leadIn"));
+        addLabel(g, "freqResp.settings.leadIn");
         NumericStepField leadInField = new NumericStepField(g, UnitFamily.TIME,
                 FreqRespConstants.LEAD_IN_MIN_SEC, TIME_MAX_SEC, TIME_MAX_DECIMALS, 90);
         leadInField.setLayoutData(comboGd());
-        leadInField.setToolTipText(I18n.t("freqResp.settings.leadIn.tooltip"));
+        Bindings.text(leadInField, "freqResp.settings.leadIn.tooltip", leadInField::setToolTipText);
         // Two-way bind.  The ≥ 0.05 s floor clamp and the derived-duration
         // coupling (lead-in eats into the same FFT window) are the
         // controller's leadIn subscription; the label follows the derived
@@ -736,11 +741,11 @@ public final class FreqRespTabControl extends AbstractCalibrationTabControl<Freq
         Bindings.stepField(leadInField, prefs.freqRespLeadInSecProperty());
 
         // ---- Row 4: dither + nyquist fraction ------------------------------
-        addLabel(g, I18n.t("freqResp.settings.dither"));
+        addLabel(g, "freqResp.settings.dither");
         Combo ditherCombo = new Combo(g, SWT.READ_ONLY);
         for (int i = 0; i <= 31; i++) ditherCombo.add(i == 0 ? "Off" : String.valueOf(i));
         ditherCombo.setLayoutData(comboFillGd());
-        ditherCombo.setToolTipText(I18n.t("freqResp.settings.dither.tooltip"));
+        Bindings.text(ditherCombo, "freqResp.settings.dither.tooltip", ditherCombo::setToolTipText);
         // Index-mapped combo where the selection index IS the bit count, so
         // it can't use the ordinal-based Bindings.combo (no enum) but needs no
         // value-array indirection either.  No side-effects beyond the pref
@@ -751,12 +756,14 @@ public final class FreqRespTabControl extends AbstractCalibrationTabControl<Freq
         // channels are still deconvolved; the view's L/R buttons pick which
         // trace shows.  Ordinal-bound to OutputChannels {BOTH, LEFT, RIGHT},
         // mirroring the generator pane's combo.
-        addLabel(g, I18n.t("freqResp.settings.outputChannel"));
+        addLabel(g, "freqResp.settings.outputChannel");
         Combo outputChannelCombo = new Combo(g, SWT.READ_ONLY);
-        outputChannelCombo.add(I18n.t("common.channel.both"));
-        outputChannelCombo.add(I18n.t("common.channel.left"));
-        outputChannelCombo.add(I18n.t("common.channel.right"));
-        outputChannelCombo.setToolTipText(I18n.t("freqResp.settings.outputChannel.tooltip"));
+        Bindings.items(outputChannelCombo, () -> new String[]{
+                I18n.t("common.channel.both"),
+                I18n.t("common.channel.left"),
+                I18n.t("common.channel.right") });
+        Bindings.text(outputChannelCombo, "freqResp.settings.outputChannel.tooltip",
+                outputChannelCombo::setToolTipText);
         outputChannelCombo.setLayoutData(comboFillGd());
         Bindings.combo(outputChannelCombo, prefs.freqRespOutputChannelsProperty(),
                 OutputChannels.values());
@@ -771,8 +778,7 @@ public final class FreqRespTabControl extends AbstractCalibrationTabControl<Freq
             stopField.setMax(ceiling);
             clampSweepBandToCeiling();
             pointsField.setSeries(sweepPointSeries());
-            pointsField.setNamedValue(nyquistPointCount(),
-                    I18n.t("freqResp.settings.points.halfScale"));
+            showHalfScalePoints(pointsField);
         };
         MessageBus.instance().subscribe(Events.AUDIO_FORMAT_CHANGED, audioFormatListener);
         addDisposeListener(e ->
@@ -887,6 +893,14 @@ public final class FreqRespTabControl extends AbstractCalibrationTabControl<Freq
         return Preferences.instance().current().getInputSampleRate() / 2.0;
     }
 
+    /** Declares the points field's {@link #nyquistPointCount()} entry with its
+     *  translated name - the one rule for the build, an audio-format edit
+     *  (the count moves) and a language switch (the name moves). */
+    private void showHalfScalePoints(NumericStepField pointsField) {
+        pointsField.setNamedValue(nyquistPointCount(),
+                I18n.t("freqResp.settings.points.halfScale"));
+    }
+
     /** Selects the combo row whose FFT-size value matches the given
      *  number of samples.  Falls back to the smallest entry (64k) when
      *  the prefs value doesn't line up - should be impossible because
@@ -918,7 +932,7 @@ public final class FreqRespTabControl extends AbstractCalibrationTabControl<Freq
     // -------------------------------------------------------------------------
 
     private void buildRiaaTab() {
-        Composite g = groupCell(toolbarTabs, I18n.t("freqResp.tab.riaa"));
+        Composite g = groupCell(toolbarTabs, "freqResp.tab.riaa");
         GridLayout gl = new GridLayout(1, false);
         gl.marginWidth = 8; gl.marginHeight = 6;
         gl.verticalSpacing = 4;
@@ -989,8 +1003,8 @@ public final class FreqRespTabControl extends AbstractCalibrationTabControl<Freq
 
     private Button checkbox(Composite parent, String labelKey, String tipKey, boolean initial) {
         Button b = new Button(parent, SWT.CHECK);
-        b.setText(I18n.t(labelKey));
-        b.setToolTipText(I18n.t(tipKey));
+        Bindings.text(b, labelKey, b::setText);
+        Bindings.text(b, tipKey, b::setToolTipText);
         b.setSelection(initial);
         b.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, true, false));
         return b;
@@ -1019,7 +1033,7 @@ public final class FreqRespTabControl extends AbstractCalibrationTabControl<Freq
         // (below, spanning both) the Settings group; col3 carries the per-type
         // picture, native 1:1 and TOP-aligned, spanning both rows and living
         // OUTSIDE the bordered group.
-        Composite g = groupCell(toolbarTabs, I18n.t("freqResp.tab.filters"));
+        Composite g = groupCell(toolbarTabs, "freqResp.tab.filters");
         GridLayout gl = new GridLayout(FILTER_TAB_COLS, false);
         gl.marginWidth = 8; gl.marginHeight = 6;
         gl.horizontalSpacing = 12; gl.verticalSpacing = 6;
@@ -1053,12 +1067,12 @@ public final class FreqRespTabControl extends AbstractCalibrationTabControl<Freq
         span(filterCompareBtn, 2);
 
         // Row 2 - type label+combo (col0-1), response label+combo (col2-3).
-        addLabel(header, I18n.t("freqResp.filter.type"));
+        addLabel(header, "freqResp.filter.type");
         filterTypeCombo = enumCombo(header, "freqResp.filter.type.tooltip",
                 new String[]{ "freqResp.filter.type.lowpass", "freqResp.filter.type.highpass",
                         "freqResp.filter.type.bandpass", "freqResp.filter.type.notch" },
                 prefs.freqRespFilterTypeProperty(), FilterType.values());
-        addLabel(header, I18n.t("freqResp.filter.response"));
+        addLabel(header, "freqResp.filter.response");
         filterResponseCombo = enumCombo(header, "freqResp.filter.response.tooltip",
                 new String[]{ "freqResp.filter.response.bessel", "freqResp.filter.response.butterworth",
                         "freqResp.filter.response.chebyshev", "freqResp.filter.response.elliptic",
@@ -1082,7 +1096,7 @@ public final class FreqRespTabControl extends AbstractCalibrationTabControl<Freq
         //      The group does NOT stretch to the tab width - no FILL / grab, so
         //      it shrinks to its content.
         filterSpecGroup = new Group(g, SWT.NONE);
-        filterSpecGroup.setText(I18n.t("freqResp.filter.spec"));
+        Bindings.text(filterSpecGroup, "freqResp.filter.spec", filterSpecGroup::setText);
         GridData groupGd = new GridData(SWT.LEFT, SWT.TOP, false, false);
         groupGd.horizontalSpan = 2;
         filterSpecGroup.setLayoutData(groupGd);
@@ -1130,21 +1144,22 @@ public final class FreqRespTabControl extends AbstractCalibrationTabControl<Freq
         // -- Row A --  Mode 1: Ripple | Stopband atten. | (empty)
         //              Mode 2: Passband freq | Ripple    | (empty)
         Composite a1l = specSlot(specGrid, false);
-        filterRippleLabel = addLabel(a1l, I18n.t("freqResp.filter.ripple"));
-        filterOrderPassLabel = addLabel(a1l, I18n.t("freqResp.filter.mode2.passfreq"));
+        filterRippleLabel = addLabel(a1l, "freqResp.filter.ripple");
+        filterOrderPassLabel = addLabel(a1l, "freqResp.filter.mode2.passfreq");
         registerCell(a1l, filterRippleLabel, filterOrderPassLabel);
 
         Composite a1f = specSlot(specGrid, true);
         filterRippleField = dbField(a1f, "freqResp.filter.ripple.tooltip");
         onFilterField(filterRippleField, (p, v) -> p.setRippleDb(v));
         filterOrderPassField = freqField(a1f);
-        filterOrderPassField.setToolTipText(I18n.t("freqResp.filter.mode2.passfreq.tooltip"));
+        Bindings.text(filterOrderPassField, "freqResp.filter.mode2.passfreq.tooltip",
+                filterOrderPassField::setToolTipText);
         onFilterField(filterOrderPassField, (p, v) -> p.setOrderPassHz(v));
         registerCell(a1f, filterRippleField, filterOrderPassField);
 
         Composite a2l = specSlot(specGrid, false);
-        filterStopAttenLabel = addLabel(a2l, I18n.t("freqResp.filter.stopatten"));
-        filterOrderRippleLabel = addLabel(a2l, I18n.t("freqResp.filter.mode2.ripple"));
+        filterStopAttenLabel = addLabel(a2l, "freqResp.filter.stopatten");
+        filterOrderRippleLabel = addLabel(a2l, "freqResp.filter.mode2.ripple");
         registerCell(a2l, filterStopAttenLabel, filterOrderRippleLabel);
 
         Composite a2f = specSlot(specGrid, true);
@@ -1161,45 +1176,54 @@ public final class FreqRespTabControl extends AbstractCalibrationTabControl<Freq
         // -- Row B --  Mode 1: Center | Passband | Stopband
         //              Mode 2: Order  | Q        | (empty)
         Composite b1l = specSlot(specGrid, false);
-        filterCenterLabel = addLabel(b1l, I18n.t("freqResp.filter.center"));
-        filterOrderLabel = addLabel(b1l, I18n.t("freqResp.filter.order"));
+        filterCenterLabel = addLabel(b1l, "freqResp.filter.center");
+        filterOrderLabel = addLabel(b1l, "freqResp.filter.order");
         registerCell(b1l, filterCenterLabel, filterOrderLabel);
 
         Composite b1f = specSlot(specGrid, true);
         filterCenterField = freqField(b1f);
-        filterCenterField.setToolTipText(I18n.t("freqResp.filter.center.tooltip"));
+        Bindings.text(filterCenterField, "freqResp.filter.center.tooltip",
+                filterCenterField::setToolTipText);
         onFilterField(filterCenterField, (p, v) -> p.setCenterHz(v));
         filterOrderField = new NumericStepField(b1f, UnitFamily.NONE,
                 FILTER_ORDER_MIN, FILTER_ORDER_MAX, 0, 110);
         filterOrderField.setLayoutData(comboGd());
-        filterOrderField.setToolTipText(I18n.t("freqResp.filter.order.tooltip"));
+        Bindings.text(filterOrderField, "freqResp.filter.order.tooltip",
+                filterOrderField::setToolTipText);
         onFilterField(filterOrderField, (p, v) -> p.setOrder((int) Math.round(v)));
         registerCell(b1f, filterCenterField, filterOrderField);
 
         Composite b2l = specSlot(specGrid, false);
-        filterPassLabel = addLabel(b2l, I18n.t("freqResp.filter.passband"));
-        filterQLabel = addLabel(b2l, I18n.t("freqResp.filter.q"));
+        // The Passband / Stopband captions depend on the filter type, so no
+        // fixed key is bound to them: refreshFilterEnable picks and shows
+        // the caption, and re-runs on a language switch (below).
+        filterPassLabel = new Label(b2l, SWT.NONE);
+        filterPassLabel.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
+        filterQLabel = addLabel(b2l, "freqResp.filter.q");
         registerCell(b2l, filterPassLabel, filterQLabel);
 
         Composite b2f = specSlot(specGrid, true);
         filterPassField = freqField(b2f);
-        filterPassField.setToolTipText(I18n.t("freqResp.filter.passband.tooltip"));
+        Bindings.text(filterPassField, "freqResp.filter.passband.tooltip",
+                filterPassField::setToolTipText);
         onFilterField(filterPassField, (p, v) -> p.setPassHz(v));
         filterQField = new NumericStepField(b2f, UnitFamily.NONE,
                 FILTER_Q_MIN, FILTER_Q_MAX, FILTER_Q_DECIMALS, 110);
         filterQField.setLayoutData(comboGd());
-        filterQField.setToolTipText(I18n.t("freqResp.filter.q.tooltip"));
+        Bindings.text(filterQField, "freqResp.filter.q.tooltip", filterQField::setToolTipText);
         onFilterField(filterQField, (p, v) -> p.setQ(v));
         registerCell(b2f, filterPassField, filterQField);
 
         // Row-B pair 3 - Stopband label+field in Mode 1 only; empty in Mode 2.
         Composite b3l = specSlot(specGrid, false);
-        filterStopLabel = addLabel(b3l, I18n.t("freqResp.filter.stopband"));
+        filterStopLabel = new Label(b3l, SWT.NONE);
+        filterStopLabel.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
         registerCell(b3l, filterStopLabel, null);
 
         Composite b3f = specSlot(specGrid, true);
         filterStopField = freqField(b3f);
-        filterStopField.setToolTipText(I18n.t("freqResp.filter.stopband.tooltip"));
+        Bindings.text(filterStopField, "freqResp.filter.stopband.tooltip",
+                filterStopField::setToolTipText);
         onFilterField(filterStopField, (p, v) -> p.setStopHz(v));
         registerCell(b3f, filterStopField, null);
 
@@ -1243,6 +1267,9 @@ public final class FreqRespTabControl extends AbstractCalibrationTabControl<Freq
         });
         Bindings.onChange(toolbarTabs, prefs.freqRespFilterResponseProperty(),
                 v -> refreshFilterEnable());
+        // The cascade is the one place that picks the per-type Passband /
+        // Stopband captions, so a language switch re-runs it.
+        Bindings.onChange(filterPassLabel, I18n.localeProperty(), l -> refreshFilterEnable());
 
         // Audio-format edits move the Nyquist ceiling of every Hz field.
         Consumer<Void> audioFormatListener = ignored -> {
@@ -1350,14 +1377,15 @@ public final class FreqRespTabControl extends AbstractCalibrationTabControl<Freq
     }
 
     /** Builds a labeled READ_ONLY enum {@link Combo}: items come from
-     *  {@code itemKeys} (i18n) in enum order and it is two-way bound to the
-     *  enum {@link Property} via {@link Bindings#combo}. */
+     *  {@code itemKeys} (i18n) in enum order and follow the language, and it
+     *  is two-way bound to the enum {@link Property} via {@link Bindings#combo}. */
     private <T extends Enum<T>> Combo enumCombo(Composite parent, String tipKey,
                                                 String[] itemKeys, Property<T> property, T[] values) {
         Combo combo = new Combo(parent, SWT.READ_ONLY);
-        for (String key : itemKeys) combo.add(I18n.t(key));
+        Bindings.items(combo, () -> Arrays.stream(itemKeys)
+                .map(key -> I18n.t(key)).toArray(String[]::new));
         combo.setLayoutData(comboGd());
-        combo.setToolTipText(I18n.t(tipKey));
+        Bindings.text(combo, tipKey, combo::setToolTipText);
         Bindings.combo(combo, property, values);
         return combo;
     }
@@ -1368,14 +1396,14 @@ public final class FreqRespTabControl extends AbstractCalibrationTabControl<Freq
         NumericStepField f = new NumericStepField(parent, UnitFamily.DECIBEL,
                 FILTER_DB_MIN, FILTER_DB_MAX, FILTER_DB_DECIMALS, 110);
         f.setLayoutData(comboGd());
-        f.setToolTipText(I18n.t(tipKey));
+        Bindings.text(f, tipKey, f::setToolTipText);
         return f;
     }
 
     private Button radioButton(Composite parent, String labelKey, String tipKey) {
         Button b = new Button(parent, SWT.RADIO);
-        b.setText(I18n.t(labelKey));
-        b.setToolTipText(I18n.t(tipKey));
+        Bindings.text(b, labelKey, b::setText);
+        Bindings.text(b, tipKey, b::setToolTipText);
         b.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
         return b;
     }
@@ -1438,7 +1466,7 @@ public final class FreqRespTabControl extends AbstractCalibrationTabControl<Freq
     // -------------------------------------------------------------------------
 
     private void buildUnevennessTab() {
-        Composite g = groupCell(toolbarTabs, I18n.t("freqResp.tab.unevenness"));
+        Composite g = groupCell(toolbarTabs, "freqResp.tab.unevenness");
         GridLayout gl = new GridLayout(3, false);
         gl.marginWidth = 8; gl.marginHeight = 6;
         gl.horizontalSpacing = 6; gl.verticalSpacing = 4;
@@ -1449,12 +1477,13 @@ public final class FreqRespTabControl extends AbstractCalibrationTabControl<Freq
         // Notch checkbox (explicit notch/peak flatness classification in LEVEL
         // mode); a span-1 filler keeps the 3-column grid rectangular.
         unevenOffRadio = new Button(g, SWT.RADIO);
-        unevenOffRadio.setText(I18n.t("freqResp.uneven.off"));
-        unevenOffRadio.setToolTipText(I18n.t("freqResp.uneven.off.tooltip"));
+        Bindings.text(unevenOffRadio, "freqResp.uneven.off", unevenOffRadio::setText);
+        Bindings.text(unevenOffRadio, "freqResp.uneven.off.tooltip", unevenOffRadio::setToolTipText);
         unevenOffRadio.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
         unevenNotchCheck = new Button(g, SWT.CHECK);
-        unevenNotchCheck.setText(I18n.t("freqResp.uneven.notch"));
-        unevenNotchCheck.setToolTipText(I18n.t("freqResp.uneven.notch.tooltip"));
+        Bindings.text(unevenNotchCheck, "freqResp.uneven.notch", unevenNotchCheck::setText);
+        Bindings.text(unevenNotchCheck, "freqResp.uneven.notch.tooltip",
+                unevenNotchCheck::setToolTipText);
         unevenNotchCheck.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
         Bindings.check(unevenNotchCheck, prefs.freqRespUnevenNotchProperty());
         Label unevenOffFiller = new Label(g, SWT.NONE);
@@ -1466,19 +1495,19 @@ public final class FreqRespTabControl extends AbstractCalibrationTabControl<Freq
         // The mode label lives ON the radio so clicking the text selects the
         // mode, instead of sitting next to it as a separate, dead label.
         unevenPmRadio = new Button(g, SWT.RADIO);
-        unevenPmRadio.setText(I18n.t("freqResp.uneven.db"));
+        Bindings.text(unevenPmRadio, "freqResp.uneven.db", unevenPmRadio::setText);
         unevenPmRadio.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
         unevenDbField = new NumericStepField(g, UnitFamily.DECIBEL,
                 UNEVEN_DB_MIN, UNEVEN_DB_MAX, FILTER_DB_DECIMALS, 110);
         GridData unevenDbGd = comboGd();
         unevenDbGd.horizontalSpan = 2;
         unevenDbField.setLayoutData(unevenDbGd);
-        unevenDbField.setToolTipText(I18n.t("freqResp.uneven.db.tooltip"));
+        Bindings.text(unevenDbField, "freqResp.uneven.db.tooltip", unevenDbField::setToolTipText);
         Bindings.stepField(unevenDbField, prefs.freqRespUnevenDbProperty());
 
         // ---- Row 3: range mode radio (carries "Start freq") + fields -------
         unevenRangeRadio = new Button(g, SWT.RADIO);
-        unevenRangeRadio.setText(I18n.t("freqResp.uneven.start"));
+        Bindings.text(unevenRangeRadio, "freqResp.uneven.start", unevenRangeRadio::setText);
         unevenRangeRadio.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
         Composite rangeFields = new Composite(g, SWT.NONE);
         GridData rfGd = new GridData(SWT.FILL, SWT.CENTER, true, false);
@@ -1489,11 +1518,13 @@ public final class FreqRespTabControl extends AbstractCalibrationTabControl<Freq
         rf.horizontalSpacing = 6; rf.verticalSpacing = 4;
         rangeFields.setLayout(rf);
         unevenStartField = freqField(rangeFields);
-        unevenStartField.setToolTipText(I18n.t("freqResp.uneven.start.tooltip"));
+        Bindings.text(unevenStartField, "freqResp.uneven.start.tooltip",
+                unevenStartField::setToolTipText);
         Bindings.stepField(unevenStartField, prefs.freqRespUnevenStartHzProperty());
-        addLabel(rangeFields, I18n.t("freqResp.uneven.stop"));
+        addLabel(rangeFields, "freqResp.uneven.stop");
         unevenStopField = freqField(rangeFields);
-        unevenStopField.setToolTipText(I18n.t("freqResp.uneven.stop.tooltip"));
+        Bindings.text(unevenStopField, "freqResp.uneven.stop.tooltip",
+                unevenStopField::setToolTipText);
         Bindings.stepField(unevenStopField, prefs.freqRespUnevenStopHzProperty());
         // Cross-field clamp: stop must stay at least start + 1 (mirrors the
         // Settings tab's start / stop coupling).
@@ -1557,7 +1588,7 @@ public final class FreqRespTabControl extends AbstractCalibrationTabControl<Freq
     // -------------------------------------------------------------------------
 
     private void buildPresetsTab() {
-        Composite g = groupCell(toolbarTabs, I18n.t("freqResp.tab.presets"));
+        Composite g = groupCell(toolbarTabs, "freqResp.tab.presets");
         g.setLayout(new FillLayout());
         new PresetBar<FreqRespPreset>(g, "freqResp.presets", null,
                 new PresetBar.Store<>() {
@@ -1665,7 +1696,7 @@ public final class FreqRespTabControl extends AbstractCalibrationTabControl<Freq
     // -------------------------------------------------------------------------
 
     private void buildUtilityTab() {
-        Composite g = groupCell(toolbarTabs, I18n.t("freqResp.tab.utility"));
+        Composite g = groupCell(toolbarTabs, "freqResp.tab.utility");
         GridLayout gl = new GridLayout(3, false);
         gl.marginWidth = 8; gl.marginHeight = 6;
         gl.horizontalSpacing = 6;
@@ -1683,7 +1714,7 @@ public final class FreqRespTabControl extends AbstractCalibrationTabControl<Freq
         shotGd.widthHint = 43;
         shotGd.heightHint = 43;
         shotBtn.setLayoutData(shotGd);
-        shotBtn.setToolTipText(I18n.t("freqResp.utility.screenshot.tooltip"));
+        Bindings.text(shotBtn, "freqResp.utility.screenshot.tooltip", shotBtn::setToolTipText);
         shotBtn.addListener(SWT.Selection, e -> getOwner().openScreenshotDialog());
 
         // ADC / DAC calibration both use the crosshair icon - the
@@ -1695,7 +1726,7 @@ public final class FreqRespTabControl extends AbstractCalibrationTabControl<Freq
         dacCalGd.widthHint = 43;
         dacCalGd.heightHint = 43;
         dacCalBtn.setLayoutData(dacCalGd);
-        dacCalBtn.setToolTipText(I18n.t("freqResp.utility.calibrateDac.tooltip"));
+        Bindings.text(dacCalBtn, "freqResp.utility.calibrateDac.tooltip", dacCalBtn::setToolTipText);
         dacCalBtn.addListener(SWT.Selection, e ->
                 log.info("FreqResp DAC-cal clicked (dialog wired in Phase 6 follow-up)"));
 
@@ -1705,7 +1736,7 @@ public final class FreqRespTabControl extends AbstractCalibrationTabControl<Freq
         adcCalGd.widthHint = 43;
         adcCalGd.heightHint = 43;
         adcCalBtn.setLayoutData(adcCalGd);
-        adcCalBtn.setToolTipText(I18n.t("freqResp.utility.calibrateAdc.tooltip"));
+        Bindings.text(adcCalBtn, "freqResp.utility.calibrateAdc.tooltip", adcCalBtn::setToolTipText);
         adcCalBtn.addListener(SWT.Selection, e ->
                 log.info("FreqResp ADC-cal clicked (dialog wired in Phase 6 follow-up)"));
     }
@@ -1764,7 +1795,7 @@ public final class FreqRespTabControl extends AbstractCalibrationTabControl<Freq
     // -------------------------------------------------------------------------
 
     private void buildSaveToTab() {
-        Composite g = groupCell(toolbarTabs, I18n.t("freqResp.tab.saveTo"));
+        Composite g = groupCell(toolbarTabs, "freqResp.tab.saveTo");
         GridLayout gl = new GridLayout(2, false);
         gl.marginWidth = 6; gl.marginHeight = 4; gl.horizontalSpacing = 6;
         g.setLayout(gl);
@@ -1775,15 +1806,18 @@ public final class FreqRespTabControl extends AbstractCalibrationTabControl<Freq
         // writing - the previous separate "browse" button was redundant
         // since browse-then-save was the only useful sequence.
         saveToPathField = new Text(g, SWT.BORDER | SWT.READ_ONLY);
-        showSavePath(prefs.getFreqRespSavePath());
+        showFilePath(saveToPathField, prefs.getFreqRespSavePath(), "freqResp.saveTo.path.tooltip");
         saveToPathField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         // Every save - this tab's button and the wizard's - runs the one common
         // save, which writes the saved-path preference on success; the field
         // follows that preference, so both callers leave the same state.
         Bindings.onChange(toolbarTabs, prefs.freqRespSavePathProperty(), v -> {
-            showSavePath(v);
+            showFilePath(saveToPathField, v, "freqResp.saveTo.path.tooltip");
             toolbarTabs.refreshTab(TAB_FREQRESP_SAVE);
         });
+        // The hint tooltip an empty path falls back to follows the language.
+        Bindings.onChange(saveToPathField, I18n.localeProperty(), l ->
+                showFilePath(saveToPathField, prefs.getFreqRespSavePath(), "freqResp.saveTo.path.tooltip"));
 
         Image floppyIcon = IconUtils.icon(g.getDisplay(), Icon.FLOPPY_DISK);
         Button saveBtn = new Button(g, SWT.PUSH);
@@ -1791,7 +1825,7 @@ public final class FreqRespTabControl extends AbstractCalibrationTabControl<Freq
         GridData saveGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
         saveGd.heightHint = IconUtils.FILE_BUTTON_HEIGHT;
         saveBtn.setLayoutData(saveGd);
-        saveBtn.setToolTipText(I18n.t("freqResp.saveTo.tooltip"));
+        Bindings.text(saveBtn, "freqResp.saveTo.tooltip", saveBtn::setToolTipText);
         /* Enabled whenever no save runs - otherwise never gated.  Saving a
          * measured response to a file needs only a measurement, which
          * the pane's save checks - it ends in the controller's save, which
@@ -1813,13 +1847,14 @@ public final class FreqRespTabControl extends AbstractCalibrationTabControl<Freq
         });
     }
 
-    /** Shows {@code path} in the Save-to field - the one display rule for the
-     *  initial fill and the saved-path binding: {@code null} shows as empty
-     *  text, and an empty path falls back to the field's hint tooltip. */
-    private void showSavePath(String path) {
+    /** Shows {@code path} in the Save-to or Load-from path field - the one
+     *  display rule for the initial fill, the saved-path binding, a file pick
+     *  and a language switch: {@code null} shows as empty text, and an empty path
+     *  falls back to the hint tooltip {@code hintKey}. */
+    private void showFilePath(Text field, String path, String hintKey) {
         boolean hasPath = path != null && !path.isEmpty();
-        saveToPathField.setText(path == null ? "" : path);
-        saveToPathField.setToolTipText(hasPath ? path : I18n.t("freqResp.saveTo.path.tooltip"));
+        field.setText(path == null ? "" : path);
+        field.setToolTipText(hasPath ? path : I18n.t(hintKey));
     }
 
     // -------------------------------------------------------------------------
@@ -1827,7 +1862,7 @@ public final class FreqRespTabControl extends AbstractCalibrationTabControl<Freq
     // -------------------------------------------------------------------------
 
     private void buildLoadFromTab() {
-        Composite g = groupCell(toolbarTabs, I18n.t("freqResp.tab.loadFrom"));
+        Composite g = groupCell(toolbarTabs, "freqResp.tab.loadFrom");
         GridLayout gl = new GridLayout(2, false);
         gl.marginWidth = 6; gl.marginHeight = 4; gl.horizontalSpacing = 6;
         g.setLayout(gl);
@@ -1839,10 +1874,13 @@ public final class FreqRespTabControl extends AbstractCalibrationTabControl<Freq
         // redundant since browse-then-load was the only useful
         // sequence.
         loadFromPathField = new Text(g, SWT.BORDER | SWT.READ_ONLY);
-        String savedPath = prefs.getFreqRespLoadPath();
-        loadFromPathField.setText(savedPath == null ? "" : savedPath);
-        loadFromPathField.setToolTipText(savedPath != null && !savedPath.isEmpty() ? savedPath : I18n.t("freqResp.loadFrom.path.tooltip"));
+        showFilePath(loadFromPathField, prefs.getFreqRespLoadPath(), "freqResp.loadFrom.path.tooltip");
         loadFromPathField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        // The field shows the load-path preference (the load dialog writes
+        // both); the hint tooltip an empty path falls back to follows the
+        // language.
+        Bindings.onChange(loadFromPathField, I18n.localeProperty(), l ->
+                showFilePath(loadFromPathField, prefs.getFreqRespLoadPath(), "freqResp.loadFrom.path.tooltip"));
 
         Image folderIcon = IconUtils.icon(g.getDisplay(), Icon.FOLDER_OPEN);
         Button loadBtn = new Button(g, SWT.PUSH);
@@ -1850,7 +1888,7 @@ public final class FreqRespTabControl extends AbstractCalibrationTabControl<Freq
         GridData loadGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
         loadGd.heightHint = IconUtils.FILE_BUTTON_HEIGHT;
         loadBtn.setLayoutData(loadGd);
-        loadBtn.setToolTipText(I18n.t("freqResp.loadFrom.tooltip"));
+        Bindings.text(loadBtn, "freqResp.loadFrom.tooltip", loadBtn::setToolTipText);
         loadBtn.addListener(SWT.Selection, e -> openLoadDialog());
     }
 
@@ -1871,8 +1909,7 @@ public final class FreqRespTabControl extends AbstractCalibrationTabControl<Freq
         String picked = fd.open();
         if (picked == null) return;
         if (loadFromPathField != null && !loadFromPathField.isDisposed()) {
-            loadFromPathField.setText(picked);
-            loadFromPathField.setToolTipText(picked);
+            showFilePath(loadFromPathField, picked, "freqResp.loadFrom.path.tooltip");
         }
         prefs.setFreqRespLoadPath(picked);
         toolbarTabs.refreshTab(TAB_FREQRESP_LOAD);
@@ -1962,9 +1999,11 @@ public final class FreqRespTabControl extends AbstractCalibrationTabControl<Freq
         return new GridData(SWT.FILL, SWT.CENTER, false, false);
     }
 
-    private Label addLabel(Composite parent, String text) {
+    /** A caption {@link Label} showing the translation of {@code key}, which
+     *  follows the language. */
+    private Label addLabel(Composite parent, String key) {
         Label l = new Label(parent, SWT.NONE);
-        l.setText(text);
+        Bindings.text(l, key, l::setText);
         l.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
         return l;
     }

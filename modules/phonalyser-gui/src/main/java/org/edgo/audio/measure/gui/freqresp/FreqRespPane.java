@@ -138,9 +138,9 @@ public final class FreqRespPane extends AbstractPane {
         group.setLayout(gl);
 
         PaneTitle paneTitle = new PaneTitle(group, Events.PANE_ID_FREQRESP,
-                I18n.t("freqResp.title.expanded"),
-                I18n.t("freqResp.title.collapsed"),
-                I18n.t("freqResp.pane.toggle.tooltip"));
+                "freqResp.title.expanded",
+                "freqResp.title.collapsed",
+                "freqResp.pane.toggle.tooltip");
         paneTitle.setStaticMode(true);
 
         // Build order matters: the store and the controller come first - the
@@ -276,7 +276,7 @@ public final class FreqRespPane extends AbstractPane {
         // wizard for exactly that long.
         wizardButton = createActionButton(toolbarRow, SWT.PUSH);
         if (wandIcon != null) wizardButton.setImage(wandIcon);
-        wizardButton.setToolTipText(I18n.t("freqResp.button.wizard.tooltip"));
+        Bindings.text(wizardButton, "freqResp.button.wizard.tooltip", wizardButton::setToolTipText);
         wizardButton.addListener(SWT.Selection, e -> {
             wizard = new FreqRespWizardDialog(group.getShell(), this);
             wizard.open();
@@ -288,7 +288,7 @@ public final class FreqRespPane extends AbstractPane {
         // disabled it anyway but play() guards defensively).
         playButton = createActionButton(toolbarRow, SWT.PUSH);
         if (playIcon != null) playButton.setImage(playIcon);
-        playButton.setToolTipText(I18n.t("freqResp.button.play.start"));
+        Bindings.text(playButton, "freqResp.button.play.start", playButton::setToolTipText);
         playButton.addListener(SWT.Selection, e -> play());
     }
 

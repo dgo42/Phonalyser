@@ -414,10 +414,10 @@ public final class HelpViewer {
     }
 
     /** Reloads the open help window in the current UI language.  A live language
-     *  switch rebuilds the main window but not this separate Shell, so
-     *  {@code MainWindow.rebuildContent} calls this to carry the help window
-     *  along - no reopen needed.  No-op when help is closed or the language is
-     *  unchanged. */
+     *  switch re-translates the main window in place but does not reach this
+     *  separate Shell, so {@code MainWindow.applyLanguage} calls this to carry
+     *  the help window along - no reopen needed.  No-op when help is closed or
+     *  the language is unchanged. */
     public void refreshLanguage() {
         if (openShell == null || openShell.isDisposed()) return;
         String[] langs = resolveLanguageChain();
