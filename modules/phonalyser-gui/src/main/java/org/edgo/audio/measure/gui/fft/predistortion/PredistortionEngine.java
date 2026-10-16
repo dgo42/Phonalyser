@@ -49,10 +49,11 @@ import lombok.extern.log4j.Log4j2;
  * line's running means have settled:
  *
  * <ol>
- *   <li>a result without the DAC fundamental's phase is not taken; a
- *       result is taken from the frame count {@value #SKIPPED_FRAMES} on,
- *       the count at which the accumulator's kappa measurement has
- *       closed;</li>
+ *   <li>a result is taken from the frame count {@value #SKIPPED_FRAMES} on,
+ *       the count at which the accumulator's kappa measurement has closed,
+ *       in every phase alignment mode: its lines are read against the DAC
+ *       fundamental's phase where the alignment states it, else against the
+ *       measured tone less the calibration's static phase;</li>
  *   <li>every line the result carries has its phase and level put into its
  *       window of the last {@value #WINDOW_VALUES} values; a line the result
  *       does not carry is skipped on it; a line is gated while its raw level
@@ -309,9 +310,9 @@ public final class PredistortionEngine {
     private int minAverages;
     /** Loaded {@code .frc} corrections.  Their phase at the tones goes into
      *  the reading of every result, where the correction sets use it only for
-     *  a tone the result carries no DAC phase of: never F1 on a taken result,
-     *  F2 of a dual tone where the result leaves the second tone's DAC phase
-     *  unset.  Their full response de-embeds the correction on the wizard's
+     *  a tone the result carries no DAC phase of: both tones without a phase
+     *  alignment, F2 of a dual tone where the alignment leaves the second
+     *  tone's DAC phase unset.  Their full response de-embeds the correction on the wizard's
      *  Save ({@link #calResponseFor}). */
     private final CorrectionStore correctionStore;
     private final Listener        listener;
@@ -458,11 +459,13 @@ public final class PredistortionEngine {
      */
     private boolean judge(FftResult r) {
         // Every line's phase is read against the fundamental as the DAC
-        // emitted it, and over the collection's first frames the coherent
-        // average's fundamental bin is still being refined: a result without
-        // the DAC phase, or averaging fewer than SKIPPED_FRAMES frames, reads
-        // phases from no stable frame and would put noise into the windows.
-        if (Double.isNaN(r.dacFundPhaseRad) || r.frameCount < SKIPPED_FRAMES) return false;
+        // emitted it - the phase the alignment states where it runs, else the
+        // measured tone less the calibration's static phase - and over the
+        // collection's first frames the coherent average's fundamental bin is
+        // still being refined: a result averaging fewer than SKIPPED_FRAMES
+        // frames reads phases from no stable frame and would put noise into
+        // the windows.
+        if (r.frameCount < SKIPPED_FRAMES) return false;
         if (dualTone) {
             takeProducts(r);
         } else {

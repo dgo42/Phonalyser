@@ -269,16 +269,13 @@ class PredistortionEngineTest {
     }
 
     @Test
-    void aResultWithoutTheDacPhaseOrOfTheFirstFramesIsNotTaken() {
+    void aResultOfTheFirstFramesIsNotTaken() {
         PredistortionEngine engine = started(GenSignalForm.SINE);
         double[] phaseDeg    = distinctPhases(HARMONIC_LINES);
         double[] clearanceDb = uniform(HARMONIC_LINES, CLEAR_DB);
-        FftResult withoutPhase = harmonics(phaseDeg, clearanceDb);
-        withoutPhase.dacFundPhaseRad = Double.NaN;
         FftResult ofTheFirstFrames = harmonics(phaseDeg, clearanceDb);
         ofTheFirstFrames.frameCount = SKIPPED_FRAMES - 1;
         for (int n = 0; n < WINDOW_VALUES; n++) {
-            assertFalse(engine.onResult(withoutPhase), "no DAC phase");
             assertFalse(engine.onResult(ofTheFirstFrames), "one of the first frames");
         }
         for (LineReadout line : engine.readouts()) {
@@ -289,6 +286,20 @@ class PredistortionEngineTest {
             assertFalse(engine.onResult(taken), "taken result " + n);
         }
         assertTrue(engine.onResult(taken), "the window's worth of taken results settles");
+    }
+
+    /** Without a phase alignment a result carries no DAC phase: its lines are
+     *  read against the measured tone less the calibration's static phase,
+     *  and the run takes and settles on such results as on aligned ones. */
+    @Test
+    void aResultWithoutTheDacPhaseIsTaken() {
+        PredistortionEngine engine = started(GenSignalForm.SINE);
+        FftResult withoutPhase = harmonics(distinctPhases(HARMONIC_LINES), uniform(HARMONIC_LINES, CLEAR_DB));
+        withoutPhase.dacFundPhaseRad = Double.NaN;
+        for (int n = 1; n < WINDOW_VALUES; n++) {
+            assertFalse(engine.onResult(withoutPhase), "result " + n + " leaves the windows short");
+        }
+        assertTrue(engine.onResult(withoutPhase), "the window's worth of results without a DAC phase settles");
     }
 
     @Test
@@ -590,7 +601,7 @@ class PredistortionEngineTest {
     private PredistortionEngine started(GenSignalForm form) {
         Preferences.instance().setGenSignalForm(form);
         PredistortionEngine engine = new PredistortionEngine(
-                new CorrectionStore(STORE_LABEL, null), recorder);
+                new CorrectionStore(STORE_LABEL), recorder);
         engine.start();
         return engine;
     }

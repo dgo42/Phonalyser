@@ -53,10 +53,8 @@ import org.edgo.audio.measure.fft.ImdResult;
 import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
-import org.edgo.audio.measure.gui.common.CorrectionStore;
 import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.ShellIcons;
-import org.edgo.audio.measure.gui.fft.FftAnalyzerWorker;
 import org.edgo.audio.measure.gui.fft.FftController;
 import org.edgo.audio.measure.gui.fft.FftView;
 import org.edgo.audio.measure.gui.i18n.I18n;
@@ -146,14 +144,8 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
     private static final int    OVER_LIMIT_COLOR   = SWT.COLOR_RED;
 
     private final Shell               parentShell;
-    private final FftController       fft;
+    private final FftController       controller;
     private final FftView             view;
-    /** Loaded {@code .frc} corrections, handed to the engine so it de-embeds
-     *  their phase when computing the DAC correction. */
-    private final CorrectionStore correctionStore;
-    /** The analyser worker the engine runs on: the engine is registered on
-     *  it for the run. */
-    private final FftAnalyzerWorker worker;
 
     private Shell            dialog;
     /** The margin composite holding every widget - printed for the help
@@ -204,13 +196,10 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
      *  provenance a Save writes; {@code null} before a run has ended. */
     private FftResult resultAtStop;
 
-    public PredistortionWizardDialog(Shell parent, FftController fft, FftView view,
-                                     CorrectionStore correctionStore, FftAnalyzerWorker worker) {
-        this.parentShell     = parent;
-        this.fft             = fft;
-        this.view            = view;
-        this.correctionStore = correctionStore;
-        this.worker          = worker;
+    public PredistortionWizardDialog(Shell parent, FftController controller, FftView view) {
+        this.parentShell = parent;
+        this.controller  = controller;
+        this.view        = view;
     }
 
     /** Builds and shows the wizard and returns at once, with no event loop of
@@ -263,8 +252,10 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         // The engine reaches this window on the UI thread with its lines
         // after every result and with its own end of a run.  It lives as long
         // as the window: created here, it names the lines of the generator's
-        // form in the cells before the first Start.
-        engine = new PredistortionEngine(correctionStore, this);
+        // form in the cells before the first Start.  The loaded .frc
+        // corrections go with it, so it de-embeds their phase when computing
+        // the DAC correction.
+        engine = new PredistortionEngine(controller.getCorrectionStore(), this);
         showLineReadouts(engine.readouts());
 
         buildFftGroup();
@@ -536,7 +527,7 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         // What is inside the average - the SAME number the FFT pane shows: the
         // averages performed since the last reset, NOT the per-call frameCount
         // (only the 2-3 frames of one analyze() segment).
-        avgLbl  .setText(metric("averages", Integer.toString(fft.averagesInWindow())));
+        avgLbl  .setText(metric("averages", Integer.toString(controller.averagesInWindow())));
         // Match the FFT pane: the ratio figures (THD+N / TD+N / SNR / SINAD)
         // read plain dB - they measure against the fundamental, so no absolute
         // unit applies; the absolute levels (fundamental, noise floor) get the
@@ -570,7 +561,7 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
             // the engine results, and the state here is set in place; a
             // snapshot or a settle still on its way from the worker is
             // ignored.  The cells keep the last result's lines.
-            worker.unregisterPredistortionEngine();
+            controller.unregisterPredistortionEngine();
             endRun(RunState.STOPPED, false);
             return;
         }
@@ -580,6 +571,13 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         if (!Boolean.TRUE.equals(emitting)) {
             Dialogs.error(dialog, I18n.t("predistortion.wizard.title"),
                     I18n.t("predistortion.error.noGenerator"));
+            return;
+        }
+        // The run measures the running FFT; the analyser is started and stopped
+        // with the FFT pane's Record button alone, so its state stays in sync.
+        if (!controller.isRecording()) {
+            Dialogs.error(dialog, I18n.t("predistortion.wizard.title"),
+                    I18n.t("predistortion.error.notRecording"));
             return;
         }
         Preferences prefs = Preferences.instance();
@@ -629,13 +627,11 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         }
 
         engine.start();
-        // The worker hands the engine every result, so the analyser runs.
-        if (!fft.isRecording()) fft.startRecording();
         // The run begins from zero: the counter and the accumulator are
         // emptied, so the values the engine's windows take come from frames
         // of this run only.
-        fft.resetStatisticsAfterSignalChange();
-        worker.registerPredistortionEngine(engine);
+        controller.resetStatisticsAfterSignalChange();
+        controller.registerPredistortionEngine(engine);
     }
 
     // -------------------------------------------------------------------------
@@ -651,7 +647,7 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
     @Override
     public void onFinished(PredistortionEngine.StopReason reason, boolean hasResult) {
         if (dialog.isDisposed() || state != RunState.RUNNING) return;
-        worker.unregisterPredistortionEngine();
+        controller.unregisterPredistortionEngine();
         endRun(switch (reason) {
             case SETTLED -> RunState.TARGET_REACHED;
             case ERROR   -> RunState.ERROR;
@@ -959,7 +955,7 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
      *  analyser, the recording and the statistics stay as they are. */
     private void handleCancel() {
         if (state != RunState.RUNNING) return;
-        worker.unregisterPredistortionEngine();
+        controller.unregisterPredistortionEngine();
         state = RunState.STOPPED;
     }
 
