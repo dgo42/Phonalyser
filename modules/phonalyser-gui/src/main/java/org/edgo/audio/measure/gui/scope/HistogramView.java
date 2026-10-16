@@ -31,7 +31,6 @@ import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.common.AbstractMeasurementView;
 import org.edgo.audio.measure.gui.common.Fonts;
 import org.edgo.audio.measure.gui.common.Icon;
-import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.widgets.ToolButton;
 import org.edgo.audio.measure.gui.widgets.Toolbar;
 import org.edgo.audio.measure.preferences.Preferences;
@@ -108,14 +107,17 @@ public final class HistogramView extends AbstractMeasurementView {
         leftBtn = headerBar.chanButton("L",
                 color(ColorRole.LEFT_CHANNEL_MID), color(ColorRole.LEFT_CHANNEL_MID),
                 color(ColorRole.LEFT_TRACE), chanFont,
-                I18n.t("scope.stats.left.tooltip"), channel == Channel.L, CHAN_GROUP);
+                null, channel == Channel.L, CHAN_GROUP);
+        Bindings.text(leftBtn, "scope.stats.left.tooltip", leftBtn::setToolTipText);
         rightBtn = headerBar.chanButton("R",
                 color(ColorRole.RIGHT_CHANNEL_MID), color(ColorRole.RIGHT_CHANNEL_MID),
                 color(ColorRole.RIGHT_TRACE), chanFont,
-                I18n.t("scope.stats.right.tooltip"), channel == Channel.R, CHAN_GROUP);
+                null, channel == Channel.R, CHAN_GROUP);
+        Bindings.text(rightBtn, "scope.stats.right.tooltip", rightBtn::setToolTipText);
         headerBar.spacer(2);
         ToolButton resetBtn = headerBar.pushButton(Icon.ROTATE_LEFT_RED, Icon.ROTATE_LEFT_DARK,
-                color(ColorRole.TEXT), I18n.t("scope.histogram.reset.tooltip"));
+                color(ColorRole.TEXT), null);
+        Bindings.text(resetBtn, "scope.histogram.reset.tooltip", resetBtn::setToolTipText);
         headerBar.setSize(headerBar.computeSize(SWT.DEFAULT, SWT.DEFAULT));
 
         leftBtn.addListener(SWT.Selection,  e -> selectChannel(Channel.L, leftBtn));
@@ -130,10 +132,24 @@ public final class HistogramView extends AbstractMeasurementView {
         Bindings.onChange(this, prefs.oscHistogramChannelProperty(),    ch  -> followChannelPref(ch));
         Bindings.onChange(this, prefs.oscLeftChannelEnabledProperty(),  en  -> syncChannelButtons());
         Bindings.onChange(this, prefs.oscRightChannelEnabledProperty(), en  -> syncChannelButtons());
+        Bindings.onChange(this, Fonts.instance().generationProperty(), g   -> applyFonts());
         syncChannelButtons();
 
         addPaintListener(this::onPaint);
         addDisposeListener(e -> disposePalette());
+    }
+
+    /** Takes the current shared fonts - the L/R button font and the axis
+     *  font - and repaints. */
+    private void applyFonts() {
+        Fonts fonts = Fonts.instance();
+        Font chanFont = fonts.channel(getDisplay());
+        leftBtn.setFont(chanFont);
+        rightBtn.setFont(chanFont);
+        leftBtn.redraw();
+        rightBtn.redraw();
+        monoFont = fonts.normal(getDisplay());
+        redraw();
     }
 
     private void recolor() {

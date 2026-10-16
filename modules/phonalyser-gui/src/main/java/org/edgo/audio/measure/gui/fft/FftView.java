@@ -25,6 +25,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.function.Consumer;
 import java.util.function.IntToDoubleFunction;
+import java.util.function.Supplier;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.events.MouseEvent;
@@ -376,7 +377,7 @@ public final class FftView extends AbstractFreqDomainView {
         if (messageKey == null) return;
         GuiUtil.marshal(() -> {
             if (isDisposed() || !isRunning()) return;
-            setBanner(I18n.t(messageKey), I18n.t(messageKey + ".tip"),
+            setBanner(() -> I18n.t(messageKey), () -> I18n.t(messageKey + ".tip"),
                     ColorRole.WARNING_LIT, ColorRole.WARNING_DIM, 0L);
             redraw();
         });
@@ -391,8 +392,8 @@ public final class FftView extends AbstractFreqDomainView {
     private final Consumer<Double> onAlignMagDrift = deltaDb -> {
         if (isDisposed() || !isRunning() || deltaDb == null) return;
         String delta = String.format(Locale.US, "%.1f", deltaDb);
-        setBanner(I18n.t("fft.warning.alignDrift"),
-                I18n.t("fft.warning.alignDrift.tip", delta),
+        setBanner(() -> I18n.t("fft.warning.alignDrift"),
+                () -> I18n.t("fft.warning.alignDrift.tip", delta),
                 ColorRole.WARNING_LIT, ColorRole.WARNING_DIM,
                 System.nanoTime() + ALIGN_DRIFT_WARN_NANOS);
         redraw();
@@ -425,6 +426,12 @@ public final class FftView extends AbstractFreqDomainView {
     private BlinkBanner banner;
     /** Expiry ({@code System.nanoTime}); {@code 0} = persistent (no timer). */
     private long        bannerUntilNanos;
+    /** The banner's text and tooltip as key + arguments resolved on demand, not
+     *  as translated strings, so a language switch shows the same message again
+     *  in the new language; {@code null} before the first banner, and a
+     *  {@code null} tooltip shows none. */
+    private Supplier<String> bannerText;
+    private Supplier<String> bannerTooltip;
 
     // ─── External tool window ────────────────────────────────────────────
     private boolean    tableExtracted;
@@ -527,12 +534,14 @@ public final class FftView extends AbstractFreqDomainView {
         hbd.left = new FormAttachment(0, MARGIN_LEFT + 4);
         headerBar.setLayoutData(hbd);
         Channel ch = viewPrefs.getFftChannel();
+        // No tooltip here: it depends on the combined channel, so showLinked
+        // (run by restoreCombinedMaster below) is the one place that sets it.
         leftBtn  = headerBar.chanButton("L", color(ColorRole.TEXT),
                 color(ColorRole.BUTTON_FRAME), color(ColorRole.LEFT_BTN_CHAN),
-                chanButtonFont, I18n.t("fft.button.left.tooltip"),  ch == Channel.L, "channel");
+                chanButtonFont, null,  ch == Channel.L, "channel");
         rightBtn = headerBar.chanButton("R", color(ColorRole.TEXT),
                 color(ColorRole.BUTTON_FRAME), color(ColorRole.RIGHT_BTN_CHAN),
-                chanButtonFont, I18n.t("fft.button.right.tooltip"), ch == Channel.R, "channel");
+                chanButtonFont, null, ch == Channel.R, "channel");
         // L/R channel buttons are ToolButton radios (no Bindings helper covers
         // a ToolButton) - each just writes the channel pref (auto-saved); the
         // accumulation restart lives in the fftChannel subscription above, so it
@@ -550,21 +559,28 @@ public final class FftView extends AbstractFreqDomainView {
         leftBtn.addListener(SWT.MouseDown,  e -> { if ((e.stateMask & SWT.SHIFT) == 0) disconnect(); });
         rightBtn.addListener(SWT.MouseDown, e -> { if ((e.stateMask & SWT.SHIFT) == 0) disconnect(); });
         restoreCombinedMaster();   // the saved combined channel
+        // The L/R tooltips name master and slave while combined: a language
+        // switch re-runs the same selection for the combined channel in force.
+        Bindings.onChange(this, I18n.localeProperty(),
+                l -> showLinked(viewPrefs.getFftCombinedMaster()));
         // Recolour the L/R buttons immediately when the channel colours change.
         bindChannelButtonFills(leftBtn, rightBtn);
         headerBar.spacer(2);
         autoSetupBtn = headerBar.pushButton(Icon.ARROWS_TO_CIRCLE_DARK, Icon.ARROWS_TO_CIRCLE_LIT,
-                color(ColorRole.TEXT), I18n.t("fft.autosetup.tooltip"));
+                color(ColorRole.TEXT), null);
+        Bindings.text(autoSetupBtn, "fft.autosetup.tooltip", autoSetupBtn::setToolTipText);
         autoSetupBtn.addListener(SWT.Selection, e -> autoSetup());
         maximizeBtn = headerBar.pushButton(Icon.ARROWS_FROM_CIRCLE_DARK, Icon.ARROWS_FROM_CIRCLE_LIT,
-                color(ColorRole.TEXT), I18n.t("fft.maximize.tooltip"));
+                color(ColorRole.TEXT), null);
+        Bindings.text(maximizeBtn, "fft.maximize.tooltip", maximizeBtn::setToolTipText);
         maximizeBtn.addListener(SWT.Selection, e -> maximize());
         // Distortion / Reset / External - widgets past a wide spacer, shown only while
         // there's a result (hidden by syncDataButtons() when lastResult is null).
         dataSpacer = headerBar.spacer(2);
         distortionBtn = headerBar.toggleButton(Icon.CHART_DARK, Icon.CHART_LIT,
                 color(ColorRole.BUTTON_FRAME),
-                I18n.t("fft.distortion.tooltip"), viewPrefs.isFftDistortionTableVisible());
+                null, viewPrefs.isFftDistortionTableVisible());
+        Bindings.text(distortionBtn, "fft.distortion.tooltip", distortionBtn::setToolTipText);
         // ToolButton toggle (no Bindings helper covers a ToolButton) - writes
         // the pref (auto-saved); the visibility side-effects live in the
         // fftDistortionTableVisible subscription above so they fire on any
@@ -572,16 +588,21 @@ public final class FftView extends AbstractFreqDomainView {
         distortionBtn.addListener(SWT.Selection, e ->
                 viewPrefs.setFftDistortionTableVisible(distortionBtn.isToggled()));
         resetBtn = headerBar.pushButton(Icon.ROTATE_LEFT_RED, Icon.ROTATE_LEFT_RED,
-                color(ColorRole.RESET), I18n.t("fft.reset.tooltip"));
+                color(ColorRole.RESET), null);
+        Bindings.text(resetBtn, "fft.reset.tooltip", resetBtn::setToolTipText);
         resetBtn.addListener(SWT.Selection, e -> { resetStatistics(); redraw(); });
         externalBtn = headerBar.toggleButton(Icon.WINDOW_RESTORE_DARK, Icon.WINDOW_RESTORE_LIT,
                 color(ColorRole.BUTTON_FRAME),
-                I18n.t("fft.external.tooltip"), tableExtracted);
+                null, tableExtracted);
+        Bindings.text(externalBtn, "fft.external.tooltip", externalBtn::setToolTipText);
         externalBtn.addListener(SWT.Selection, e -> {
             if (externalBtn.isToggled() != tableExtracted) {
                 setTableExtracted(externalBtn.isToggled());
             }
         });
+        // The extracted table window's title names THD or IMD by the table
+        // mode: a language switch re-runs the same retitle for the mode in force.
+        Bindings.onChange(this, I18n.localeProperty(), l -> syncExternalShell());
         // Unit of the distortion table's absolute-level cells.  It keeps the slot
         // right after the external-window button, but hangs off the canvas rather
         // than sitting IN the button row: a native drop-down needs its own inset
@@ -631,8 +652,8 @@ public final class FftView extends AbstractFreqDomainView {
         // they inherit the Canvas's crosshair cursor, so give them the normal
         // arrow.  getSystemCursor returns a shared cursor that must not be disposed.
         magUnitCombo = new Combo(this, SWT.READ_ONLY);
-        magUnitCombo.setItems(magUnitLabels());
-        magUnitCombo.setToolTipText(I18n.t("fft.magUnit.tooltip"));
+        Bindings.items(magUnitCombo, this::magUnitLabels);
+        Bindings.text(magUnitCombo, "fft.magUnit.tooltip", magUnitCombo::setToolTipText);
         magUnitCombo.setData("helpAnchor", "fft.html#fft-mag-unit");
         magUnitCombo.setCursor(d.getSystemCursor(SWT.CURSOR_ARROW));
         // Two-way value bind; the unit-change side-effect (convert the visible
@@ -650,16 +671,16 @@ public final class FftView extends AbstractFreqDomainView {
         });
 
         averagesCountLabel = new Label(this, SWT.NONE);
-        averagesCountLabel.setText(I18n.t("fft.avgCount.label", "0"));
+        showAveragesCount();
         averagesCountLabel.setForeground(d.getSystemColor(SWT.COLOR_DARK_GRAY));
-        averagesCountLabel.setToolTipText(I18n.t("fft.avgCount.tooltip"));
+        Bindings.text(averagesCountLabel, "fft.avgCount.tooltip", averagesCountLabel::setToolTipText);
         averagesCountLabel.setData("helpAnchor", "fft.html#fft-averages-count");
         averagesCountLabel.setCursor(d.getSystemCursor(SWT.CURSOR_ARROW));
 
         fillPercentLabel = new Label(this, SWT.NONE);
         fillPercentLabel.setText("0%");
         fillPercentLabel.setForeground(d.getSystemColor(SWT.COLOR_DARK_GRAY));
-        fillPercentLabel.setToolTipText(I18n.t("fft.fillPercent.tooltip"));
+        Bindings.text(fillPercentLabel, "fft.fillPercent.tooltip", fillPercentLabel::setToolTipText);
         fillPercentLabel.setData("helpAnchor", "fft.html#fft-fill-percent");
         fillPercentLabel.setCursor(d.getSystemCursor(SWT.CURSOR_ARROW));
 
@@ -695,6 +716,8 @@ public final class FftView extends AbstractFreqDomainView {
         // the text, not the full plot - a full-width transparent banner covers
         // (and shows its tooltip over) the THD/N+D table and dB axis on the left.
         banner.setLayoutData(bnd);
+        Bindings.onChange(banner, I18n.localeProperty(), l -> showBannerText());
+        Bindings.onChange(this, Fonts.instance().generationProperty(), g -> applyFonts());
 
         startFillPercentTimer();
     }
@@ -721,13 +744,19 @@ public final class FftView extends AbstractFreqDomainView {
                 // the actual frames-averaged depth is roughly 2× the
                 // displayed N because each forever cycle contributes
                 // ~2 FFT frames to the running sum.
-                int n = getAveragesInWindow();
-                String ns = I18n.t("fft.avgCount.label", String.valueOf(n));
-                if (!ns.equals(averagesCountLabel.getText())) averagesCountLabel.setText(ns);
+                showAveragesCount();
             }
             d.timerExec(100, tick[0]);
         };
         d.timerExec(100, tick[0]);
+    }
+
+    /** Shows the averages count in the active language.  The readout timer
+     *  runs it every ~100 ms, which also carries the label across a language
+     *  switch. */
+    private void showAveragesCount() {
+        String ns = I18n.t("fft.avgCount.label", String.valueOf(getAveragesInWindow()));
+        if (!ns.equals(averagesCountLabel.getText())) averagesCountLabel.setText(ns);
     }
 
     /** Loop-driven realtime repaint: paints a freshly-arrived FFT result (flagged
@@ -1250,7 +1279,7 @@ public final class FftView extends AbstractFreqDomainView {
         if (path == null || path.isEmpty()) {
             clearBanner();
         } else {
-            setBanner(I18n.t("fft.loaded.prefix", path), null,
+            setBanner(() -> I18n.t("fft.loaded.prefix", path), null,
                     ColorRole.BLINK_LIT, ColorRole.BLINK_DIM, 0L);
         }
         if (!isDisposed()) redraw();
@@ -1260,23 +1289,35 @@ public final class FftView extends AbstractFreqDomainView {
      *  warning - on the {@link BlinkBanner} widget, which paints and blinks itself
      *  (no canvas redraw).  The widget right-aligns and left-ellipsises the text to
      *  its own width.
+     *  @param text       resolves the banner text in the active language
+     *  @param tooltip    resolves the tooltip; {@code null} = no tooltip
      *  @param untilNanos {@code 0} = persistent, else a {@code nanoTime} expiry. */
-    private void setBanner(String text, String tooltip,
+    private void setBanner(Supplier<String> text, Supplier<String> tooltip,
                            ColorRole lit, ColorRole dim, long untilNanos) {
         ensureFonts();
         banner.setFont(monoFont);
-        banner.setText(text);
-        banner.setToolTipText(tooltip);
+        bannerText    = text;
+        bannerTooltip = tooltip;
         banner.setColors(color(lit), color(dim), color(ColorRole.BACKGROUND));
         bannerUntilNanos = untilNanos;
         banner.setVisible(true);
+        showBannerText();
+        if (untilNanos > 0L) {
+            scheduleBannerHide(untilNanos);
+        }
+    }
+
+    /** Shows the banner's text and tooltip in the active language and fits the
+     *  banner to the text - when a banner is raised, and again on a language
+     *  switch, which re-resolves the same key and arguments. */
+    private void showBannerText() {
+        if (bannerText == null) return;
+        banner.setText(bannerText.get());
+        banner.setToolTipText(bannerTooltip == null ? null : bannerTooltip.get());
         // Size the right-anchored banner to its text so it doesn't span the full
         // plot (clamped to the old MARGIN_LEFT..right-6 band), then lay it out.
         banner.fitFormDataWidth(getClientArea().width - MARGIN_LEFT - 6);
         banner.requestLayout();          // re-size to the new text height + re-position
-        if (untilNanos > 0L) {
-            scheduleBannerHide(untilNanos);
-        }
     }
 
     /** Hides the banner. */
@@ -3901,6 +3942,25 @@ public final class FftView extends AbstractFreqDomainView {
         if (monoFont == null)       monoFont       = fonts.normal(d);
         if (monoBoldFont == null)   monoBoldFont   = fonts.bold(d);
         if (chanButtonFont == null) chanButtonFont = fonts.channel(d);
+    }
+
+    /** Takes the current shared fonts: gives the L/R buttons and the banner
+     *  the new ones, drops the cached static layer drawn with the old axis
+     *  font, re-fits the extracted table window and repaints. */
+    private void applyFonts() {
+        monoFont       = null;
+        monoBoldFont   = null;
+        chanButtonFont = null;
+        ensureFonts();
+        leftBtn.setFont(chanButtonFont);
+        rightBtn.setFont(chanButtonFont);
+        leftBtn.redraw();
+        rightBtn.redraw();
+        banner.setFont(monoFont);
+        showBannerText();
+        disposeTraceBuffer();
+        syncExternalShell();
+        redraw();
     }
 
 }

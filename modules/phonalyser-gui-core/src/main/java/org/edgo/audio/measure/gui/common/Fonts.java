@@ -28,6 +28,7 @@ import org.eclipse.swt.SWT;
 import org.eclipse.swt.graphics.Font;
 import org.eclipse.swt.graphics.FontData;
 import org.eclipse.swt.widgets.Display;
+import org.edgo.audio.measure.bind.Property;
 import org.edgo.audio.measure.preferences.Preferences;
 
 /**
@@ -44,10 +45,9 @@ import org.edgo.audio.measure.preferences.Preferences;
  *
  * <p>One {@link Font} per role is cached per {@link Display} and disposed
  * by a display-dispose hook - consumers must NOT dispose what they get
- * here.  A font-preference change invalidates the cache, but running
- * widgets keep their old Font objects; the Preferences dialog therefore
- * triggers an in-place content rebuild ({@code MainWindow.rebuildContent}),
- * and the rebuilt views pick the new fonts up on construction.
+ * here.  A font-preference change invalidates the cache and then bumps
+ * {@link #generationProperty()}; a widget holding one of these fonts binds
+ * to that property and fetches again, so the change applies in place.
  */
 public final class Fonts {
 
@@ -69,17 +69,26 @@ public final class Fonts {
     /** Display the cached fonts belong to; re-keyed when a fresh display
      *  appears (tests / restarts). */
     private Display cachedDisplay;
+    /** Counts the font-spec changes; set only after the cache was cleared,
+     *  so a listener that fetches a font gets the new one. */
+    private final Property<Integer> generation = new Property<>(0);
 
     private Fonts() {
-        // Invalidate on any spec change - the recreated shell re-fetches.
         Preferences prefs = Preferences.instance();
-        prefs.uiFontNormalProperty().addListener(v -> invalidate());
-        prefs.uiFontBoldProperty().addListener(v -> invalidate());
-        prefs.uiFontChannelProperty().addListener(v -> invalidate());
+        prefs.uiFontNormalProperty().addListener(v -> onSpecChanged());
+        prefs.uiFontBoldProperty().addListener(v -> onSpecChanged());
+        prefs.uiFontChannelProperty().addListener(v -> onSpecChanged());
     }
 
     public static Fonts instance() {
         return INSTANCE;
+    }
+
+    /** Bumped after every font-spec change, once the cache holds no stale
+     *  font - a widget holding one of these fonts binds to it and fetches
+     *  again. */
+    public Property<Integer> generationProperty() {
+        return generation;
     }
 
     /** Axis / readout / table-body font. */
@@ -169,6 +178,13 @@ public final class Fonts {
         } catch (NumberFormatException ex) {
             return 9;
         }
+    }
+
+    /** Drops the cached fonts, then tells the bound widgets - outside the
+     *  cache lock, since they fetch fonts again from their listeners. */
+    private void onSpecChanged() {
+        invalidate();
+        generation.set(generation.get() + 1);
     }
 
     private synchronized void invalidate() {

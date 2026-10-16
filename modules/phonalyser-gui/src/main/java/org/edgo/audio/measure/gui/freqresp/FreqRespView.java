@@ -343,9 +343,10 @@ public final class FreqRespView extends AbstractFreqDomainView {
         axisFont    = Fonts.instance().normal(getDisplay());
         readoutFont = Fonts.instance().normal(getDisplay());
 
-        // Self-blinking overlay banners.  Font + colours are configured ONCE
-        // here (the palette already holds the prefs-driven BACKGROUND from the
-        // super() map); afterwards each show just sets the text + visibility.
+        // Self-blinking overlay banners.  Font + colours are configured here
+        // (the palette already holds the prefs-driven BACKGROUND from the
+        // super() map), the font again on a font change (applyFonts);
+        // afterwards each show just sets the text + visibility.
         // A later background recolour disposes the old palette Color, but
         // BlinkBanner guards against that - it simply drops the halo (the text
         // still draws) rather than crashing.
@@ -353,6 +354,10 @@ public final class FreqRespView extends AbstractFreqDomainView {
         configureBanner(compareBanner);
         sourceBanner  = new BlinkBanner(this);
         configureBanner(sourceBanner);
+        // Both banner texts are built from state (the loaded path, the compare
+        // flags), so a language switch re-runs the method that shows each.
+        Bindings.onChange(sourceBanner,  I18n.localeProperty(), l -> showSourceBanner());
+        Bindings.onChange(compareBanner, I18n.localeProperty(), l -> updateCompareBanner());
 
         // Header buttons (below): L and R are radio (exactly one channel shown at a
         // time), phase is an independent toggle, max is a push that resets the view.
@@ -371,20 +376,25 @@ public final class FreqRespView extends AbstractFreqDomainView {
         }
         // Header buttons - ToolButton widgets in a Toolbar.  L/R is a radio (channel
         // select); phase keeps its own coloured icon; auto-setup/max are icon pushes.
+        // The tooltips follow the language: the L / R ones through showLinked,
+        // which picks them by the combined-channel state, the other three
+        // through their bindings.
         chanButtonFont = Fonts.instance().channel(getDisplay());   // same as FFT/scope
         phaseFillGray  = new Color(getDisplay(), 0xE6, 0xE6, 0xE6);          // 90% grey so the icon reads
         headerBar = new Toolbar(this, BTN_W, BTN_H);
         leftBtn  = headerBar.chanButton("L", color(ColorRole.TEXT), color(ColorRole.BUTTON_FRAME),
-                color(ColorRole.LEFT_BTN_CHAN),  chanButtonFont, I18n.t("freqResp.button.left.tooltip"),  prefs.isFreqRespLeftVisible(),  "channel");
+                color(ColorRole.LEFT_BTN_CHAN),  chanButtonFont, null, prefs.isFreqRespLeftVisible(),  "channel");
         rightBtn = headerBar.chanButton("R", color(ColorRole.TEXT), color(ColorRole.BUTTON_FRAME),
-                color(ColorRole.RIGHT_BTN_CHAN), chanButtonFont, I18n.t("freqResp.button.right.tooltip"), prefs.isFreqRespRightVisible(), "channel");
+                color(ColorRole.RIGHT_BTN_CHAN), chanButtonFont, null, prefs.isFreqRespRightVisible(), "channel");
         phaseBtn = headerBar.toggleButton(Icon.PHASE_SINE, Icon.PHASE_SINE,
-                phaseFillGray,
-                I18n.t("freqResp.button.phase.tooltip"), prefs.isFreqRespPhaseVisible());
+                phaseFillGray, null, prefs.isFreqRespPhaseVisible());
+        Bindings.text(phaseBtn, "freqResp.button.phase.tooltip", phaseBtn::setToolTipText);
         autoSetupBtn = headerBar.pushButton(Icon.ARROWS_TO_CIRCLE_DARK, Icon.ARROWS_TO_CIRCLE_LIT,
-                color(ColorRole.TEXT), I18n.t("freqResp.button.autosetup.tooltip"));
+                color(ColorRole.TEXT), null);
+        Bindings.text(autoSetupBtn, "freqResp.button.autosetup.tooltip", autoSetupBtn::setToolTipText);
         maxBtn = headerBar.pushButton(Icon.ARROWS_FROM_CIRCLE_DARK, Icon.ARROWS_FROM_CIRCLE_LIT,
-                color(ColorRole.TEXT), I18n.t("freqResp.button.maximize.tooltip"));
+                color(ColorRole.TEXT), null);
+        Bindings.text(maxBtn, "freqResp.button.maximize.tooltip", maxBtn::setToolTipText);
         Point hbSize = headerBar.computeSize(SWT.DEFAULT, SWT.DEFAULT);
         headerBar.setBounds(FreqRespConstants.PLOT_MARGIN_LEFT_PX + HEADER_BTN_INSET, BTN_TOP, hbSize.x, hbSize.y);
         headerBar.layout();
@@ -411,6 +421,8 @@ public final class FreqRespView extends AbstractFreqDomainView {
         leftBtn.addListener(SWT.MouseDown,  e -> { if ((e.stateMask & SWT.SHIFT) == 0) disconnect(); });
         rightBtn.addListener(SWT.MouseDown, e -> { if ((e.stateMask & SWT.SHIFT) == 0) disconnect(); });
         Bindings.onChange(this, prefs.freqRespCombinedMasterProperty(), this::showLinked);
+        Bindings.onChange(this, I18n.localeProperty(), l -> showLinked(prefs.getFreqRespCombinedMaster()));
+        Bindings.onChange(this, Fonts.instance().generationProperty(), g -> applyFonts());
         showLinked(prefs.getFreqRespCombinedMaster());   // the saved combined channel
         // Recolour the L/R buttons immediately when the channel colours change.
         bindChannelButtonFills(leftBtn, rightBtn);
@@ -2392,16 +2404,36 @@ public final class FreqRespView extends AbstractFreqDomainView {
         }
     }
 
+    /** Takes the current shared fonts: gives the L/R buttons and the banners
+     *  the new ones, re-anchors the banners to their new text width, drops the
+     *  cached static layer drawn with the old axis font and repaints. */
+    private void applyFonts() {
+        Fonts fonts = Fonts.instance();
+        axisFont       = fonts.normal(getDisplay());
+        readoutFont    = fonts.normal(getDisplay());
+        chanButtonFont = fonts.channel(getDisplay());
+        leftBtn.setFont(chanButtonFont);
+        rightBtn.setFont(chanButtonFont);
+        leftBtn.redraw();
+        rightBtn.redraw();
+        sourceBanner.setFont(readoutFont);
+        compareBanner.setFont(readoutFont);
+        repositionBanners();
+        disposeTraceBuffer();
+        redraw();
+    }
+
     // -------------------------------------------------------------------------
     // Overlay banners (loaded-file path + comparison mode).  Self-painting /
-    // self-blinking BlinkBanner widgets: font + colours are set once in
-    // configureBanner() at construction, so each show just sets text + makes the
-    // widget visible - onPaint never touches them.  Each is sized to its text at
-    // the plot's top-right but clamped clear of the header buttons, re-anchored
-    // only when the text or geometry (resize / phase-axis) changes.
+    // self-blinking BlinkBanner widgets: font + colours are set in
+    // configureBanner() at construction (the font again by applyFonts() on a
+    // font change), so each show just sets text + makes the widget visible -
+    // onPaint never touches them.  Each is sized to its text at the plot's
+    // top-right but clamped clear of the header buttons, re-anchored only when
+    // the text, the font or the geometry (resize / phase-axis) changes.
     // -------------------------------------------------------------------------
 
-    /** One-time banner setup: font + the blink / outline palette colours.  A
+    /** Banner setup at construction: font + the blink / outline palette colours.  A
      *  later background recolour disposes the old outline Color, but BlinkBanner
      *  guards against that (it drops the halo, the text still draws), so the
      *  colours never need re-pushing. */
