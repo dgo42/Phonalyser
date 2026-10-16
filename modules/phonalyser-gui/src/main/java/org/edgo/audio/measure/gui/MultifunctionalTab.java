@@ -33,6 +33,7 @@ import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Listener;
 import org.eclipse.swt.widgets.Sash;
 import org.eclipse.swt.widgets.Shell;
+import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.fft.FftPane;
@@ -271,34 +272,48 @@ public final class MultifunctionalTab {
         display.addFilter(SWT.Selection, sashFilter);
         shell.addDisposeListener(e -> display.removeFilter(SWT.Selection, sashFilter));
 
-        hSplit.addControlListener(ControlListener.controlResizedAdapter(e -> {
-            int total = hSplit.getSize().x;
-            if (total <= 0) return;
-            int sashW = hSplit.getSashWidth();
-            int avail = Math.max(2, total - sashW);
-            boolean genC = genPane != null && genPane.isCollapsed();
-            if (avail < GeneratorPane.MIN_WIDTH_PX * 2 && !genC) return;
+        hSplit.addControlListener(ControlListener.controlResizedAdapter(e -> fitGeneratorWidth()));
+        // The generator width also follows its preference while the window is
+        // up (an automation script sets it; the exit save writes the dragged
+        // width back, which is then the width already in force).
+        Bindings.onChange(hSplit, Preferences.instance().genPaneWidthProperty(), px -> {
+            if (genPane == null || px == genPane.getPaneWidthPx()) return;
+            genPane.setPaneWidthPx(px);
+            fitGeneratorWidth();
+            hSplit.layout(true);
+        });
+    }
 
-            if (genPane != null && genPane.getPaneWidthPx() < 0) {
-                int[] w = hSplit.getWeights();
-                long sum = (long) w[0] + (long) w[1];
-                int derived = sum > 0
-                        ? (int) ((long) avail * w[0] / sum)
-                        : GeneratorPane.MIN_WIDTH_PX;
-                genPane.setPaneWidthPx(Math.max(GeneratorPane.MIN_WIDTH_PX, derived));
-            }
+    /** Pins the generator pane to its pixel width (or to the collapsed strip)
+     *  and gives the rest to the scope / FFT split - on every resize of the
+     *  split and when the width preference changes. */
+    private void fitGeneratorWidth() {
+        int total = hSplit.getSize().x;
+        if (total <= 0) return;
+        int sashW = hSplit.getSashWidth();
+        int avail = Math.max(2, total - sashW);
+        boolean genC = genPane != null && genPane.isCollapsed();
+        if (avail < GeneratorPane.MIN_WIDTH_PX * 2 && !genC) return;
 
-            int gen;
-            if (genC) {
-                gen = Math.min(COLLAPSED_PANE_SIZE, Math.max(1, avail - 1));
-            } else {
-                int desired = (genPane != null) ? genPane.getPaneWidthPx() : GeneratorPane.MIN_WIDTH_PX;
-                gen = Math.max(GeneratorPane.MIN_WIDTH_PX,
-                               Math.min(desired, avail - GeneratorPane.MIN_WIDTH_PX));
-            }
-            int osc = Math.max(1, avail - gen);
-            hSplit.setWeights(new int[]{ gen, osc });
-        }));
+        if (genPane != null && genPane.getPaneWidthPx() < 0) {
+            int[] w = hSplit.getWeights();
+            long sum = (long) w[0] + (long) w[1];
+            int derived = sum > 0
+                    ? (int) ((long) avail * w[0] / sum)
+                    : GeneratorPane.MIN_WIDTH_PX;
+            genPane.setPaneWidthPx(Math.max(GeneratorPane.MIN_WIDTH_PX, derived));
+        }
+
+        int gen;
+        if (genC) {
+            gen = Math.min(COLLAPSED_PANE_SIZE, Math.max(1, avail - 1));
+        } else {
+            int desired = (genPane != null) ? genPane.getPaneWidthPx() : GeneratorPane.MIN_WIDTH_PX;
+            gen = Math.max(GeneratorPane.MIN_WIDTH_PX,
+                           Math.min(desired, avail - GeneratorPane.MIN_WIDTH_PX));
+        }
+        int osc = Math.max(1, avail - gen);
+        hSplit.setWeights(new int[]{ gen, osc });
     }
 
     private void tintSash(Sash sash, Color rest, Color hover) {

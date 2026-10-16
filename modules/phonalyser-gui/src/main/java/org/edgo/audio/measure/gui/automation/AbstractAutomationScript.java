@@ -335,16 +335,14 @@ public abstract class AbstractAutomationScript {
         return value == null ? fallback : value;
     }
 
-    /** Switches the UI language in place (bundle swap + full content
-     *  rebuild).  The persisted language preference is NOT touched - a
-     *  doc-generation run must not change the user's configuration.  The
-     *  audio engines keep running through the rebuild, so the plotted
-     *  data is identical across all languages captured in one run. */
+    /** Switches the UI language in place (bundle swap; every bound text
+     *  re-translates), with no content rebuild.  The persisted language
+     *  preference is NOT touched - a doc-generation run must not change the
+     *  user's configuration.  The panes, the averages and the audio engines
+     *  are untouched by the switch, so the plotted data is identical across
+     *  all languages captured in one run. */
     protected final void language(String tag) {
-        ui(() -> {
-            I18n.setLocale(Locale.forLanguageTag(tag));
-            window.rebuildContent();
-        });
+        ui(() -> window.applyLanguage(Locale.forLanguageTag(tag)));
         log.info("Automation: language switched to {}", tag);
     }
 
@@ -1169,10 +1167,12 @@ public abstract class AbstractAutomationScript {
         ui(() -> { if (predistortionDialog != null) predistortionDialog.setTargetPct(pct); });
     }
 
-    /** Switches the UI language for the wizard ONLY - re-translates its labels in
-     *  place, with no main-window rebuild - so the measurement, the FFT averages
-     *  and the convergence chart stay untouched and one run yields a per-language
-     *  shot. */
+    /** Switches the UI language and re-translates the predistortion wizard's
+     *  labels in place (the wizard does not follow the language binding), so the
+     *  measurement, the FFT averages and the convergence chart stay untouched and
+     *  one run yields a per-language shot.  The switch also re-translates every
+     *  bound main-window text; unlike {@link MainWindow#applyLanguage} it does
+     *  not re-lay out the main shell. */
     protected final void retranslatePredistortion(String tag) {
         ui(() -> {
             I18n.setLocale(Locale.forLanguageTag(tag));
@@ -1210,16 +1210,16 @@ public abstract class AbstractAutomationScript {
     // -------------------------------------------------------------------------
 
     /** Sets the generator pane's preferred width (px) - its 200 px minimum
-     *  is too cramped to read or annotate.  Apply BEFORE {@link #language},
-     *  whose content rebuild seeds the pane width from this preference. */
+     *  is too cramped to read or annotate.  The multifunctional tab follows
+     *  this preference, so the width takes effect at once. */
     protected final void setGeneratorPaneWidth(int px) {
         ui(() -> Preferences.instance().setGenPaneWidth(px));
     }
 
     /** Sets the generator's signal form by enum name (e.g. {@code "DUAL_TONE"},
-     *  {@code "LINEAR_SWEEP"}).  The pane configures its per-form controls from
-     *  this preference when it is (re)built, so call it BEFORE {@link #language}
-     *  (whose content rebuild then comes up in the chosen form). */
+     *  {@code "LINEAR_SWEEP"}).  The pane follows this preference live - its
+     *  form combo and per-form controls reconfigure at once, no rebuild
+     *  needed. */
     protected final void setGeneratorForm(String formName) {
         ui(() -> Preferences.instance().setGenSignalForm(GenSignalForm.valueOf(formName)));
     }
@@ -1479,8 +1479,7 @@ public abstract class AbstractAutomationScript {
     }
 
     // -------------------------------------------------------------------------
-    // Pane access (resolved fresh on every call - a language switch
-    // rebuilds the panes, invalidating earlier references)
+    // Pane access (resolved on every call)
     // -------------------------------------------------------------------------
 
     protected final GeneratorPane genPane() {

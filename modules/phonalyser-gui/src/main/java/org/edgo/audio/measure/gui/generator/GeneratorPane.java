@@ -222,7 +222,9 @@ public final class GeneratorPane extends AbstractPane {
     private Consumer<Void> audioFormatListener;
 
     /** Current pane pixel width as last seen by the sash filter, seeded
-     *  from prefs in the constructor.  {@code -1} = not yet measured. */
+     *  from prefs in the constructor and set again when the width
+     *  preference changes (MultifunctionalTab).  {@code -1} = not yet
+     *  measured. */
     @Getter
     private int        paneWidthPx = -1;
     /** Pixel width remembered at collapse time so {@link #setCollapsed}
@@ -259,9 +261,9 @@ public final class GeneratorPane extends AbstractPane {
         gl.verticalSpacing = 2;
         group.setLayout(gl);
         title = new PaneTitle(group, Events.PANE_ID_GENERATOR,
-                I18n.t("generator.title.expanded"),
-                I18n.t("generator.title.collapsed"),
-                I18n.t("generator.pane.toggle.tooltip"));
+                "generator.title.expanded",
+                "generator.title.collapsed",
+                "generator.pane.toggle.tooltip");
 
         Preferences prefs = Preferences.instance();
 
@@ -280,7 +282,7 @@ public final class GeneratorPane extends AbstractPane {
         formAndAirRow.setLayoutData(fillH());
 
         Label formLabel = new Label(formAndAirRow, SWT.NONE);
-        formLabel.setText(I18n.t("generator.signalForm"));
+        Bindings.text(formLabel, "generator.signalForm", formLabel::setText);
         formLabel.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, true, false));
 
         // Output-channel selector (Both / Left / Right).  READ_ONLY enum combo in
@@ -288,10 +290,12 @@ public final class GeneratorPane extends AbstractPane {
         // status so it reads as "which lane is on air".  Item order matches the
         // OutputChannels ordinals {BOTH, LEFT, RIGHT} for the ordinal bind.
         outputChannelCombo = new Combo(formAndAirRow, SWT.READ_ONLY);
-        outputChannelCombo.add(I18n.t("common.channel.both"));
-        outputChannelCombo.add(I18n.t("common.channel.left"));
-        outputChannelCombo.add(I18n.t("common.channel.right"));
-        outputChannelCombo.setToolTipText(I18n.t("generator.outputChannel.tooltip"));
+        Bindings.items(outputChannelCombo, () -> new String[] {
+                I18n.t("common.channel.both"),
+                I18n.t("common.channel.left"),
+                I18n.t("common.channel.right") });
+        Bindings.text(outputChannelCombo, "generator.outputChannel.tooltip",
+                outputChannelCombo::setToolTipText);
         outputChannelCombo.setLayoutData(new GridData(SWT.RIGHT, SWT.CENTER, false, false));
         Bindings.combo(outputChannelCombo, prefs.genOutputChannelsProperty(), OutputChannels.values());
 
@@ -307,7 +311,7 @@ public final class GeneratorPane extends AbstractPane {
         onAirLed.addListener(SWT.Paint, this::paintOnAirLed);
 
         onAirLabel = new Label(formAndAirRow, SWT.NONE);
-        onAirLabel.setText(I18n.t("generator.onair"));
+        Bindings.text(onAirLabel, "generator.onair", onAirLabel::setText);
         FontData fd0 = onAirLabel.getFont().getFontData()[0];
         onAirFont = new Font(group.getDisplay(),
                 fd0.getName(), fd0.getHeight(), SWT.BOLD);
@@ -317,21 +321,20 @@ public final class GeneratorPane extends AbstractPane {
         GenSignalForm initialForm = prefs.getGenSignalForm();
         formCombo = new SignalFormCombo(group, initialForm);
         formCombo.setLayoutData(fillH());
-        formCombo.setToolTipText(I18n.t("generator.signalForm.tooltip"));
+        Bindings.text(formCombo, "generator.signalForm.tooltip", formCombo::setToolTipText);
         // Listener wired below after freqField is declared, since the form
         // change toggles the frequency field's enabled state.
 
         // --------------------------------------------------------- Frequency
         // Label is a field (not addRowLabel) so we can append the DDS- or
         // FFT-bin-corrected frequency in brackets as the user changes
-        // form / freq.  See updateFreqLabel().
+        // form / freq.  See updateFreqLabel(), the one place its text is set.
         freqLabel = new Label(group, SWT.NONE);
-        freqLabel.setText(I18n.t("generator.frequency"));
         freqLabel.setLayoutData(fillH());
         freqField = new NumericStepField(group, UnitFamily.FREQUENCY,
                 GEN_FREQ_MIN_HZ, currentOutputSampleRate() / 2.0, FREQ_MAX_DECIMALS, 160);
         freqField.setLayoutData(fillH());
-        freqField.setToolTipText(I18n.t("generator.frequency.tooltip"));
+        Bindings.text(freqField, "generator.frequency.tooltip", freqField::setToolTipText);
         freqField.setEnabled(initialForm.isPeriodic());
         // Two-way bind the RAW (as-entered) frequency to the pref; the
         // bind auto-persists via Preferences.requestSave().  The live-apply
@@ -351,9 +354,9 @@ public final class GeneratorPane extends AbstractPane {
         // checkbox keeps its position regardless of waveform -
         // visibility flips between the regular Frequency row above
         // and these two rows.  Labels are stacked above their fields
-        // (horizontalSpan = 2) per the dual-tone styling.
+        // (horizontalSpan = 2) per the dual-tone styling.  Their text is
+        // set only by updateDualToneFreqLabels().
         dualToneFreq1Label = new Label(group, SWT.NONE);
-        dualToneFreq1Label.setText(I18n.t("generator.dualTone.freq1"));
         GridData dt1lGd = new GridData(SWT.FILL, SWT.CENTER, true, false);
         dt1lGd.horizontalSpan = 2;
         dualToneFreq1Label.setLayoutData(dt1lGd);
@@ -362,7 +365,8 @@ public final class GeneratorPane extends AbstractPane {
         GridData dt1fGd = new GridData(SWT.FILL, SWT.CENTER, true, false);
         dt1fGd.horizontalSpan = 2;
         dualToneFreq1Field.setLayoutData(dt1fGd);
-        dualToneFreq1Field.setToolTipText(I18n.t("generator.dualTone.freq1.tooltip"));
+        Bindings.text(dualToneFreq1Field, "generator.dualTone.freq1.tooltip",
+                dualToneFreq1Field::setToolTipText);
         Bindings.stepField(dualToneFreq1Field, prefs.genDualToneFreq1HzProperty());
         Bindings.onChange(group, prefs.genDualToneFreq1HzProperty(), v -> {
             updateDualToneFreqLabels();
@@ -370,7 +374,6 @@ public final class GeneratorPane extends AbstractPane {
         });
 
         dualToneFreq2Label = new Label(group, SWT.NONE);
-        dualToneFreq2Label.setText(I18n.t("generator.dualTone.freq2"));
         GridData dt2lGd = new GridData(SWT.FILL, SWT.CENTER, true, false);
         dt2lGd.horizontalSpan = 2;
         dualToneFreq2Label.setLayoutData(dt2lGd);
@@ -379,7 +382,8 @@ public final class GeneratorPane extends AbstractPane {
         GridData dt2fGd = new GridData(SWT.FILL, SWT.CENTER, true, false);
         dt2fGd.horizontalSpan = 2;
         dualToneFreq2Field.setLayoutData(dt2fGd);
-        dualToneFreq2Field.setToolTipText(I18n.t("generator.dualTone.freq2.tooltip"));
+        Bindings.text(dualToneFreq2Field, "generator.dualTone.freq2.tooltip",
+                dualToneFreq2Field::setToolTipText);
         Bindings.stepField(dualToneFreq2Field, prefs.genDualToneFreq2HzProperty());
         Bindings.onChange(group, prefs.genDualToneFreq2HzProperty(), v -> {
             updateDualToneFreqLabels();
@@ -391,8 +395,8 @@ public final class GeneratorPane extends AbstractPane {
         // FFT pane's current fftLength; toggling off restores the
         // entered frequency.
         fftSnapBtn = new Button(group, SWT.CHECK);
-        fftSnapBtn.setText(I18n.t("generator.snapFft"));
-        fftSnapBtn.setToolTipText(I18n.t("generator.snapFft.tooltip"));
+        Bindings.text(fftSnapBtn, "generator.snapFft", fftSnapBtn::setText);
+        Bindings.text(fftSnapBtn, "generator.snapFft.tooltip", fftSnapBtn::setToolTipText);
         fftSnapBtn.setLayoutData(fillH());
         // Two-way bind the snap flag (auto-persists via requestSave).  The
         // running generator's re-snap + FFT-invalidation publish are the
@@ -409,7 +413,7 @@ public final class GeneratorPane extends AbstractPane {
         // shows/hides - keeps the generator pane uncluttered when the
         // current waveform isn't a sweep.
         sweepLabel = new Label(group, SWT.NONE);
-        sweepLabel.setText(I18n.t("generator.sweep"));
+        Bindings.text(sweepLabel, "generator.sweep", sweepLabel::setText);
         sweepLabel.setLayoutData(fillH());
         sweepPanel = new Composite(group, SWT.NONE);
         sweepPanel.setLayoutData(fillH());
@@ -419,45 +423,55 @@ public final class GeneratorPane extends AbstractPane {
         spGl.horizontalSpacing = 4;
         sweepPanel.setLayout(spGl);
 
-        new Label(sweepPanel, SWT.NONE).setText(I18n.t("generator.sweep.startFreq"));
+        Label sweepStartLabel = new Label(sweepPanel, SWT.NONE);
+        Bindings.text(sweepStartLabel, "generator.sweep.startFreq", sweepStartLabel::setText);
         sweepStartField = new NumericStepField(sweepPanel, UnitFamily.FREQUENCY,
                 GEN_FREQ_MIN_HZ, currentOutputSampleRate() / 2.0, FREQ_MAX_DECIMALS, 120);
         sweepStartField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-        sweepStartField.setToolTipText(I18n.t("generator.sweep.startFreq.tooltip"));
+        Bindings.text(sweepStartField, "generator.sweep.startFreq.tooltip",
+                sweepStartField::setToolTipText);
         Bindings.stepField(sweepStartField, prefs.genSweepFreqStartHzProperty());
 
-        new Label(sweepPanel, SWT.NONE).setText(I18n.t("generator.sweep.stopFreq"));
+        Label sweepEndLabel = new Label(sweepPanel, SWT.NONE);
+        Bindings.text(sweepEndLabel, "generator.sweep.stopFreq", sweepEndLabel::setText);
         sweepEndField = new NumericStepField(sweepPanel, UnitFamily.FREQUENCY,
                 GEN_FREQ_MIN_HZ, currentOutputSampleRate() / 2.0, FREQ_MAX_DECIMALS, 120);
         sweepEndField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-        sweepEndField.setToolTipText(I18n.t("generator.sweep.stopFreq.tooltip"));
+        Bindings.text(sweepEndField, "generator.sweep.stopFreq.tooltip",
+                sweepEndField::setToolTipText);
         Bindings.stepField(sweepEndField, prefs.genSweepFreqEndHzProperty());
 
-        new Label(sweepPanel, SWT.NONE).setText(I18n.t("generator.sweep.duration"));
+        Label sweepDurationLabel = new Label(sweepPanel, SWT.NONE);
+        Bindings.text(sweepDurationLabel, "generator.sweep.duration", sweepDurationLabel::setText);
         sweepDurationField = new NumericStepField(sweepPanel, UnitFamily.TIME,
                 0.001, TIME_MAX_SEC, TIME_MAX_DECIMALS, 120);
         sweepDurationField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-        sweepDurationField.setToolTipText(I18n.t("generator.sweep.duration.tooltip"));
+        Bindings.text(sweepDurationField, "generator.sweep.duration.tooltip",
+                sweepDurationField::setToolTipText);
         Bindings.stepField(sweepDurationField, prefs.genSweepDurationSecProperty());
 
-        new Label(sweepPanel, SWT.NONE).setText(I18n.t("generator.sweep.fadeIn"));
+        Label sweepFadeInLabel = new Label(sweepPanel, SWT.NONE);
+        Bindings.text(sweepFadeInLabel, "generator.sweep.fadeIn", sweepFadeInLabel::setText);
         sweepFadeInField = new NumericStepField(sweepPanel, UnitFamily.TIME,
                 0, TIME_MAX_SEC, TIME_MAX_DECIMALS, 120);
         sweepFadeInField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-        sweepFadeInField.setToolTipText(I18n.t("generator.sweep.fadeIn.tooltip"));
+        Bindings.text(sweepFadeInField, "generator.sweep.fadeIn.tooltip",
+                sweepFadeInField::setToolTipText);
         Bindings.stepField(sweepFadeInField, prefs.genSweepFadeInSecProperty());
 
-        new Label(sweepPanel, SWT.NONE).setText(I18n.t("generator.sweep.fadeOut"));
+        Label sweepFadeOutLabel = new Label(sweepPanel, SWT.NONE);
+        Bindings.text(sweepFadeOutLabel, "generator.sweep.fadeOut", sweepFadeOutLabel::setText);
         sweepFadeOutField = new NumericStepField(sweepPanel, UnitFamily.TIME,
                 0, TIME_MAX_SEC, TIME_MAX_DECIMALS, 120);
         sweepFadeOutField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-        sweepFadeOutField.setToolTipText(I18n.t("generator.sweep.fadeOut.tooltip"));
+        Bindings.text(sweepFadeOutField, "generator.sweep.fadeOut.tooltip",
+                sweepFadeOutField::setToolTipText);
         Bindings.stepField(sweepFadeOutField, prefs.genSweepFadeOutSecProperty());
 
         new Label(sweepPanel, SWT.NONE).setText("");   // spacer for col 0
         sweepLoopBtn = new Button(sweepPanel, SWT.CHECK);
-        sweepLoopBtn.setText(I18n.t("generator.sweep.loop"));
-        sweepLoopBtn.setToolTipText(I18n.t("generator.sweep.loop.tooltip"));
+        Bindings.text(sweepLoopBtn, "generator.sweep.loop", sweepLoopBtn::setText);
+        Bindings.text(sweepLoopBtn, "generator.sweep.loop.tooltip", sweepLoopBtn::setToolTipText);
         sweepLoopBtn.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
         Bindings.check(sweepLoopBtn, prefs.genSweepLoopProperty());
 
@@ -478,24 +492,26 @@ public final class GeneratorPane extends AbstractPane {
 
         // --- Freq 1 amplitude % (label above field).
         Label dtAmp1Label = new Label(dualTonePanel, SWT.NONE);
-        dtAmp1Label.setText(I18n.t("generator.dualTone.amp1"));
+        Bindings.text(dtAmp1Label, "generator.dualTone.amp1", dtAmp1Label::setText);
         dtAmp1Label.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         double initAmp1 = clampPct(prefs.getGenDualToneSplitPct());
         dualToneAmp1Field = new NumericStepField(dualTonePanel, UnitFamily.PERCENT,
                 DUTY_MIN_PCT, DUTY_MAX_PCT, PERCENT_MAX_DECIMALS, 160);
         dualToneAmp1Field.setValue(initAmp1);
         dualToneAmp1Field.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-        dualToneAmp1Field.setToolTipText(I18n.t("generator.dualTone.amp1.tooltip"));
+        Bindings.text(dualToneAmp1Field, "generator.dualTone.amp1.tooltip",
+                dualToneAmp1Field::setToolTipText);
 
         // --- Freq 2 amplitude % (label above field).
         Label dtAmp2Label = new Label(dualTonePanel, SWT.NONE);
-        dtAmp2Label.setText(I18n.t("generator.dualTone.amp2"));
+        Bindings.text(dtAmp2Label, "generator.dualTone.amp2", dtAmp2Label::setText);
         dtAmp2Label.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         dualToneAmp2Field = new NumericStepField(dualTonePanel, UnitFamily.PERCENT,
                 DUTY_MIN_PCT, DUTY_MAX_PCT, PERCENT_MAX_DECIMALS, 160);
         dualToneAmp2Field.setValue(clampPct(100.0 - initAmp1));
         dualToneAmp2Field.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-        dualToneAmp2Field.setToolTipText(I18n.t("generator.dualTone.amp2.tooltip"));
+        Bindings.text(dualToneAmp2Field, "generator.dualTone.amp2.tooltip",
+                dualToneAmp2Field::setToolTipText);
 
         // Couple the two amplitude fields so they always sum to 100 %.
         dualToneAmp1Field.addSelectionListener(e -> applyDualToneAmpSplit(true));
@@ -586,9 +602,9 @@ public final class GeneratorPane extends AbstractPane {
         // 1 to 99 percent with 3 decimal places.  Applies to RECTANGLE
         // (high-time fraction) and TRIANGLE (rise-time fraction); each
         // form has its own persisted duty so switching back keeps the
-        // user's previous value.  Disabled for any other form.
+        // user's previous value.  Disabled for any other form.  The
+        // caption's text is set only by updateDutyLabel().
         dutyLabel = new Label(group, SWT.NONE);
-        dutyLabel.setText(I18n.t("generator.dutyCycle"));
         dutyLabel.setLayoutData(fillH());
         double initialDutyPct = (initialForm == GenSignalForm.TRIANGLE)
                 ? prefs.getGenTriangleDuty()  * 100.0
@@ -597,7 +613,7 @@ public final class GeneratorPane extends AbstractPane {
                 DUTY_MIN_PCT, DUTY_MAX_PCT, PERCENT_MAX_DECIMALS, 160);
         dutyField.setValue(initialDutyPct);
         dutyField.setLayoutData(fillH());
-        dutyField.setToolTipText(I18n.t("generator.dutyCycle.tooltip"));
+        Bindings.text(dutyField, "generator.dutyCycle.tooltip", dutyField::setToolTipText);
         // Write only the active form's duty pref - the controller's per-pref
         // subscription live-applies it and publishes the FFT invalidation.
         dutyField.addSelectionListener(e -> {
@@ -619,9 +635,8 @@ public final class GeneratorPane extends AbstractPane {
         // caption in brackets - exactly like the corrected frequency on the
         // Frequency caption - and tracks the live DAC full-scale.  Off sits at
         // the top of the range.  The caption is a field so updateDitherLabel()
-        // can re-annotate it.
+        // can re-annotate it; that method is the one place its text is set.
         ditherLabel = new Label(group, SWT.NONE);
-        ditherLabel.setText(I18n.t("generator.dither"));
         ditherLabel.setLayoutData(fillH());
         // The dBV view states the physical TPDF level relative to the DAC peak
         // full-scale.  No window term: since the analyser's NENBW correction
@@ -633,7 +648,7 @@ public final class GeneratorPane extends AbstractPane {
                 () -> AudioBackend.instance().calibrationOrDefault(false).peakVolts(Channel.L),
                 160);
         ditherField.setLayoutData(fillH());
-        ditherField.setToolTipText(I18n.t("generator.dither.tooltip"));
+        Bindings.text(ditherField, "generator.dither.tooltip", ditherField::setToolTipText);
         // Seed the entered pair BEFORE wiring the listener so the seed doesn't
         // re-enter the pref write / signal path.
         ditherField.seedPair(prefs.getGenDither());
@@ -665,7 +680,7 @@ public final class GeneratorPane extends AbstractPane {
         });
 
         // ------------------------------------------------------- Corrections
-        addRowLabel(group, I18n.t("generator.corrections"));
+        addRowLabel(group, "generator.corrections");
         Composite corrRow = new Composite(group, SWT.NONE);
         GridLayout corrGl = new GridLayout(3, false);
         corrGl.marginWidth = 0; corrGl.marginHeight = 0;
@@ -688,7 +703,7 @@ public final class GeneratorPane extends AbstractPane {
         GridData corrBrowseGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
         corrBrowseGd.heightHint = IconUtils.FILE_BUTTON_HEIGHT;
         corrBrowseBtn.setLayoutData(corrBrowseGd);
-        corrBrowseBtn.setToolTipText(I18n.t("generator.corrections.browse"));
+        Bindings.text(corrBrowseBtn, "generator.corrections.browse", corrBrowseBtn::setToolTipText);
         corrBrowseBtn.addListener(SWT.Selection, e -> openCorrectionsBrowse());
 
         // Clear (×) - unloads the correction file so the field empties and the
@@ -699,17 +714,17 @@ public final class GeneratorPane extends AbstractPane {
         GridData corrClearGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
         corrClearGd.heightHint = IconUtils.FILE_BUTTON_HEIGHT;
         corrClearBtn.setLayoutData(corrClearGd);
-        corrClearBtn.setToolTipText(I18n.t("generator.corrections.clear"));
+        Bindings.text(corrClearBtn, "generator.corrections.clear", corrClearBtn::setToolTipText);
         corrClearBtn.addListener(SWT.Selection, e -> clearCorrections());
         // Initial state for the current form (path + enablement).
         refreshCorrectionsRow();
 
         // ----- Duration (seconds, used by Save WAV) ---------------------
-        addRowLabel(group, I18n.t("generator.duration"));
+        addRowLabel(group, "generator.duration");
         durationField = new NumericStepField(group, UnitFamily.TIME,
                 0.001, TIME_MAX_SEC, TIME_MAX_DECIMALS, 160);
         durationField.setLayoutData(fillH());
-        durationField.setToolTipText(I18n.t("generator.duration.tooltip"));
+        Bindings.text(durationField, "generator.duration.tooltip", durationField::setToolTipText);
         // Pure persisted value (read only by Save-WAV) - two-way bind with
         // no side-effects; the bind auto-persists via requestSave().
         Bindings.stepField(durationField, prefs.genWavDurationSecondsProperty());
@@ -718,7 +733,7 @@ public final class GeneratorPane extends AbstractPane {
         // Picking a file in the dialog (and confirming overwrite when
         // needed) saves the file immediately - no separate Save click.
         // Format is picked by file extension (.wav / .flac / .aiff/.aif).
-        addRowLabel(group, I18n.t("generator.saveTo"));
+        addRowLabel(group, "generator.saveTo");
         Composite wavRow = new Composite(group, SWT.NONE);
         GridLayout wavGl = new GridLayout(2, false);
         wavGl.marginWidth = 0; wavGl.marginHeight = 0;
@@ -739,7 +754,7 @@ public final class GeneratorPane extends AbstractPane {
         GridData saveToGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
         saveToGd.heightHint = IconUtils.FILE_BUTTON_HEIGHT;
         saveTo.setLayoutData(saveToGd);
-        saveTo.setToolTipText(I18n.t("generator.saveTo.tooltip"));
+        Bindings.text(saveTo, "generator.saveTo.tooltip", saveTo::setToolTipText);
         saveTo.addListener(SWT.Selection, e -> doSaveToBrowseAndWrite());
 
         // --------------------------------------------------- Load-from row
@@ -754,11 +769,12 @@ public final class GeneratorPane extends AbstractPane {
         loadFromHeader.setLayout(hdrGl);
         loadFromHeader.setLayoutData(fillH());
         Label loadFromLabel = new Label(loadFromHeader, SWT.NONE);
-        loadFromLabel.setText(I18n.t("generator.loadFrom"));
+        Bindings.text(loadFromLabel, "generator.loadFrom", loadFromLabel::setText);
         loadFromLabel.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, true, false));
         playFromLoopBtn = new Button(loadFromHeader, SWT.CHECK);
-        playFromLoopBtn.setText(I18n.t("generator.loadFrom.loop"));
-        playFromLoopBtn.setToolTipText(I18n.t("generator.loadFrom.loop.tooltip"));
+        Bindings.text(playFromLoopBtn, "generator.loadFrom.loop", playFromLoopBtn::setText);
+        Bindings.text(playFromLoopBtn, "generator.loadFrom.loop.tooltip",
+                playFromLoopBtn::setToolTipText);
         playFromLoopBtn.setLayoutData(new GridData(SWT.RIGHT, SWT.CENTER, false, false));
         Bindings.check(playFromLoopBtn, prefs.genPlayFromLoopProperty());
         // The live-apply to a running playback (loop change takes effect at
@@ -786,7 +802,7 @@ public final class GeneratorPane extends AbstractPane {
         GridData loadFromGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
         loadFromGd.heightHint = IconUtils.FILE_BUTTON_HEIGHT;
         loadFrom.setLayoutData(loadFromGd);
-        loadFrom.setToolTipText(I18n.t("generator.loadFrom.browse"));
+        Bindings.text(loadFrom, "generator.loadFrom.browse", loadFrom::setToolTipText);
         loadFrom.addListener(SWT.Selection, e -> openPlayFromBrowse());
 
         playFromBtn = new Button(playFromRow, SWT.PUSH);
@@ -794,7 +810,7 @@ public final class GeneratorPane extends AbstractPane {
         GridData playFromGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
         playFromGd.heightHint = IconUtils.FILE_BUTTON_HEIGHT;
         playFromBtn.setLayoutData(playFromGd);
-        playFromBtn.setToolTipText(I18n.t("generator.loadFrom.play"));
+        // Its tooltip follows the playback state - see showPlayFromToolTip.
         playFromBtn.addListener(SWT.Selection, e -> togglePlayFrom());
         // Auto-reset the LED when playback ends naturally (EOF without
         // loop) or fails on the play thread.  The bus delivers
@@ -836,7 +852,8 @@ public final class GeneratorPane extends AbstractPane {
 
         Button calibrateDacBtn = new Button(playRow, SWT.PUSH);
         calibrateDacBtn.setImage(calibrateDacIcon);
-        calibrateDacBtn.setToolTipText(I18n.t("generator.calibrateDac.tooltip"));
+        Bindings.text(calibrateDacBtn, "generator.calibrateDac.tooltip",
+                calibrateDacBtn::setToolTipText);
         GridData calBtnGd = new GridData(SWT.LEFT, SWT.CENTER, true, false);
         calBtnGd.widthHint = IconUtils.ACTION_BUTTON_PX;
         calBtnGd.heightHint = IconUtils.ACTION_BUTTON_PX;
@@ -849,7 +866,7 @@ public final class GeneratorPane extends AbstractPane {
         playBtnGd.heightHint = IconUtils.ACTION_BUTTON_PX;
         playBtn.setLayoutData(playBtnGd);
         playBtn.setImage(playDimImg);                                  // start dim
-        playBtn.setToolTipText(I18n.t("generator.play.start"));
+        // Its tooltip follows the tone state - see showPlayToolTip.
         playBtn.addListener(SWT.Selection, e -> {
             // DIRECT calls: the play THREAD owns the lane (open through close),
             // and stop() only sets its flag and joins bounded - nothing here
@@ -917,9 +934,8 @@ public final class GeneratorPane extends AbstractPane {
 
         // Dispose-time: detach the pane's own bus subscriptions and tear
         // down the icon cache owned by this pane's display.  The injected
-        // controller deliberately keeps running - a content rebuild
-        // (language / font change) must not silence the tone; it is shut
-        // down by UIEngines at application exit.
+        // controller deliberately keeps running past the pane's dispose; it
+        // is shut down by UIEngines at application exit.
         group.addDisposeListener(e -> {
             bus.unsubscribe(Events.FFT_LENGTH_CHANGED,            fftLengthListener);
             bus.unsubscribe(Events.FILE_PLAY_STOPPED,             filePlayStoppedListener);
@@ -941,12 +957,28 @@ public final class GeneratorPane extends AbstractPane {
         updateFreqLabel();
         updateDutyLabel();
         updateDitherLabel();
+        updateDualToneFreqLabels();
 
         // The injected controller survives content rebuilds - when this
         // pane is a rebuilt instance the tone / file playback may already
         // be running; light the Play LEDs + ON-AIR banner accordingly.
         syncPlayButtonVisuals();
         syncFilePlayVisuals();
+
+        // The captions above and the two Play tooltips depend on state, so
+        // each gets its text only from its own method; a language switch
+        // re-runs that method to show the same state in the new language.
+        // Only the text parts re-run for the Play buttons: the full visual
+        // sync can also stop the ON-AIR blink, and the blink timer is where
+        // a playback that ended from below gets reported.
+        Property<Locale> uiLocale = I18n.localeProperty();
+        Bindings.onChange(freqLabel, uiLocale, l -> updateFreqLabel());
+        Bindings.onChange(dutyLabel, uiLocale, l -> updateDutyLabel());
+        Bindings.onChange(ditherLabel, uiLocale, l -> updateDitherLabel());
+        Bindings.onChange(dualToneFreq1Label, uiLocale, l -> updateDualToneFreqLabels());
+        Bindings.onChange(playBtn, uiLocale, l -> showPlayToolTip(controller.isRunning()));
+        Bindings.onChange(playFromBtn, uiLocale,
+                l -> showPlayFromToolTip(controller.isFilePlaying()));
 
         wireHelpAnchors();
     }
@@ -1084,7 +1116,11 @@ public final class GeneratorPane extends AbstractPane {
      *  {@link #MIN_WIDTH_PX} are ignored so a transient drag past the
      *  minimum doesn't corrupt the persisted width. */
     public void setPaneWidthPx(int px) {
-        if (px >= MIN_WIDTH_PX) paneWidthPx = px;
+        if (px < MIN_WIDTH_PX) return;
+        paneWidthPx = px;
+        // Collapsed: the expand restores the width snapshotted at collapse
+        // time - a width set meanwhile replaces that snapshot.
+        if (collapsed) preCollapseWidthPx = px;
     }
 
     /** Generator-pane collapse extra: snapshot the pixel width on the way
@@ -1129,12 +1165,18 @@ public final class GeneratorPane extends AbstractPane {
         if (playBtn == null || playBtn.isDisposed()) return;
         boolean running = controller.isRunning();
         playBtn.setImage(running ? playLitImg : playDimImg);
-        playBtn.setToolTipText(I18n.t(running ? "generator.play.stop" : "generator.play.start"));
+        showPlayToolTip(running);
         if (running) {
             startOnAirBlink();
         } else if (!controller.isFilePlaying()) {
             stopOnAirBlink();
         }
+    }
+
+    /** The main Play button's tooltip for the tone state: Stop while the
+     *  tone plays, Start otherwise. */
+    private void showPlayToolTip(boolean running) {
+        playBtn.setToolTipText(I18n.t(running ? "generator.play.stop" : "generator.play.start"));
     }
 
     /** Mirrors the file-playback engine state on the small play LED and the
@@ -1143,10 +1185,16 @@ public final class GeneratorPane extends AbstractPane {
         if (playFromBtn == null || playFromBtn.isDisposed()) return;
         boolean playing = controller.isFilePlaying();
         playFromBtn.setImage(playing ? tinyPlayLitImg : tinyPlayDimImg);
-        playFromBtn.setToolTipText(I18n.t(playing ? "generator.loadFrom.stop"
-                                                  : "generator.loadFrom.play"));
+        showPlayFromToolTip(playing);
         fftSnapBtn.setEnabled(!playing);
         if (playing) startOnAirBlink();
+    }
+
+    /** The small play LED's tooltip for the file-playback state: Stop while
+     *  a file plays, Play otherwise. */
+    private void showPlayFromToolTip(boolean playing) {
+        playFromBtn.setToolTipText(I18n.t(playing ? "generator.loadFrom.stop"
+                                                  : "generator.loadFrom.play"));
     }
 
     /**
@@ -1294,9 +1342,9 @@ public final class GeneratorPane extends AbstractPane {
     // -------------------------------------------------------------------------
     // Layout helpers
     // -------------------------------------------------------------------------
-    private void addRowLabel(Composite parent, String text) {
+    private void addRowLabel(Composite parent, String key) {
         Label l = new Label(parent, SWT.NONE);
-        l.setText(text);
+        Bindings.text(l, key, l::setText);
         l.setLayoutData(fillH());
     }
     private GridData fillH() {
@@ -1804,12 +1852,12 @@ public final class GeneratorPane extends AbstractPane {
      *  scale, read from the output device's calibration. */
     private NumericStepField buildAmpField(Composite parent, String labelKey, Channel ch,
                                            GenSignalForm initialForm, Property<UnitValue> stored) {
-        addRowLabel(parent, I18n.t(labelKey));
+        addRowLabel(parent, labelKey);
         NumericStepField field = new NumericStepField(parent, UnitFamily.AMPLITUDE,
                 AMP_MIN_VRMS, controller.maxAmplitudeVrms(initialForm, ch), AMP_MAX_DECIMALS,
                 () -> AudioBackend.instance().calibrationOrDefault(false).peakVolts(ch), 160);
         field.setLayoutData(fillH());
-        field.setToolTipText(I18n.t("generator.amplitudeRms.tooltip"));
+        Bindings.text(field, "generator.amplitudeRms.tooltip", field::setToolTipText);
         // The field holds the pair the operator entered - the displayed number
         // and its unit - and the store resolves it to Vrms at use, so a dBFS
         // entry keeps meaning what was typed when the calibration moves.  Seed
