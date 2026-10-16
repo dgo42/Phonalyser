@@ -18,95 +18,108 @@
 
 package org.edgo.audio.measure.gui.freqresp;
 
-import java.io.File;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
-import java.util.function.Consumer;
-
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.custom.StackLayout;
 import org.eclipse.swt.graphics.Image;
-import org.eclipse.swt.graphics.Point;
-import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Composite;
+import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
-import org.eclipse.swt.widgets.FileDialog;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Shell;
-import org.edgo.audio.measure.sound.StereoCaptureProgress;
-import org.edgo.audio.measure.dsp.FreqRespCalHelper;
-import org.edgo.audio.measure.dsp.FreqRespCalibration;
-import org.edgo.audio.measure.dsp.StereoFreqRespCalibration;
-import org.edgo.audio.measure.gui.bus.Events;
-import org.edgo.audio.measure.gui.bus.MessageBus;
-import org.edgo.audio.measure.gui.common.CorrectionStore;
 import org.edgo.audio.measure.gui.common.Dialogs;
-import org.edgo.audio.measure.gui.common.GuiUtil;
 import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.common.ShellIcons;
 import org.edgo.audio.measure.gui.i18n.I18n;
+import org.edgo.audio.measure.preferences.CalibrationEntry;
+import org.edgo.audio.measure.preferences.CalibrationList;
 import org.edgo.audio.measure.preferences.Preferences;
-import org.edgo.audio.measure.enums.Channel;
-import org.edgo.audio.measure.sound.AudioBackend;
-import org.edgo.audio.measure.sound.DeviceCalibration;
-import org.edgo.audio.measure.sound.DeviceRef;
-
-import lombok.extern.log4j.Log4j2;
 
 /**
- * Three-page modal wizard that walks the user through measuring the
- * DAC -> ADC loopback transfer (page 1) and then the device under test
- * (page 2), finally saving the result as a calibration file (page 3) and
- * applying it as the active calibration.  Mirrors the standard Wizard /
- * Next / Back / Cancel flow common to installer dialogs.
+ * Two-step modal wizard: step 1 measures the DAC -> ADC loopback, step 2 the
+ * filter under test, each saved as its own calibration file and applied to
+ * the FreqResp calibration list.  The wizard only controls the process: its
+ * Play is the pane's Play (lock, progress window with Cancel, the
+ * controller's measurement), whose result reaches the view exactly as a pane
+ * measurement does; its save is the pane's save of the curves the view
+ * shows; Apply writes the calibration list in the preferences, which the
+ * calibration tab follows.  The pane, its owner, passes each run's result
+ * and end on to the open wizard.
  *
- * <p>Cancellation discards every measurement taken inside the wizard and
- * restores the {@link CorrectionStore} to whatever snapshot it
- * was at the moment {@link #open()} ran.  An "are you sure?" ack-confirm
- * fires on cancel whenever any of the three pages has captured fresh
- * data, regardless of which page the cancel was clicked from.
+ * <p>Each step runs READY -> MEASURED -> SAVED -> APPLIED: Play measures, then
+ * one action button appears (Save calibration... / Apply).  The step's Play
+ * button stays available to measure again, and a new result returns the step
+ * to MEASURED.  Step 1's save switches every calibration off first, so the
+ * loopback is saved raw; its Apply activates the loopback as item 0 and opens
+ * step 2.  Step 2's save leaves only item 0 on, so the filter is saved
+ * de-embedded by the loopback alone; its Apply puts the filter into item 1
+ * beside it and keeps the wizard open for another filter measurement.
+ * Closing asks only while a measurement is unsaved or a saved calibration is
+ * not applied; nothing the wizard changed is rolled back.
  */
-@Log4j2
 public final class FreqRespWizardDialog {
 
-    private final Shell        parentShell;
-    private final FreqRespView hostView;
-    private final CorrectionStore.Snapshot preWizardSnapshot;
+    private static final int BUTTON_WIDTH = 75;
 
-    private Shell      dialog;
-    private StackLayout stack;
-    private Composite  pageHost;
-    private Composite  page1, page2, page3;
-    private Button     backBtn, nextBtn, cancelBtn;
-    private Button     page1Play, page2Play;
-    private Button     page3Save, page3Apply;
+    /** Where one step stands. */
+    private enum StepState {
+        READY, MEASURED, SAVED, APPLIED;
 
-    private StereoFreqRespResult directResult;
-    private StereoFreqRespResult dutResult;
-    private String         savedCalPath;
-    private boolean        unsavedDirty;
-    /** "Please wait" modal shown for the duration of a wizard measurement.
-     *  Same shape as the pane's progress dialog so the user sees consistent
-     *  feedback regardless of which Play button started the sweep. */
-    private Shell             progressDialog;
-    /** Live "level vs. time" meter inside {@link #progressDialog}, fed by the
-     *  capture-progress callback that the wizard passes through to the
-     *  analyzer config.  Null while no progress dialog is open. */
-    private FreqRespLiveMeter progressMeter;
-    private boolean        appliedSuccessfully;
-    private int            currentPageIndex;
-
-    public FreqRespWizardDialog(Shell parent, FreqRespView view) {
-        this.parentShell       = parent;
-        this.hostView          = view;
-        this.preWizardSnapshot = hostView.getCorrectionStore().snapshot();
+        private StepState() {
+        }
     }
 
-    /** Opens the wizard and blocks until the user finishes / cancels. */
+    /** One step: its page, its action button, its state and the file its last
+     *  save wrote.  Its Play button needs no handle - it measures in every
+     *  state.  While a run is in flight the pane's modal progress window
+     *  keeps it from a second click; once a cancel is pending that window
+     *  lets a second close through (the escape hatch for a hung teardown),
+     *  and the pane's Play then refuses the second start (it returns false
+     *  while a run is in flight). */
+    private static final class Step {
+        Composite page;
+        Button    actionButton;
+        StepState state = StepState.READY;
+        /** The path the pane's save returned; the item Apply writes. */
+        String    savedPath;
+
+        private Step() {
+        }
+    }
+
+    private final Shell        parentShell;
+    /** The owner: its Play and its save run the wizard's measurements, and it
+     *  passes each run's result and end on to the wizard. */
+    private final FreqRespPane pane;
+
+    private final Step loopback = new Step();
+    private final Step filter   = new Step();
+
+    private Shell       dialog;
+    private StackLayout stack;
+    private Composite   pageHost;
+    /** Back / Next / Close - switched off with the step page while a save or
+     *  an apply runs. */
+    private Composite   buttonBar;
+    private Button      backBtn, nextBtn;
+    private Step        shownStep;
+
+    /** The step whose sweep is in flight; {@code null} while the wizard runs
+     *  none. */
+    private Step    measuringStep;
+    /** Set when the in-flight run delivered its result; onMeasurementStopped
+     *  reads it. */
+    private boolean resultArrived;
+
+    public FreqRespWizardDialog(Shell parent, FreqRespPane pane) {
+        this.parentShell = parent;
+        this.pane        = pane;
+    }
+
+    /** Opens the wizard and blocks until the user closes it. */
     public void open() {
         // FIXED size = initial - no RESIZE bit.
         dialog = new Shell(parentShell, SWT.DIALOG_TRIM | SWT.APPLICATION_MODAL);
@@ -122,23 +135,16 @@ public final class FreqRespWizardDialog {
         stack = new StackLayout();
         pageHost.setLayout(stack);
 
-        page1 = buildPlayPage(I18n.t("freqResp.wizard.page1.title"),
-                              I18n.t("freqResp.wizard.page1.text"),
-                              btn -> page1Play = btn);
-        page2 = buildPlayPage(I18n.t("freqResp.wizard.page2.title"),
-                              I18n.t("freqResp.wizard.page2.text"),
-                              btn -> page2Play = btn);
-        page3 = buildSavePage();
-
-        page1Play.addListener(SWT.Selection, e -> runMeasurement(true));
-        page2Play.addListener(SWT.Selection, e -> runMeasurement(false));
+        buildStepPage(loopback, I18n.t("freqResp.wizard.page1.title"),
+                                I18n.t("freqResp.wizard.page1.text"));
+        buildStepPage(filter,   I18n.t("freqResp.wizard.page2.title"),
+                                I18n.t("freqResp.wizard.page2.text"));
 
         buildButtonBar();
-        showPage(0);
+        showStep(loopback);
 
-        dialog.addListener(SWT.Close, e -> {
-            e.doit = handleCancel();
-        });
+        // The Close button, the window X and Escape all arrive here.
+        dialog.addListener(SWT.Close, e -> e.doit = confirmClose());
 
         Dialogs.centerOnParent(dialog);
         dialog.open();
@@ -152,7 +158,7 @@ public final class FreqRespWizardDialog {
     // Pages
     // -------------------------------------------------------------------------
 
-    private Composite buildPlayPage(String titleText, String bodyText, Consumer<Button> playSink) {
+    private void buildStepPage(Step step, String titleText, String bodyText) {
         Composite c = new Composite(pageHost, SWT.NONE);
         GridLayout gl = new GridLayout(1, false);
         gl.marginWidth = 8; gl.marginHeight = 8; gl.verticalSpacing = 12;
@@ -168,48 +174,27 @@ public final class FreqRespWizardDialog {
         bgd.widthHint = 480;
         body.setLayoutData(bgd);
 
-        Button play = new Button(c, SWT.PUSH);
+        Composite buttons = new Composite(c, SWT.NONE);
+        buttons.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
+        GridLayout bl = new GridLayout(2, false);
+        bl.marginWidth = 0; bl.marginHeight = 0; bl.horizontalSpacing = 8;
+        buttons.setLayout(bl);
+
+        Button play = new Button(buttons, SWT.PUSH);
         // Match the generator pane's main Play button: solid green play LED
         // (no text), with the tooltip carrying the action label.
         Image playIcon = IconUtils.icon(c.getDisplay(), Icon.PLAY_DARK_BIG);
         if (playIcon != null) play.setImage(playIcon);
         play.setToolTipText(I18n.t("freqResp.button.play.start"));
-        play.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
-        playSink.accept(play);
-        return c;
-    }
+        play.addListener(SWT.Selection, e -> startMeasurement(step));
 
-    private Composite buildSavePage() {
-        Composite c = new Composite(pageHost, SWT.NONE);
-        GridLayout gl = new GridLayout(2, false);
-        gl.marginWidth = 8; gl.marginHeight = 8;
-        gl.horizontalSpacing = 8; gl.verticalSpacing = 12;
-        c.setLayout(gl);
+        Button action = new Button(buttons, SWT.PUSH);
+        action.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
+        action.addListener(SWT.Selection, e -> onAction(step));
 
-        Label heading = new Label(c, SWT.NONE);
-        heading.setText(I18n.t("freqResp.wizard.page3.title"));
-        GridData hgd = new GridData(SWT.FILL, SWT.CENTER, true, false);
-        hgd.horizontalSpan = 2;
-        heading.setLayoutData(hgd);
-
-        Label body = new Label(c, SWT.WRAP);
-        body.setText(I18n.t("freqResp.wizard.page3.text"));
-        GridData bgd = new GridData(SWT.FILL, SWT.FILL, true, true);
-        bgd.widthHint = 480;
-        bgd.horizontalSpan = 2;
-        body.setLayoutData(bgd);
-
-        page3Save = new Button(c, SWT.PUSH);
-        page3Save.setText(I18n.t("freqResp.wizard.button.save"));
-        page3Save.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
-        page3Save.addListener(SWT.Selection, e -> doSaveCalibration());
-
-        page3Apply = new Button(c, SWT.PUSH);
-        page3Apply.setText(I18n.t("freqResp.wizard.button.apply"));
-        page3Apply.setEnabled(false);
-        page3Apply.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
-        page3Apply.addListener(SWT.Selection, e -> doApplyCalibration());
-        return c;
+        step.page         = c;
+        step.actionButton = action;
+        refreshStepButtons(step);
     }
 
     private void buildButtonBar() {
@@ -218,361 +203,224 @@ public final class FreqRespWizardDialog {
         GridLayout gl = new GridLayout(3, true);
         gl.marginWidth = 0; gl.marginHeight = 0;
         bar.setLayout(gl);
+        buttonBar = bar;
 
         backBtn = new Button(bar, SWT.PUSH);
         backBtn.setText(I18n.t("freqResp.wizard.button.back"));
-        backBtn.addListener(SWT.Selection, e -> { if (currentPageIndex > 0) showPage(currentPageIndex - 1); });
+        backBtn.setLayoutData(buttonLayoutData());
+        backBtn.addListener(SWT.Selection, e -> showStep(loopback));
 
         nextBtn = new Button(bar, SWT.PUSH);
         nextBtn.setText(I18n.t("freqResp.wizard.button.next"));
-        nextBtn.addListener(SWT.Selection, e -> { if (currentPageIndex < 2) showPage(currentPageIndex + 1); });
+        nextBtn.setLayoutData(buttonLayoutData());
+        nextBtn.addListener(SWT.Selection, e -> showStep(filter));
 
-        cancelBtn = new Button(bar, SWT.PUSH);
-        cancelBtn.setText(I18n.t("freqResp.wizard.button.cancel"));
-        cancelBtn.addListener(SWT.Selection, e -> { if (handleCancel()) dialog.close(); });
+        Button closeBtn = new Button(bar, SWT.PUSH);
+        closeBtn.setText(I18n.t("common.close"));
+        closeBtn.setLayoutData(buttonLayoutData());
+        closeBtn.addListener(SWT.Selection, e -> dialog.close());
     }
 
-    private void showPage(int idx) {
-        currentPageIndex = idx;
-        switch (idx) {
-            case 0:  stack.topControl = page1; break;
-            case 1:  stack.topControl = page2; break;
-            default: stack.topControl = page3; break;
-        }
+    /** A button's layout data: {@link #BUTTON_WIDTH} wide. */
+    private GridData buttonLayoutData() {
+        GridData gd = new GridData(SWT.FILL, SWT.CENTER, true, false);
+        gd.widthHint = BUTTON_WIDTH;
+        return gd;
+    }
+
+    private void showStep(Step step) {
+        shownStep = step;
+        stack.topControl = step.page;
         pageHost.layout();
         refreshNavEnable();
     }
 
+    /** Back only from step 2; Next only from step 1 once it is applied. */
     private void refreshNavEnable() {
-        backBtn.setEnabled(currentPageIndex > 0);
-        switch (currentPageIndex) {
-            case 0:  nextBtn.setEnabled(directResult != null);   break;
-            case 1:  nextBtn.setEnabled(dutResult    != null);   break;
-            default: nextBtn.setEnabled(false);                  break;
-        }
+        backBtn.setEnabled(shownStep == filter);
+        nextBtn.setEnabled(shownStep == loopback && loopback.state == StepState.APPLIED);
     }
 
-    // -------------------------------------------------------------------------
-    // Measurement
-    // -------------------------------------------------------------------------
-
-    private void runMeasurement(boolean directLeg) {
-        Preferences prefs = Preferences.instance();
-        DeviceRef out = AudioBackend.instance().getActiveOutputDevice();
-        DeviceRef in  = AudioBackend.instance().getActiveInputDevice();
-        if (out == null || in == null) {
-            Dialogs.error(dialog, I18n.t("freqResp.wizard.title"),
-                    I18n.t("freqResp.error.noDevice"));
-            return;
+    /** The action button follows the step's state: hidden in READY (Play is
+     *  the step's only action there), Save calibration... (MEASURED), Apply
+     *  (SAVED); disabled once applied.  Play measures again in every state. */
+    private void refreshStepButtons(Step step) {
+        boolean measured = step.state != StepState.READY;
+        step.actionButton.setVisible(measured);
+        ((GridData) step.actionButton.getLayoutData()).exclude = !measured;
+        if (measured) {
+            step.actionButton.setText(step.state == StepState.MEASURED
+                    ? I18n.t("freqResp.wizard.button.save")
+                    : I18n.t("freqResp.wizard.button.apply"));
+            step.actionButton.setEnabled(step.state != StepState.APPLIED);
         }
-        page1Play.setEnabled(false);
-        page2Play.setEnabled(false);
-        backBtn.setEnabled(false);
-        nextBtn.setEnabled(false);
-        // The two devices' calibrations in force, read once for this
-        // measurement; the sweep is rendered on both lanes at the same level,
-        // each lane against its own full scale.
-        AudioBackend audio = AudioBackend.instance();
-        DeviceCalibration dac = audio.calibrationOrDefault(false);
-        DeviceCalibration adc = audio.calibrationOrDefault(true);
-        double sweepAmplitudeVrms = dac.amplitudeVrms(prefs.getFreqRespAmplitude(), Channel.L);
+        // From the page down: the button row was sized without the excluded
+        // button, and a layout of the row alone keeps that size.
+        step.page.layout(new Control[] { step.actionButton });
+    }
 
-        // Each converter runs the format IT is configured with - see
-        // FreqRespAnalyzerWorker.  The progress meter's time axis is the RECORD's,
-        // so it divides by the capture rate.
-        int captureRate  = Math.max(1, prefs.current().getInputSampleRate());
-        int playbackRate = Math.max(1, prefs.current().getOutputSampleRate());
-        int playbackBits = prefs.current().getOutputBitDepth();
-        // The silence before the chirp: the fixed window the deconvolution
-        // measures each channel's DC offset on, plus the operator's lead-in.
-        double leadInSec = FreqRespCalHelper.OFFSET_LEAD_IN_SEC + prefs.getFreqRespLeadInSec();
-        // The chirp is played over the SWEPT band - the configured band widened
-        // at both ends - and the analyzer's deconvolution reference is built by
-        // the same rule, so the two are one chirp; the meter follows it too.
-        double[] swept = FreqRespConstants.sweptBandHz(prefs.getFreqRespStartHz(),
-                prefs.getFreqRespStopHz(), captureRate, playbackRate);
-        double totalSec = leadInSec
-                        + prefs.getFreqRespDurationSec()
-                        + 0.5;
-        // Read once: the capture and the deconvolution must agree on it.
-        Channel combined = prefs.getFreqRespCombinedMaster();
-        openProgressDialog(totalSec, leadInSec, swept[0], swept[1]);
-        MessageBus.instance().publish(Events.FREQRESP_MEASUREMENT_STARTED);
-        // Marshal capture-progress to the UI thread so the progress dialog's
-        // live meter paints level-vs-time as the sweep runs.  The meter shows
-        // the channel the view has selected (its L/R radio), read per block.
-        StereoCaptureProgress progress = (totalSamples, rmsLeft, rmsRight) -> {
-            double rmsLin = prefs.isFreqRespLeftVisible() ? rmsLeft : rmsRight;
-            double tSec = totalSamples / (double) captureRate;
-            GuiUtil.marshal(dialog, () -> {
-                if (progressMeter != null && !progressMeter.isDisposed()) {
-                    progressMeter.appendSample(tSec, rmsLin);
-                }
-            });
-        };
-        Thread t = new Thread(() -> {
-            try {
-                FreqRespAnalyzerConfig cfg = FreqRespAnalyzerConfig.builder()
-                        .outDevice(out).inDevice(in)
-                        .captureRateHz(captureRate)
-                        .playbackRateHz(playbackRate)
-                        .playbackBitDepth(playbackBits)
-                        .ditherBits(prefs.getFreqRespDitherBits())
-                        .startHz(prefs.getFreqRespStartHz())
-                        .stopHz(prefs.getFreqRespStopHz())
-                        .sweepPoints(prefs.getFreqRespSweepPoints())
-                        .durationSec(prefs.getFreqRespDurationSec())
-                        .leadInSec(leadInSec)
-                        .amplitudeVrms(sweepAmplitudeVrms)
-                        .dacFsVoltageRmsLeft(dac.peakVolts(Channel.L))
-                        .dacFsVoltageRmsRight(dac.peakVolts(Channel.R))
-                        .adcFsVoltageRmsLeft(adc.fsRms(Channel.L))
-                        .adcFsVoltageRmsRight(adc.fsRms(Channel.R))
-                        .applyCalibration(!directLeg)  // page 2 divides out the page-1 transfer
-                        .combinedMaster(combined)
-                        .captureProgress(progress)
-                        // As in FreqRespAnalyzerWorker: the sweep leg belongs to
-                        // whichever backend is active, and a remote bench renders
-                        // the chirp itself instead of being played into.
-                        .stereoCaptureProvider(StereoCaptureProvider.forSweep(playbackRate,
-                                swept[0], swept[1],
-                                prefs.getFreqRespDurationSec(), leadInSec,
-                                sweepAmplitudeVrms, dac.peakVolts(Channel.L), dac.peakVolts(Channel.R),
-                                combined))
-                        .build();
-                StereoFreqRespResult r = new FreqRespAnalyzer(cfg).run(null, null);
-                GuiUtil.marshal(dialog, () -> onMeasurementDone(directLeg, r, null));
-            } catch (Exception ex) {
-                log.error("Wizard measurement failed", ex);
-                GuiUtil.marshal(dialog, () -> onMeasurementDone(directLeg, null,
-                        ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName()));
-            } finally {
-                // NOT gated on the dialog: the panes' Record buttons stay
-                // grayed until this arrives, dialog or no dialog.
-                GuiUtil.marshal(() ->
-                        MessageBus.instance().publish(Events.FREQRESP_MEASUREMENT_STOPPED));
+    /** Save or Apply, with the step's buttons and Back / Next / Close off
+     *  until it is done: the save's dialogs open on the main window, not on
+     *  this one, so a second press would otherwise start a second save. */
+    private void onAction(Step step) {
+        setActionRunning(step, true);
+        try {
+            switch (step.state) {
+                case MEASURED: save(step);  break;
+                case SAVED:    apply(step); break;
+                default:                    break;   // READY: hidden, APPLIED: disabled
             }
-        }, "freqresp-wizard");
-        t.setDaemon(true);
-        t.start();
+        } finally {
+            setActionRunning(step, false);
+        }
     }
 
-    private void onMeasurementDone(boolean directLeg, StereoFreqRespResult r, String error) {
+    /** Switches the step's page (Play, Save / Apply) and the button bar off
+     *  while a save or apply runs, and on again afterwards; disabling the
+     *  composites keeps each button's own enabled state for afterwards. */
+    private void setActionRunning(Step step, boolean running) {
         if (dialog.isDisposed()) return;
-        closeProgressDialog();
-        page1Play.setEnabled(true);
-        page2Play.setEnabled(true);
-        if (error != null) {
-            Dialogs.error(dialog, I18n.t("freqResp.wizard.title"),
-                    I18n.t("freqResp.wizard.error.measureFailed").replace("{0}", error));
-            refreshNavEnable();
-            return;
-        }
-        if (r == null) { refreshNavEnable(); return; }
-        unsavedDirty = true;
-        if (directLeg) {
-            directResult = r;
-            StereoFreqRespCalibration cal = stereoCalFromResult(r);
-            // Only the direct (transient) slot - the view applies it
-            // automatically alongside the entries list so page 2 gets
-            // the page-1 loopback subtracted without polluting the
-            // persistent calibration tab.
-            hostView.getCorrectionStore().setDirect(cal);
-            hostView.setLeftResult(r.left());
-            hostView.setRightResult(r.right());
-            hostView.setSourceFilePath(null);
-            showPage(1);
-        } else {
-            dutResult = r;
-            hostView.setLeftResult(r.left());
-            hostView.setRightResult(r.right());
-            showPage(2);
-        }
-        // Both legs: the progress dialog is closed and the trace is on screen, so a
-        // railed capture can be reported where the operator can act on it -
-        // before they walk this leg's curve into a calibration.
-        if (r.clipped()) {
-            Dialogs.warn(dialog,
-                    I18n.t("freqResp.warning.clipped.title"),
-                    I18n.t("freqResp.warning.clipped.message"));
-        }
+        step.page.setEnabled(!running);
+        buttonBar.setEnabled(!running);
     }
 
-    /** Wraps both channels of a {@link StereoFreqRespResult} into a
-     *  {@link StereoFreqRespCalibration} suitable for the cal store. */
-    private StereoFreqRespCalibration stereoCalFromResult(StereoFreqRespResult r) {
-        FreqRespCalibration l = new FreqRespCalibration(
-                r.left().getFreqs(), r.left().getMagLin(), r.left().getPhaseRad());
-        FreqRespCalibration rR = new FreqRespCalibration(
-                r.right().getFreqs(), r.right().getMagLin(), r.right().getPhaseRad());
-        return new StereoFreqRespCalibration(l, rR);
+    // -------------------------------------------------------------------------
+    // Measurement - the pane's Play; the pane reports the run's result and end
+    // -------------------------------------------------------------------------
+
+    /** Play: the pane's Play, with its progress window and Cancel.  It starts
+     *  nothing while a run is in flight and returns false then, so the step
+     *  is marked only for a run that will end in a stopped report.  The run's
+     *  reports reach the wizard later through a marshalled call, never inside
+     *  the Play, so marking the step after it is in time. */
+    private void startMeasurement(Step step) {
+        if (!pane.play()) return;
+        measuringStep = step;
+        resultArrived = false;
+    }
+
+    /** Called by the pane on the UI thread with each run's result: the
+     *  deconvolution is done (the view shows it); the step moves on the
+     *  stopped report. */
+    void onMeasurementResult(StereoFreqRespResult stereo) {
+        if (measuringStep == null || stereo == null) return;
+        resultArrived = true;
+    }
+
+    /** Called by the pane on the UI thread when a run ended - completed,
+     *  failed or cancelled.  Only a run that delivered a result moves the
+     *  step to MEASURED; a new measurement also invalidates the step's
+     *  earlier save, and a new loopback measurement the whole filter step. */
+    void onMeasurementStopped() {
+        if (measuringStep == null || dialog.isDisposed()) return;
+        Step step = measuringStep;
+        measuringStep = null;
+        if (resultArrived) {
+            step.state     = StepState.MEASURED;
+            step.savedPath = null;
+            if (step == loopback && filter.state != StepState.READY) {
+                // The filter step is measured against the applied loopback and
+                // saves the curve the view shows: a new loopback measurement
+                // replaces both, so the filter step starts over.
+                filter.state     = StepState.READY;
+                filter.savedPath = null;
+                refreshStepButtons(filter);
+            }
+        }
+        resultArrived = false;
+        refreshStepButtons(step);
+        refreshNavEnable();
     }
 
     // -------------------------------------------------------------------------
     // Save + Apply
     // -------------------------------------------------------------------------
 
-    private void doSaveCalibration() {
-        if (dutResult == null) {
-            Dialogs.info(dialog, I18n.t("freqResp.wizard.title"),
-                    I18n.t("freqResp.saveTo.error.noResult"));
-            return;
+    /** The pane's save - the view's save of the curves it shows, the same
+     *  save as the tab control's: a returned path -> SAVED, null (cancel, no
+     *  result, failure) stays MEASURED.  The view divides its curves by every
+     *  active calibration, so the calibrations are switched first: the
+     *  loopback is saved raw (every item off), the filter de-embedded by the
+     *  loopback alone (only item 0 on) - never by an older filter item. */
+    private void save(Step step) {
+        if (step == loopback) {
+            deactivateAllCalibrations();
+        } else {
+            activateOnlyLoopbackCalibration();
         }
-        FileDialog fd = new FileDialog(dialog, SWT.SAVE);
-        fd.setText(I18n.t("freqResp.saveTo.dialog"));
-        fd.setFilterExtensions(new String[]{ "*.frc" });
-        fd.setOverwrite(true);
+        String path = pane.saveMeasurement();
+        if (path == null) return;
+        step.savedPath = path;
+        step.state     = StepState.SAVED;
+        refreshStepButtons(step);
+    }
+
+    /** Writes the saved file into the preferences calibration list.  The
+     *  apply-calibration flag goes on FIRST: it has no listener of its own,
+     *  and the list writes reach the calibration tab, whose store sync makes
+     *  the view re-derive its curves, so the flag has to be on by then. */
+    private void apply(Step step) {
         Preferences prefs = Preferences.instance();
-        String memFolder = prefs.getFreqRespSaveFolder();
-        if (memFolder != null) fd.setFilterPath(memFolder);
-        fd.setFileName("freqresp_cal_" + LocalDateTime.now()
-                .format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss")) + ".frc");
-        String picked = fd.open();
-        if (picked == null) return;
-        try {
-            // The analyzer now always returns the raw deconvolution
-            // (loopback × DUT, in page-2 terms).  Save needs the
-            // DUT-alone curve, so divide the raw result by the loaded
-            // "direct" calibration before writing.  When no direct cal
-            // is available (shouldn't happen at page-3 - page 1 always
-            // populates it) the raw measurement is saved as-is.
-            StereoFreqRespCalibration stereoCal = stereoCalFromResult(dutResult);
-            StereoFreqRespCalibration direct =
-                    hostView.getCorrectionStore().getDirect();
-            if (direct != null) {
-                divideInPlace(stereoCal.left(),  direct.left());
-                divideInPlace(stereoCal.right(), direct.right());
-            }
-            // While the inputs are combined, the slave channel is saved from
-            // the master measurement.
-            Channel combined = prefs.getFreqRespCombinedMaster();
-            if (combined == Channel.L) stereoCal = new StereoFreqRespCalibration(stereoCal.left(),  stereoCal.left());
-            if (combined == Channel.R) stereoCal = new StereoFreqRespCalibration(stereoCal.right(), stereoCal.right());
-            FreqRespSweepParams p = dutResult.left().getSweepParams();
-            FreqRespCalHelper.saveFrc(stereoCal,
-                    picked, dutResult.left().getSampleRate(),
-                    p.getStartHz(), p.getStopHz(), p.getSweepPoints(),
-                    p.getAmplitudeVrms());
-            savedCalPath = picked;
-            prefs.setFreqRespSaveFolder(new File(picked).getParent());
-            prefs.save();
-            unsavedDirty = false;
-            page3Apply.setEnabled(true);
-            log.info("Wizard calibration saved to {}", picked);
-            // Reload this .frc anywhere it is already loaded as a calibration.
-            MessageBus.instance().publish(Events.CALIBRATION_FILE_SAVED, picked);
-        } catch (Exception ex) {
-            log.warn("Wizard save failed", ex);
-            Dialogs.error(dialog, I18n.t("freqResp.saveTo.dialog"),
-                    I18n.t("freqResp.error.measurement.save").replace("{0}",
-                            ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName()));
+        prefs.setFreqRespApplyCalibration(true);
+        CalibrationList cals = prefs.getFreqRespCalibrations();
+        if (step == loopback) {
+            // Item 0 = the loopback, activated; every other item is still
+            // off from this step's save.
+            if (cals.isEmpty()) cals.add(new CalibrationEntry());
+            CalibrationEntry first = cals.get(0);
+            first.setPath(step.savedPath);
+            first.active().set(true);
+        } else {
+            // Item 1 = the filter, active beside the loopback in item 0.
+            while (cals.size() < 2) cals.add(new CalibrationEntry());
+            CalibrationEntry second = cals.get(1);
+            second.setPath(step.savedPath);
+            second.active().set(true);
+        }
+        step.state = StepState.APPLIED;
+        refreshStepButtons(step);
+        if (step == loopback) {
+            showStep(filter);
+        } else {
+            refreshNavEnable();
         }
     }
 
-    /** Mutates {@code measured} in-place: divides every magnitude by the
-     *  calibration interpolated at the same frequency and subtracts its phase
-     *  ({@code phase_out = phase_meas − phase_cal}), so the curve that reaches
-     *  the file represents the device under test alone. */
-    private void divideInPlace(FreqRespCalibration measured, FreqRespCalibration calibration) {
-        for (int i = 0; i < measured.freqs.length; i++) {
-            double[] cal = FreqRespCalHelper.interpolate(calibration, measured.freqs[i]);
-            double calMag = cal[0];
-            if (calMag > 0.0) {
-                measured.magLin[i] /= calMag;
-            }
-            measured.phaseRad[i] -= cal[1];
+    /** Sets every item of the preferences calibration list inactive. */
+    private void deactivateAllCalibrations() {
+        for (CalibrationEntry entry : Preferences.instance().getFreqRespCalibrations()) {
+            entry.active().set(false);
         }
     }
 
-    private void doApplyCalibration() {
-        if (savedCalPath == null) return;
-        try {
-            StereoFreqRespCalibration cal = FreqRespCalHelper.loadFrc(savedCalPath);
-            hostView.getCorrectionStore().setCurrent(cal, savedCalPath);
-            Preferences prefs = Preferences.instance();
-            prefs.setFreqRespPrimaryCalibrationPath(savedCalPath);
-            prefs.setFreqRespApplyCalibration(true);
-            prefs.save();
-            unsavedDirty = false;
-            appliedSuccessfully = true;  // suppress the "unsaved?" prompt
-            dialog.close();
-        } catch (Exception ex) {
-            log.warn("Wizard apply failed", ex);
-            Dialogs.error(dialog, I18n.t("freqResp.wizard.title"),
-                    I18n.t("freqResp.error.calibration.load").replace("{0}",
-                            ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName()));
+    /** Leaves only item 0 - the loopback - of the preferences calibration
+     *  list active. */
+    private void activateOnlyLoopbackCalibration() {
+        CalibrationList cals = Preferences.instance().getFreqRespCalibrations();
+        for (int i = 0; i < cals.size(); i++) {
+            cals.get(i).active().set(i == 0);
         }
     }
 
     // -------------------------------------------------------------------------
-    // Cancel / restore
+    // Close
     // -------------------------------------------------------------------------
 
-    /** Returns {@code true} when the wizard is allowed to actually close. */
-    private boolean handleCancel() {
-        // After Apply, the calibration has been committed and the dialog
-        // closes via dialog.close() - that path is NOT a cancel, so skip
-        // the "unsaved?" prompt and skip restoring the pre-wizard snapshot.
-        if (appliedSuccessfully) return true;
-        if (directResult != null || dutResult != null || unsavedDirty) {
-            int code = Dialogs.confirm(dialog,
+    /** Returns {@code true} when the wizard may close: asks while any step
+     *  holds an unsaved measurement, else while any step holds a saved but
+     *  unapplied calibration.  Nothing is rolled back. */
+    private boolean confirmClose() {
+        if (loopback.state == StepState.MEASURED || filter.state == StepState.MEASURED) {
+            return Dialogs.confirm(dialog,
                     I18n.t("freqResp.wizard.unsaved.title"),
-                    I18n.t("freqResp.wizard.unsaved.message"));
-            if (code != SWT.YES) return false;
+                    I18n.t("freqResp.wizard.unsaved.message")) == SWT.YES;
         }
-        hostView.getCorrectionStore().restore(preWizardSnapshot);
+        if (loopback.state == StepState.SAVED || filter.state == StepState.SAVED) {
+            return Dialogs.confirm(dialog,
+                    I18n.t("freqResp.wizard.unapplied.title"),
+                    I18n.t("freqResp.wizard.unapplied.message")) == SWT.YES;
+        }
         return true;
-    }
-
-    private void openProgressDialog(double totalDurationSec, double leadInSec,
-                                    double sweptStartHz, double sweptStopHz) {
-        if (progressDialog != null && !progressDialog.isDisposed()) return;
-        Shell s = new Shell(dialog, SWT.TITLE | SWT.BORDER
-                | SWT.APPLICATION_MODAL);
-        s.setText(I18n.t("freqResp.progress.title"));
-        GridLayout gl = new GridLayout(1, false);
-        gl.marginWidth = 12; gl.marginHeight = 10;
-        gl.verticalSpacing = 8;
-        s.setLayout(gl);
-        Label l = new Label(s, SWT.CENTER);
-        l.setText(I18n.t("freqResp.progress.message"));
-        l.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-
-        // Sweep geometry feeds the meter's time -> instantaneous-frequency
-        // mapping, which scales the trace smoothing with the period.
-        Preferences prefs = Preferences.instance();
-        progressMeter = new FreqRespLiveMeter(s, totalDurationSec,
-                leadInSec, prefs.getFreqRespDurationSec(),
-                sweptStartHz, sweptStopHz);
-        GridData mg = new GridData(SWT.FILL, SWT.CENTER, true, false);
-        mg.widthHint  = 520;
-        mg.heightHint = 100;
-        progressMeter.setLayoutData(mg);
-
-        // ESC and the window-manager close arrive as SWT.Close.  This trial
-        // sweep has no cancel hook (the analyzer runs without one), and a
-        // vanished shell would leave the wizard's buttons dead while the
-        // sweep still owns the device - refuse the close; onMeasurementDone
-        // disposes the shell when the (bounded) sweep ends.
-        s.addListener(SWT.Close, e -> e.doit = false);
-
-        s.pack();
-        Rectangle pb = dialog.getBounds();
-        Point sz = s.getSize();
-        s.setLocation(pb.x + (pb.width  - sz.x) / 2,
-                      pb.y + (pb.height - sz.y) / 2);
-        s.open();
-        Display d = dialog.getDisplay();
-        for (int i = 0; i < 5; i++) if (!d.readAndDispatch()) break;
-        progressDialog = s;
-    }
-
-    private void closeProgressDialog() {
-        // dispose(), not close(): close() raises SWT.Close, which the progress
-        // dialog refuses as a user-close.
-        if (progressDialog != null && !progressDialog.isDisposed()) progressDialog.dispose();
-        progressDialog = null;
-        progressMeter = null;
     }
 
 }

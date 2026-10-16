@@ -72,10 +72,10 @@ import lombok.extern.log4j.Log4j2;
  * Events#FREQRESP_MEASUREMENT_STARTED} so the scope / FFT / generator / main
  * FreqResp workers release the shared audio device, then spins a daemon thread
  * that re-sweeps until the dialog closes.  Each finished sweep is fed
- * <em>directly</em> into the embedded view (NOT via {@link
- * Events#FREQRESP_RESULT_AVAILABLE}, which would also leak the notch sweeps
- * into the main FreqResp pane).  The first sweep auto-fits the magnitude axis
- * to the measured band.
+ * <em>directly</em> into the embedded view (which has no FreqResp controller);
+ * the notch sweeps never pass the main pane's FreqRespController, so they
+ * cannot leak into the main FreqResp pane.  The first sweep auto-fits the
+ * magnitude axis to the measured band.
  *
  * <p>The embedded view runs ISOLATED: the dialog hands it a detached
  * {@link Preferences#copyForDialog()} copy, so every range / channel-visibility
@@ -162,10 +162,10 @@ public final class TuneNotchWizardDialog {
     private static final long THREAD_JOIN_TIMEOUT_MS    = 500;
 
     private final Shell                   parentShell;
-    /** Empty, silent correction store for the embedded view - the notch
-     *  session never loads / saves calibrations. */
+    /** Empty correction store for the embedded view - the notch session
+     *  never loads / saves calibrations. */
     private final CorrectionStore correctionStore =
-            new CorrectionStore("TuneNotch", null);
+            new CorrectionStore("TuneNotch");
 
     private Shell            dialog;
     private FreqRespView     view;
@@ -432,7 +432,7 @@ public final class TuneNotchWizardDialog {
     }
 
     private void buildChart() {
-        view = new FreqRespView(content, correctionStore, true, prefs);
+        view = new FreqRespView(content, correctionStore, true, prefs, null, null);
         // The view's L/R presses combine or separate the inputs; the running
         // session's reader follows live.  Owned by the dialog, so the listener
         // goes with it.
@@ -860,6 +860,7 @@ public final class TuneNotchWizardDialog {
         latestRight = right;
         view.setLeftResult(left);
         view.setRightResult(right);
+        view.refreshFromCurves();
         FreqRespResult active = activeResult();
         if (active != null) {
             // Notch FIRST: the auto-fitted bottom must include the measured

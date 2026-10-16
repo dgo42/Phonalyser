@@ -109,11 +109,9 @@ public final class FreqRespAnalyzerConfig {
      *  built with the same value. */
     private final Channel combinedMaster;
 
-    /** When {@code true} and {@code FreqRespCorrectionStore.getCurrent()}
-     *  is non-null, the analyzer divides each measured channel by the
-     *  matching channel of the loaded calibration before returning;
-     *  the resulting {@link FreqRespResult#isCalibrationApplied()} reads
-     *  {@code true} for both channels. */
+    /** The apply-calibration preference as the sweep started.  The analyzer
+     *  does not read it: the view divides the shown curves by the loaded
+     *  calibrations itself ({@code FreqRespView}). */
     private final boolean applyCalibration;
 
     /** Stereo capture strategy.  Production callers use

@@ -23,8 +23,6 @@ import java.io.File;
 import java.io.FileReader;
 import java.io.IOException;
 import java.io.InputStream;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -35,8 +33,6 @@ import java.util.function.Consumer;
 import java.util.function.ObjDoubleConsumer;
 
 import org.eclipse.swt.SWT;
-import org.eclipse.swt.custom.CTabItem;
-import org.eclipse.swt.custom.ScrolledComposite;
 import org.eclipse.swt.custom.StackLayout;
 import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.ImageData;
@@ -64,11 +60,8 @@ import org.edgo.audio.measure.enums.OutputChannels;
 import org.edgo.audio.measure.enums.UnevenMode;
 import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.bus.Events;
-import org.edgo.audio.measure.sound.AudioBackend;
-import org.edgo.audio.measure.sound.DeviceCalibration;
-import org.edgo.audio.measure.sound.DeviceRef;
 import org.edgo.audio.measure.gui.bus.MessageBus;
-import org.edgo.audio.measure.gui.common.AbstractTabControl;
+import org.edgo.audio.measure.gui.common.AbstractCalibrationTabControl;
 import org.edgo.audio.measure.gui.common.CorrectionStore;
 import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.Icon;
@@ -80,12 +73,13 @@ import org.edgo.audio.measure.gui.widgets.TileTabFolder;
 import org.edgo.audio.measure.gui.widgets.UnitFamily;
 import org.edgo.audio.measure.gui.widgets.UnitValue;
 import org.edgo.audio.measure.preferences.BackendPrefs;
-import org.edgo.audio.measure.preferences.CalibrationEntry;
 import org.edgo.audio.measure.preferences.FreqRespFilterTypeParams;
 import org.edgo.audio.measure.preferences.FreqRespPreset;
 import org.edgo.audio.measure.preferences.Preferences;
+import org.edgo.audio.measure.sound.AudioBackend;
+import org.edgo.audio.measure.sound.DeviceCalibration;
+import org.edgo.audio.measure.sound.DeviceRef;
 
-import lombok.Setter;
 import lombok.extern.log4j.Log4j2;
 
 /**
@@ -101,11 +95,14 @@ import lombok.extern.log4j.Log4j2;
  * in at construction; the only cross-boundary calls are {@link #refreshRiaaEnable()}
  * (the pane invokes it when a fresh measurement lands so Compare becomes
  * available) and the collapse relayout the pane wires via
- * {@link #setCollapseRelayout(Runnable)}.  Everything else flows through the
- * shared view, {@link Preferences}, and the {@link MessageBus}.
+ * {@link #setCollapseRelayout(Runnable)}.  The Save-to button calls the owning
+ * pane's save (the pane is passed in at construction), and the Save-to path
+ * field follows the saved-path preference the save writes.
+ * Everything else flows through the shared view, {@link Preferences}, and the
+ * {@link MessageBus}.
  */
 @Log4j2
-public final class FreqRespTabControl extends AbstractTabControl {
+public final class FreqRespTabControl extends AbstractCalibrationTabControl<FreqRespPane> {
 
     /** Tab indices, kept as constants so the tile builder / refresh callers
      *  don't have to repeat magic numbers. */
@@ -119,6 +116,10 @@ public final class FreqRespTabControl extends AbstractTabControl {
     private static final int TAB_FREQRESP_SAVE        = 7;
     private static final int TAB_FREQRESP_LOAD        = 8;
     private static final int NUM_CUSTOM_TABS          = 9;
+
+    /** Message-key prefix of the calibration tab's texts
+     *  ({@code freqResp.calibration.*}). */
+    private static final String CALIBRATION_KEY_PREFIX = "freqResp";
 
     /** Power-of-2 sweep-point presets the points field's wheel jumps along;
      *  the runtime "sample rate / 2" entry is merged in by
@@ -177,18 +178,10 @@ public final class FreqRespTabControl extends AbstractTabControl {
 
     private final FreqRespView view;
 
-    /** Loaded {@code .frc} correction store, constructor-injected by
-     *  {@link FreqRespPane} (IoC) and shared with the {@link FreqRespView}. */
-    private final CorrectionStore correctionStore;
-
     // Tab-header tiles: the shared TileTabFolder (held by AbstractTabControl as
     // toolbarTabs) owns the renderer, spacer images, tab-body collapse, hover
     // tooltips and tile painting; this control only supplies tile content
     // (freqRespTabTiles).
-    /** Host pane, injected so the screenshot renderer can clone the whole pane
-     *  (title + plot + collapsed strip) offscreen - matching the FFT pane. */
-    @Setter
-    private FreqRespPane screenshotPane;
 
     /** Updated whenever the FFT-size combo or the lead-in field changes
      *  - caption is {@code "FFT size (D.Ds)"} where D.D is the derived
@@ -241,7 +234,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
     /** Re-entrancy guard: {@code true} while {@link #loadFilterParams} is
      *  seeding the widgets from the per-type params map, so the widgets'
      *  own change listeners don't write the just-loaded values straight
-     *  back into the map (mirrors {@link #calMutationInFlight}). */
+     *  back into the map. */
     private boolean filterParamsLoading;
 
     // ---- Unevenness tab widgets ------------------------------------------
@@ -253,27 +246,11 @@ public final class FreqRespTabControl extends AbstractTabControl {
     private NumericStepField unevenStartField;
     private NumericStepField unevenStopField;
 
-    /** Container Composite for the dynamic calibration-row list. */
-    private Composite calRowsContainer;
-    /** Scrolled wrapper around {@link #calRowsContainer} so a long list
-     *  of rows scrolls vertically instead of overflowing the tab. */
-    private ScrolledComposite calRowsScroll;
-    /** One entry per visible row, in display order. */
-    private final List<CalRow> calRows = new ArrayList<>();
-    /** Re-entrancy guard so the store's change event doesn't trigger a
-     *  UI rebuild for changes the control initiated itself. */
-    private boolean calMutationInFlight;
-
-    /** Path field shared between the Save-to and Load-from tabs.  Kept
-     *  as a field so the file-dialog handler can update the displayed
-     *  text from anywhere. */
+    /** Path fields of the Save-to and Load-from tabs.  The Save-to field
+     *  follows the saved-path preference; the Load-from field is written by
+     *  the file-dialog handler. */
     private Text saveToPathField;
     private Text loadFromPathField;
-
-    /** Bus subscriber kept as a field so dispose can unsubscribe the
-     *  same instance (method references compare by identity). */
-    private Consumer<Void>   calibrationChangedListener;
-    private Consumer<String> calFileSavedListener;
 
     /** The combo's offered subset of {@link #FFT_SIZE_VALUES} /
      *  {@link #FFT_SIZE_LABELS} - truncated at
@@ -282,11 +259,20 @@ public final class FreqRespTabControl extends AbstractTabControl {
     private final int[]    offeredFftSizes;
     private final String[] offeredFftSizeLabels;
 
+    /** {@code owner} is the pane that builds this control: the Save-to button
+     *  saves the view's curves through it, and the Screenshot button opens its
+     *  screenshot dialog, which clones the whole pane (title + plot +
+     *  collapsed strip) offscreen.  The calibration tab (the base) follows
+     *  the FreqResp calibration list and fills {@code correctionStore}, which
+     *  the view divides by. */
     public FreqRespTabControl(Composite parent, FreqRespView view,
-                              CorrectionStore correctionStore) {
-        super(parent, SWT.NONE);
+                              CorrectionStore correctionStore,
+                              FreqRespPane owner) {
+        super(parent, SWT.NONE, owner, correctionStore,
+                Preferences.instance().getFreqRespCalibrations(),
+                Preferences.instance().freqRespLoadFolderProperty(),
+                CALIBRATION_KEY_PREFIX, false);
         this.view = view;
-        this.correctionStore = correctionStore;
         int sizeCap = Runtime.getRuntime().maxMemory() < SMALL_HEAP_BYTES
                 ? SMALL_HEAP_MAX_FFT_SIZE : Integer.MAX_VALUE;
         int offered = 0;
@@ -334,24 +320,11 @@ public final class FreqRespTabControl extends AbstractTabControl {
         // hover and collapse listeners now that the tabs exist.
         toolbarTabs.init();
 
-        // The calibration tab refreshes its row UI + tile when the store
-        // changes out-of-band (e.g. the wizard's Apply step), without polling.
-        calibrationChangedListener = ignored -> onCalibrationChanged();
-        MessageBus.instance().subscribe(Events.FREQRESP_CALIBRATION_CHANGED, calibrationChangedListener);
-        // A .frc just saved to disk: reload any loaded row pointing at it so the
-        // freshly-saved curve applies without re-browsing (this very pane often
-        // both saves and has the same file loaded as its "direct" calibration).
-        calFileSavedListener = path -> onCalibrationFileSaved(path);
-        MessageBus.instance().subscribe(Events.CALIBRATION_FILE_SAVED, calFileSavedListener);
-        addDisposeListener(e -> {
-            MessageBus.instance().unsubscribe(Events.FREQRESP_CALIBRATION_CHANGED, calibrationChangedListener);
-            MessageBus.instance().unsubscribe(Events.CALIBRATION_FILE_SAVED, calFileSavedListener);
-        });
-
-        // Push the initially-loaded active rows into the store last - the view
-        // (built before this control) already holds the same store instance, so
-        // the change events this fires find it ready.
-        syncStoreFromRows();
+        // Follow the calibration list and push the initially-loaded active rows
+        // into the store last - the view (built before this control) already
+        // holds the same store instance, so the view re-derive at the end of
+        // the sync finds it ready.
+        followCalibrations();
     }
 
     // -------------------------------------------------------------------------
@@ -547,11 +520,10 @@ public final class FreqRespTabControl extends AbstractTabControl {
             }
             tiles.add(tile(readout, I18n.t("freqResp.tile.uneven")));
         } else if (tabIndex == TAB_FREQRESP_CALIBRATION) {
-            int n = correctionStore.getEntries().size();
-            if (n == 1)      tiles.add(tile(I18n.t("calibration.tile.loaded"),
-                    I18n.t("calibration.tile.loaded.tooltip")));
-            else if (n  > 1) tiles.add(tile(I18n.t("calibration.tile.loadedN", n),
-                    I18n.t("calibration.tile.loadedN.tooltip", n)));
+            TileTabFolder.Tile tile = getCalibrationTile();
+            if (tile != null) {
+                tiles.add(tile);
+            }
         } else if (tabIndex == TAB_FREQRESP_PRESETS) {
             // Show the number of saved presets when there are any - a hint
             // that there's something to load.
@@ -1300,18 +1272,21 @@ public final class FreqRespTabControl extends AbstractTabControl {
     /** Write-through for one filter parameter field: applies {@code mutator} to
      *  the CURRENT filter type's map entry, persists it via
      *  {@link Preferences#putFreqRespFilterParams} (the single source of truth,
-     *  which also saves), and redraws the shared view directly (the tab holds
-     *  it).  The view re-reads the map on its next paint, so no notification is
-     *  needed.  {@code getFreqRespFilterParams} hands back the live entry (or a
-     *  fresh {@code fromType} default on a miss), so mutating + putting the same
-     *  key round-trips exactly one entry. */
+     *  which also saves), and notifies the shared view directly (the tab holds
+     *  it).  The params map carries no {@link Property} the view could follow,
+     *  and a redraw alone is not enough: with the ideal filter as the compared
+     *  reference, the compare max / min and the magnitude ceiling derive from
+     *  the filter curve and would keep the old filter's values.
+     *  {@code getFreqRespFilterParams} hands back the live entry (or a fresh
+     *  {@code fromType} default on a miss), so mutating + putting the same key
+     *  round-trips exactly one entry. */
     private void putFilterParam(Consumer<FreqRespFilterTypeParams> mutator) {
         Preferences prefs = Preferences.instance();
         FilterType type = prefs.getFreqRespFilterType();
         FreqRespFilterTypeParams p = prefs.getFreqRespFilterParams(type);
         mutator.accept(p);
         prefs.putFreqRespFilterParams(type, p);
-        view.redraw();
+        view.onFilterParamsChanged();
     }
 
     /** Deep copy of a {@link FreqRespFilterTypeParams} so a preset embeds its
@@ -1682,7 +1657,6 @@ public final class FreqRespTabControl extends AbstractTabControl {
         toolbarTabs.refreshTab(TAB_FREQRESP_RIAA);
         toolbarTabs.refreshTab(TAB_FREQRESP_FILTERS);
         toolbarTabs.refreshTab(TAB_FREQRESP_UNEVENNESS);
-        MessageBus.instance().publish(Events.FREQRESP_RANGE_CHANGED);
         view.redraw();
     }
 
@@ -1710,7 +1684,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
         shotGd.heightHint = 43;
         shotBtn.setLayoutData(shotGd);
         shotBtn.setToolTipText(I18n.t("freqResp.utility.screenshot.tooltip"));
-        shotBtn.addListener(SWT.Selection, e -> screenshotPane.openScreenshotDialog());
+        shotBtn.addListener(SWT.Selection, e -> getOwner().openScreenshotDialog());
 
         // ADC / DAC calibration both use the crosshair icon - the
         // tooltips disambiguate which one.  Matches the scope / FFT
@@ -1740,7 +1714,6 @@ public final class FreqRespTabControl extends AbstractTabControl {
     // Calibration tab - multi-row load + clear + add + remove
     // -------------------------------------------------------------------------
 
-    /** Per-row widget bundle + the loaded calibration (when any). */
     /** One fixed cell of the spec grid: a {@link StackLayout} wrapper that
      *  overlays the Mode-1 and Mode-2 control for a single label- or field-slot.
      *  The wrapper owns the grid cell permanently, so switching modes only flips
@@ -1777,325 +1750,13 @@ public final class FreqRespTabControl extends AbstractTabControl {
         }
     }
 
-    private static final class CalRow {
-        Composite                composite;
-        Text                     pathField;
-        /** "Active" toggle - two-way bound to {@code entry.active()}; the
-         *  calibration is only pushed into the store when this is checked AND
-         *  a file is loaded. */
-        Button                   activeCheck;
-        StereoFreqRespCalibration calibration;
-        /** Source of truth for path + Active; lives in
-         *  {@code Preferences.getFreqRespCalibrations()}.  With-noise is
-         *  unused by this pane. */
-        CalibrationEntry         entry;
-
-        private CalRow() {
-        }
-    }
-
-    private void buildCalibrationTab() {
-        // ScrolledComposite wraps the rows so the tab can grow vertically
-        // beyond the available height - a long list of calibrations
-        // scrolls instead of overflowing.  Created (and set as the item's
-        // control) before the item itself, same ordering rule as groupCell -
-        // a stray folder child corrupts the collapsed strip height.
-        calRowsScroll = new ScrolledComposite(toolbarTabs, SWT.V_SCROLL);
-        calRowsScroll.setExpandHorizontal(true);
-        calRowsScroll.setExpandVertical(true);
-        CTabItem item = new CTabItem(toolbarTabs, SWT.NONE);
-        item.setText(I18n.t("freqResp.tab.calibration"));
-        item.setControl(calRowsScroll);
-
-        calRowsContainer = new Composite(calRowsScroll, SWT.NONE);
-        calRowsScroll.setContent(calRowsContainer);
-        GridLayout gl = new GridLayout(1, false);
-        gl.marginWidth = 8; gl.marginHeight = 6;
-        gl.verticalSpacing = 4;
-        calRowsContainer.setLayout(gl);
-
-        // Build the rows from prefs (always at least row 0) and load any
-        // referenced .frc files into each row.  The store itself is populated
-        // from these rows by the syncStoreFromRows() call at the end of the
-        // constructor, after every tab is built.
-        Preferences prefs = Preferences.instance();
-        List<CalibrationEntry> cals = prefs.getFreqRespCalibrations();
-        if (cals.isEmpty()) {
-            prefs.addFreqRespCalibration(new CalibrationEntry());  // row 0 always present
-        }
-        for (CalibrationEntry entry : cals) {
-            CalRow r = createRowUi(entry);
-            String p = entry.getPath();
-            if (p != null && !p.isEmpty()) loadFileIntoRow(r, p, false);
-            updateCalRowEnable(r);
-        }
-    }
-
-    /** Builds and appends a fresh row to the calibration tab.  The row
-     *  starts empty (no path, no calibration).  Every row has 6 grid
-     *  cells (path, active, load, clear, add, remove) - for row 0 the
-     *  remove button is invisible so its grid cell stays reserved,
-     *  keeping the load/clear/add columns vertically aligned across
-     *  all rows. */
-    private CalRow createRowUi(CalibrationEntry entry) {
-        boolean isRow0 = calRows.isEmpty();
-
-        Composite row = new Composite(calRowsContainer, SWT.NONE);
-        row.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-        GridLayout rl = new GridLayout(6, false);
-        rl.marginWidth = 0; rl.marginHeight = 0;
-        rl.horizontalSpacing = 6;
-        row.setLayout(rl);
-
-        Text pathField = new Text(row, SWT.BORDER | SWT.READ_ONLY);
-        GridData pgd = new GridData(SWT.FILL, SWT.CENTER, true, false);
-        pgd.widthHint = 320;
-        pathField.setLayoutData(pgd);
-        pathField.setText(I18n.t("freqResp.calibration.path.none"));
-        pathField.setToolTipText(I18n.t("freqResp.calibration.path.tooltip"));
-
-        Button activeCheck = new Button(row, SWT.CHECK);
-        activeCheck.setText(I18n.t("fft.calibration.active"));
-        activeCheck.setToolTipText(I18n.t("fft.calibration.active.tooltip"));
-
-        Image folderIcon = IconUtils.icon(row.getDisplay(), Icon.FOLDER_OPEN);
-        Button loadBtn = new Button(row, SWT.PUSH);
-        if (folderIcon != null) loadBtn.setImage(folderIcon);
-        GridData loadGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
-        loadGd.heightHint = IconUtils.FILE_BUTTON_HEIGHT;
-        loadBtn.setLayoutData(loadGd);
-        loadBtn.setToolTipText(I18n.t("freqResp.calibration.load.tooltip"));
-
-        Image xmark = IconUtils.icon(row.getDisplay(), Icon.RECTANGLE_XMARK);
-        Button clearBtn = new Button(row, SWT.PUSH);
-        if (xmark != null) clearBtn.setImage(xmark);
-        GridData clearGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
-        clearGd.heightHint = IconUtils.FILE_BUTTON_HEIGHT;
-        clearBtn.setLayoutData(clearGd);
-        clearBtn.setToolTipText(I18n.t("freqResp.calibration.clear.tooltip"));
-
-        Image plus = IconUtils.icon(row.getDisplay(), Icon.PLUS);
-        Button addBtn = new Button(row, SWT.PUSH);
-        if (plus != null) addBtn.setImage(plus);
-        GridData addGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
-        addGd.heightHint = IconUtils.FILE_BUTTON_HEIGHT;
-        addBtn.setLayoutData(addGd);
-        addBtn.setToolTipText(I18n.t("freqResp.calibration.add.tooltip"));
-
-        Image minus = IconUtils.icon(row.getDisplay(), Icon.MINUS);
-        Button removeBtn = new Button(row, SWT.PUSH);
-        if (minus != null) removeBtn.setImage(minus);
-        GridData removeGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
-        removeGd.heightHint = IconUtils.FILE_BUTTON_HEIGHT;
-        removeBtn.setLayoutData(removeGd);
-        removeBtn.setToolTipText(I18n.t("freqResp.calibration.remove.tooltip"));
-        if (isRow0) {
-            // Invisible-but-present placeholder so the column widths of
-            // load/clear/add stay identical across all rows.
-            removeBtn.setVisible(false);
-        }
-
-        CalRow r = new CalRow();
-        r.composite   = row;
-        r.pathField   = pathField;
-        r.activeCheck = activeCheck;
-        r.entry       = entry;
-        calRows.add(r);
-        updateCalRowEnable(r);
-
-        Bindings.check(activeCheck, entry.active());
-        Bindings.onChange(activeCheck, entry.active(), v -> {
-            updateCalRowEnable(r);
-            syncStoreFromRows();
-        });
-
-        loadBtn.addListener(SWT.Selection, e -> userLoadInRow(r));
-        clearBtn.addListener(SWT.Selection, e -> userClearRow(r));
-        addBtn.addListener(SWT.Selection, e -> userAddRow());
-        if (!isRow0) {
-            removeBtn.addListener(SWT.Selection, e -> userRemoveRow(r));
-        }
-
-        relayoutCalRows();
-        return r;
-    }
-
-    /** Keeps the row's "Active" checkbox enabled state in sync with
-     *  the file-loaded state - disabled until a calibration is loaded
-     *  into the row. */
-    private void updateCalRowEnable(CalRow r) {
-        if (r.activeCheck == null || r.activeCheck.isDisposed()) return;
-        boolean fileLoaded = r.entry.getPath() != null && r.calibration != null;
-        r.activeCheck.setEnabled(fileLoaded);
-    }
-
-    /** Re-runs the rows container's layout AND tells the surrounding
-     *  ScrolledComposite to recompute its scroll extent so a newly
-     *  added row participates in the V_SCROLL bar. */
-    private void relayoutCalRows() {
-        if (calRowsContainer != null && !calRowsContainer.isDisposed()) {
-            calRowsContainer.layout(true, true);
-        }
-        if (calRowsScroll != null && !calRowsScroll.isDisposed() && calRowsContainer != null) {
-            calRowsScroll.setMinSize(calRowsContainer.computeSize(SWT.DEFAULT, SWT.DEFAULT));
-        }
-    }
-
-    private void userLoadInRow(CalRow r) {
-        Preferences prefs = Preferences.instance();
-        FileDialog fd = new FileDialog(getShell(), SWT.OPEN);
-        fd.setText(I18n.t("freqResp.calibration.dialog"));
-        fd.setFilterExtensions(new String[]{ "*.frc", "*.csv", "*.*" });
-        String memFolder = prefs.getFreqRespLoadFolder();
-        if (memFolder != null) fd.setFilterPath(memFolder);
-        String picked = fd.open();
-        if (picked == null) return;
-        if (!loadFileIntoRow(r, picked, true)) return;
-        prefs.setFreqRespLoadFolder(new File(picked).getParent());
-        syncStoreFromRows();
-        prefs.save();
-    }
-
-    private void userClearRow(CalRow r) {
-        r.calibration = null;
-        r.entry.setPath(null);
-        r.pathField.setText(I18n.t("freqResp.calibration.path.none"));
-        r.pathField.setToolTipText(null);
-        // Clearing the file disables Active in the UI but we keep the
-        // entry's Active flag so re-loading a file re-engages the row
-        // without the user having to re-tick the box - matches the FFT pane.
-        updateCalRowEnable(r);
-        syncStoreFromRows();
-        Preferences.instance().save();
-    }
-
-    private void userAddRow() {
-        CalibrationEntry entry = new CalibrationEntry();
-        Preferences.instance().addFreqRespCalibration(entry);
-        createRowUi(entry);
-    }
-
-    private void userRemoveRow(CalRow r) {
-        if (calRows.size() <= 1) return;
-        int idx = calRows.indexOf(r);
-        if (idx <= 0) return; // never remove row 0
-        calRows.remove(idx);
-        Preferences.instance().removeFreqRespCalibration(r.entry);
-        r.composite.dispose();
-        relayoutCalRows();
-        syncStoreFromRows();
-    }
-
-    /** Reads a calibration file from disk and writes the result into
-     *  {@code r}.  When {@code showErrors} is true, file-load failures
-     *  pop a modal dialog; otherwise they're logged silently (used at
-     *  startup so a missing file doesn't block the whole pane). */
-    private boolean loadFileIntoRow(CalRow r, String picked, boolean showErrors) {
-        try {
-            StereoFreqRespCalibration cal = FreqRespCalHelper.loadFrc(picked);
-            r.calibration = cal;
-            r.entry.setPath(picked);
-            r.pathField.setText(picked);
-            r.pathField.setToolTipText(picked);
-            updateCalRowEnable(r);
-            return true;
-        } catch (Exception ex) {
-            log.warn("FreqResp calibration load failed: {}", picked, ex);
-            if (showErrors) {
-                Dialogs.error(getShell(),
-                        I18n.t("freqResp.calibration.dialog"),
-                        I18n.t("freqResp.error.calibration.load").replace("{0}",
-                                ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName()));
-            }
-            return false;
-        }
-    }
-
-    /** Pushes the current row state into the {@link FreqRespCorrectionStore}.
-     *  Empty rows are skipped so the store holds only entries the view
-     *  should divide by. */
-    /** Re-reads any loaded calibration row that references the just-saved
-     *  {@code .frc} ({@link Events#CALIBRATION_FILE_SAVED}) and re-pushes the
-     *  store, so the new curve takes effect immediately. */
-    private void onCalibrationFileSaved(String path) {
-        if (isDisposed() || path == null) return;
-        boolean reloaded = false;
-        for (CalRow r : calRows) {
-            if (r.entry.matchesPath(path) && loadFileIntoRow(r, r.entry.getPath(), false)) {
-                reloaded = true;
-            }
-        }
-        if (reloaded) syncStoreFromRows();
-    }
-
-    private void syncStoreFromRows() {
-        calMutationInFlight = true;
-        try {
-            correctionStore.clearAll();
-            for (CalRow r : calRows) {
-                // Only push rows the user has explicitly activated; an
-                // unticked row is a "loaded but parked" calibration the
-                // user can re-engage with one click without re-browsing.
-                if (r.calibration != null && r.entry.getPath() != null && r.entry.active().get()) {
-                    correctionStore.addEntry(r.calibration, r.entry.getPath());
-                }
-            }
-        } finally {
-            calMutationInFlight = false;
-        }
-    }
-
-    /** Rebuilds the row UI from the store.  Used when an external source
-     *  (e.g. the wizard's Apply step) replaces the calibration entries
-     *  out-of-band - drops any user-added empty rows, leaving exactly
-     *  one row per loaded entry (with row 0 always present). */
-    private void rebuildRowsFromStore() {
-        if (calRowsContainer == null || calRowsContainer.isDisposed()) return;
-        List<CorrectionStore.Entry> entries = correctionStore.getEntries();
-        // No-op when the store's loaded entries already line up with
-        // the loaded rows in the UI (in the same order).  Skipping
-        // here preserves user-added empty rows when the bus event is
-        // unrelated to the entries list - e.g. the wizard's setDirect
-        // fires the same event but doesn't touch entries.
-        if (loadedRowsMatch(entries)) return;
-        for (CalRow r : calRows) {
-            if (r.composite != null && !r.composite.isDisposed()) r.composite.dispose();
-        }
-        calRows.clear();
-        Preferences prefs = Preferences.instance();
-        prefs.getFreqRespCalibrations().clear();
-        int rowCount = Math.max(1, entries.size());
-        for (int i = 0; i < rowCount; i++) {
-            CalibrationEntry entry = (i < entries.size())
-                    ? new CalibrationEntry(entries.get(i).getPath(), true, false)
-                    : new CalibrationEntry();
-            prefs.addFreqRespCalibration(entry);
-            CalRow r = createRowUi(entry);
-            if (i < entries.size()) {
-                CorrectionStore.Entry e = entries.get(i);
-                r.calibration = e.getCalibration();
-                r.pathField.setText(e.getPath());
-                r.pathField.setToolTipText(e.getPath());
-                updateCalRowEnable(r);
-            }
-        }
-        relayoutCalRows();
-        prefs.save();
-    }
-
-    /** True when the loaded subset of {@link #calRows} (skipping empty
-     *  rows) is identical, in order, to {@code entries}. */
-    private boolean loadedRowsMatch(List<CorrectionStore.Entry> entries) {
-        int j = 0;
-        for (CalRow r : calRows) {
-            if (r.calibration == null) continue;
-            if (j >= entries.size()) return false;
-            CorrectionStore.Entry e = entries.get(j);
-            if (r.calibration != e.getCalibration()) return false;
-            if (r.entry.getPath() == null || !r.entry.getPath().equals(e.getPath())) return false;
-            j++;
-        }
-        return j == entries.size();
+    /** The store was rebuilt from the rows (the calibration tab lives in the
+     *  base): the view re-derives its displayed curves, and the calibration
+     *  tile counts the store's entries anew. */
+    @Override
+    protected void onCalibrationsSynced() {
+        view.onCalibrationChanged();
+        toolbarTabs.refreshTab(TAB_FREQRESP_CALIBRATION);
     }
 
     // -------------------------------------------------------------------------
@@ -2114,10 +1775,15 @@ public final class FreqRespTabControl extends AbstractTabControl {
         // writing - the previous separate "browse" button was redundant
         // since browse-then-save was the only useful sequence.
         saveToPathField = new Text(g, SWT.BORDER | SWT.READ_ONLY);
-        String savedPath = prefs.getFreqRespSavePath();
-        saveToPathField.setText(savedPath == null ? "" : savedPath);
-        saveToPathField.setToolTipText(savedPath != null && !savedPath.isEmpty() ? savedPath : I18n.t("freqResp.saveTo.path.tooltip"));
+        showSavePath(prefs.getFreqRespSavePath());
         saveToPathField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        // Every save - this tab's button and the wizard's - runs the one common
+        // save, which writes the saved-path preference on success; the field
+        // follows that preference, so both callers leave the same state.
+        Bindings.onChange(toolbarTabs, prefs.freqRespSavePathProperty(), v -> {
+            showSavePath(v);
+            toolbarTabs.refreshTab(TAB_FREQRESP_SAVE);
+        });
 
         Image floppyIcon = IconUtils.icon(g.getDisplay(), Icon.FLOPPY_DISK);
         Button saveBtn = new Button(g, SWT.PUSH);
@@ -2126,90 +1792,34 @@ public final class FreqRespTabControl extends AbstractTabControl {
         saveGd.heightHint = IconUtils.FILE_BUTTON_HEIGHT;
         saveBtn.setLayoutData(saveGd);
         saveBtn.setToolTipText(I18n.t("freqResp.saveTo.tooltip"));
-        /* Deliberately ALWAYS enabled.  Saving a measured response to a file is
-         * never gated: the only requirement is that a measurement exists, which
-         * openSaveDialog states itself (freqResp.saveTo.error.noResult).  A
-         * curve's fitness to serve as an ADC calibration is a different question
-         * and is already gated where that use happens: writing a .frc is
-         * unconditional, so ANY measured response can be saved. */
-        saveBtn.addListener(SWT.Selection, e -> openSaveDialog());
+        /* Enabled whenever no save runs - otherwise never gated.  Saving a
+         * measured response to a file needs only a measurement, which
+         * the pane's save checks - it ends in the controller's save, which
+         * shows that info itself (freqResp.saveTo.error.noResult).
+         * A curve's fitness to serve as an ADC calibration is a different
+         * question and is already gated where that use happens: writing a .frc
+         * is unconditional, so ANY measured response can be saved.  A saved
+         * file an item of the calibration list references reaches the rows
+         * through that list's saved-file notification. */
+        saveBtn.addListener(SWT.Selection, e -> {
+            // Off while the save runs, so a second press cannot start a
+            // second save.
+            saveBtn.setEnabled(false);
+            try {
+                getOwner().saveMeasurement();
+            } finally {
+                if (!saveBtn.isDisposed()) saveBtn.setEnabled(true);
+            }
+        });
     }
 
-    private void openSaveDialog() {
-        FreqRespResult left  = view.getLeftResultOrNull();
-        FreqRespResult right = view.getRightResultOrNull();
-        if (left == null && right == null) {
-            Dialogs.info(getShell(),
-                    I18n.t("freqResp.tab.saveTo"),
-                    I18n.t("freqResp.saveTo.error.noResult"));
-            return;
-        }
-        Preferences prefs = Preferences.instance();
-        // Always open the Save-as dialog so the user explicitly picks
-        // (or confirms) the destination on every click - the
-        // dedicated "browse" button was removed because pick-and-save
-        // is the only useful sequence here.  The picker is pre-filled
-        // with the last saved path so the typical "save to the same
-        // file again" case is just two clicks.
-        FileDialog fd = new FileDialog(getShell(), SWT.SAVE);
-        fd.setText(I18n.t("freqResp.saveTo.dialog"));
-        fd.setFilterExtensions(new String[]{ "*.frc" });
-        fd.setOverwrite(true);
-        String memFolder = prefs.getFreqRespSaveFolder();
-        if (memFolder != null) fd.setFilterPath(memFolder);
-        String lastPath = (saveToPathField != null && !saveToPathField.isDisposed())
-                ? saveToPathField.getText().trim() : "";
-        if (!lastPath.isEmpty()) {
-            fd.setFileName(new File(lastPath).getName());
-        } else {
-            fd.setFileName("freqresp_" + LocalDateTime.now()
-                    .format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss")) + ".frc");
-        }
-        String picked = fd.open();
-        if (picked == null) return;
-        if (saveToPathField != null && !saveToPathField.isDisposed()) {
-            saveToPathField.setText(picked);
-            saveToPathField.setToolTipText(picked);
-        }
-        prefs.setFreqRespSavePath(picked);
-        toolbarTabs.refreshTab(TAB_FREQRESP_SAVE);
-        try {
-            // Both channels are always written; the new file format is
-            // strict stereo (5 columns: f, mag_L_dB, mag_R_dB, phase_L_deg,
-            // phase_R_deg).  When the user has hidden one channel in the
-            // view, we duplicate the visible channel into the missing
-            // slot so the file stays self-consistent on round-trip.
-            // While the inputs are combined, both channels carry the master.
-            Channel combined = prefs.getFreqRespCombinedMaster();
-            if (combined == Channel.L && left  != null) right = left;
-            if (combined == Channel.R && right != null) left  = right;
-            FreqRespResult primary = left != null ? left : right;
-            FreqRespResult other   = left != null ? right : left;
-            if (other == null) other = primary;
-            FreqRespCalibration calL = new FreqRespCalibration(
-                    primary.getFreqs(), primary.getMagLin(), primary.getPhaseRad());
-            FreqRespCalibration calR = new FreqRespCalibration(
-                    other.getFreqs(),   other.getMagLin(),   other.getPhaseRad());
-            FreqRespSweepParams p = primary.getSweepParams();
-            FreqRespCalHelper.saveFrc(
-                    new StereoFreqRespCalibration(calL, calR),
-                    picked, primary.getSampleRate(),
-                    p.getStartHz(), p.getStopHz(), p.getSweepPoints(),
-                    p.getAmplitudeVrms());
-
-            prefs.setFreqRespSaveFolder(new File(picked).getParent());
-            prefs.save();
-            log.info("FreqResp measurement saved to {}", picked);
-            // If this .frc is already loaded as a calibration anywhere, reload it
-            // so the freshly-saved curve takes effect without re-browsing.
-            MessageBus.instance().publish(Events.CALIBRATION_FILE_SAVED, picked);
-        } catch (Exception ex) {
-            log.warn("FreqResp save failed", ex);
-            Dialogs.error(getShell(),
-                    I18n.t("freqResp.saveTo.dialog"),
-                    I18n.t("freqResp.error.measurement.save").replace("{0}",
-                            ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName()));
-        }
+    /** Shows {@code path} in the Save-to field - the one display rule for the
+     *  initial fill and the saved-path binding: {@code null} shows as empty
+     *  text, and an empty path falls back to the field's hint tooltip. */
+    private void showSavePath(String path) {
+        boolean hasPath = path != null && !path.isEmpty();
+        saveToPathField.setText(path == null ? "" : path);
+        saveToPathField.setToolTipText(hasPath ? path : I18n.t("freqResp.saveTo.path.tooltip"));
     }
 
     // -------------------------------------------------------------------------
@@ -2285,6 +1895,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
             view.setRightResult(new FreqRespResult(
                     Channel.R, sr, cR.freqs, cR.magLin, cR.phaseRad,
                     params, picked, true));
+            view.refreshFromCurves();
             view.setSourceFilePath(picked);
             // A loaded measurement counts as "has result" - refresh the RIAA
             // enable cascade so Compare becomes available (when Show is on).
@@ -2331,19 +1942,8 @@ public final class FreqRespTabControl extends AbstractTabControl {
     }
 
     // -------------------------------------------------------------------------
-    // Bus subscriber + helpers
+    // Helpers
     // -------------------------------------------------------------------------
-
-    private void onCalibrationChanged() {
-        // Skip the rebuild when this control initiated the store mutation
-        // itself - calRows already matches what we just wrote.  Other
-        // sources (e.g. wizard Apply, wizard Cancel-restore) take the
-        // rebuildRowsFromStore path so the UI catches up.
-        if (!calMutationInFlight) {
-            rebuildRowsFromStore();
-        }
-        toolbarTabs.refreshTab(TAB_FREQRESP_CALIBRATION);
-    }
 
     private GridData comboGd() {
         GridData gd = new GridData(SWT.LEFT, SWT.CENTER, false, false);

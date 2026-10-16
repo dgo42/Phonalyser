@@ -21,7 +21,6 @@ package org.edgo.audio.measure.gui.freqresp;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
-import java.util.function.Consumer;
 import java.util.function.DoubleUnaryOperator;
 
 import org.eclipse.swt.SWT;
@@ -44,8 +43,6 @@ import org.edgo.audio.measure.enums.FilterType;
 import org.edgo.audio.measure.enums.UnevenMode;
 import org.edgo.audio.measure.fft.MathUtil;
 import org.edgo.audio.measure.gui.bind.Bindings;
-import org.edgo.audio.measure.gui.bus.Events;
-import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.AbstractFreqDomainView;
 import org.edgo.audio.measure.gui.common.AbstractMeasurementView.ColorRole;
 import org.edgo.audio.measure.gui.common.CorrectionStore;
@@ -73,9 +70,8 @@ import lombok.extern.log4j.Log4j2;
  *   <li>Mouse wheel zoom / pan: {@code Ctrl+Shift} = freq zoom around the
  *       cursor, {@code Ctrl} = magnitude zoom, {@code Shift} = freq pan,
  *       plain wheel = magnitude pan.  Every change persists to
- *       {@link Preferences} and publishes
- *       {@link Events#FREQRESP_RANGE_CHANGED} so the host pane's
- *       scrollbars can re-sync.</li>
+ *       {@link Preferences}; the host pane's scrollbars re-sync through
+ *       their bindings on the range preferences.</li>
  *   <li>Crosshair cursor with floating L / R magnitude (in dB) and phase
  *       (when the phase trace is visible) readout under the pointer.  The
  *       max-frequency readout is clipped at
@@ -86,10 +82,10 @@ import lombok.extern.log4j.Log4j2;
  *       even when widgets overlap the trace.</li>
  * </ul>
  *
- * <p>This Phase-4 skeleton holds the L / R result slots, paints traces
- * end-to-end when results are present, and wires the zoom / pan + crosshair
- * logic so the host pane can build scrollbars against it now.  The
- * measurement worker (Phase 7) feeds the result slots later.
+ * <p>The view holds the L / R result slots and paints their traces.  On the
+ * live view the owning {@link FreqRespPane} hands each finished sweep of its
+ * {@link FreqRespController} in ({@link #showMeasurement}); the Load-from tab
+ * and the Tune-notch wizard push results in directly.
  */
 @Log4j2
 public final class FreqRespView extends AbstractFreqDomainView {
@@ -128,9 +124,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
     private FreqRespResult rawRightResult;
 
     /** Loaded {@code .frc} correction store, constructor-injected by
-     *  {@link FreqRespPane} (IoC) and shared with the calibration tab.
-     *  The wizard reads it through the getter. */
-    @Getter
+     *  {@link FreqRespPane} (IoC) and shared with the calibration tab. */
     private final CorrectionStore correctionStore;
     /** Display copies, with the currently-loaded calibration divided in (if
      *  any).  {@link #onCalibrationChanged()} keeps these in sync with the
@@ -153,10 +147,16 @@ public final class FreqRespView extends AbstractFreqDomainView {
     /** Self-blinking overlay banner widgets (compare-mode + loaded-file path). */
     private BlinkBanner    compareBanner;
     private BlinkBanner    sourceBanner;
-    /** Bus-handler reference kept so we can unsubscribe symmetrically. */
-    private Consumer<Void> calibrationChangedListener;
-    /** Bus-handler reference kept so we can unsubscribe symmetrically. */
-    private Consumer<Void> compareParamsChangedListener;
+    /** The owning pane, whose scrollbars re-sync after every change of the
+     *  curve data: the magnitude ceiling ({@link #magCeilingDb()}) follows the
+     *  displayed curves, the active channel and the compare state, none of
+     *  which is a range preference.  {@code null} for the isolated Tune-notch
+     *  view, which has no scrollbars. */
+    private final FreqRespPane pane;
+    /** The live view's controller, which saves its curves.  {@code null} for
+     *  the isolated Tune-notch view, whose dialog pushes the curves in
+     *  itself. */
+    private final FreqRespController controller;
 
     private int    mouseX = -1;
     private int    mouseY = -1;
@@ -279,9 +279,8 @@ public final class FreqRespView extends AbstractFreqDomainView {
 
     /** When {@code true} this is a detached instance (the Tune-notch wizard's
      *  embedded chart): it reads/writes only its injected {@link #prefs} and
-     *  never persists to disk nor publishes {@link Events#FREQRESP_RANGE_CHANGED},
-     *  so its channel select / pan / zoom / auto-fit can't disturb the shared
-     *  main-pane view. */
+     *  never persists them to disk, so its channel select / pan / zoom /
+     *  auto-fit can't disturb the shared main-pane view. */
     private boolean isolated = false;
     /** Preference source for ALL of this view's state - range, channel
      *  visibility, colours, line width.  The main pane passes the global
@@ -302,18 +301,24 @@ public final class FreqRespView extends AbstractFreqDomainView {
     // onPaint; the base owns disposal via disposeTraceBuffer().
 
     /** Connected view for the main FreqResp pane: bound to the global
-     *  {@link Preferences#instance()}, persisting + publishing range changes
-     *  like any other pane. */
-    public FreqRespView(Composite parent, CorrectionStore correctionStore) {
-        this(parent, correctionStore, false, Preferences.instance());
+     *  {@link Preferences#instance()}, persisting range changes like any other
+     *  pane; {@code pane} hands each finished measurement in
+     *  ({@link #showMeasurement}) and re-syncs its scrollbars on every curve
+     *  change, and {@link #save()} writes the curves through
+     *  {@code controller}. */
+    public FreqRespView(Composite parent, CorrectionStore correctionStore, FreqRespPane pane,
+                        FreqRespController controller) {
+        this(parent, correctionStore, false, Preferences.instance(), pane, controller);
     }
 
     /** Full constructor.  {@code isolated == true} with a detached {@code prefs}
      *  (a {@link Preferences#copyForDialog()} copy) makes this a self-contained
      *  embedded chart - the Tune-notch wizard's use: it drives only its own copy,
-     *  never saves to disk, and never publishes {@link Events#FREQRESP_RANGE_CHANGED},
-     *  so nothing it does touches the shared main-pane view. */
-    public FreqRespView(Composite parent, CorrectionStore correctionStore, boolean isolated, Preferences prefs) {
+     *  never saves to disk, and gets a {@code null} pane and controller - its
+     *  dialog pushes the curves in itself - so nothing it does touches the
+     *  shared main-pane view. */
+    public FreqRespView(Composite parent, CorrectionStore correctionStore, boolean isolated, Preferences prefs,
+                        FreqRespPane pane, FreqRespController controller) {
         // Push prefs-driven entries (background, L/R trace, phase, RIAA)
         // through the super override map so the base allocates each
         // colour exactly once.  Common entries (grid, axis, text,
@@ -332,6 +337,8 @@ public final class FreqRespView extends AbstractFreqDomainView {
         this.correctionStore = correctionStore;
         this.isolated = isolated;
         this.prefs = prefs;
+        this.pane = pane;
+        this.controller = controller;
 
         axisFont    = Fonts.instance().normal(getDisplay());
         readoutFont = Fonts.instance().normal(getDisplay());
@@ -386,9 +393,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
                 prefs.setFreqRespLeftVisible(true);
                 prefs.setFreqRespRightVisible(false);
                 if (!isolated) prefs.save();
-                invalidateFilterAnchor();// active channel switched -> re-anchor the filter overlay
-                recomputeUnevenness();   // active channel switched -> refresh the readout
-                redraw();
+                refreshFromCurves();     // active channel switched -> every curve-derived value
             }
         });
         rightBtn.addListener(SWT.Selection, e -> {
@@ -396,9 +401,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
                 prefs.setFreqRespRightVisible(true);
                 prefs.setFreqRespLeftVisible(false);
                 if (!isolated) prefs.save();
-                invalidateFilterAnchor();// active channel switched -> re-anchor the filter overlay
-                recomputeUnevenness();   // active channel switched -> refresh the readout
-                redraw();
+                refreshFromCurves();     // active channel switched -> every curve-derived value
             }
         });
         // Combined channel: Shift on the other channel's button folds it into the
@@ -429,40 +432,50 @@ public final class FreqRespView extends AbstractFreqDomainView {
         addListener(SWT.MouseExit,  e -> { mouseInPlot = false; redraw(); });
         installRectZoom(this, true);   // drag-select zoom + Ctrl+Z undo (base machinery)
 
-        // Re-trace whenever the active calibration changes (load, clear, or
-        // wizard Apply).  The view divides the raw result by the new
-        // calibration to keep what's painted in sync with the store.
-        MessageBus bus = MessageBus.instance();
-        calibrationChangedListener = ignored -> onCalibrationChanged();
-        bus.subscribe(Events.FREQRESP_CALIBRATION_CHANGED,
-                calibrationChangedListener);
-        // Compare-params changed (e.g. the smoothing-window pref): refresh
-        // the anchor + min/max table from the new smoothed array, then
-        // redraw.  Does NOT alter the view's zoom - see recomputeCompareAnchor.
-        compareParamsChangedListener = ignored -> onCompareParamsChanged();
-        bus.subscribe(Events.FREQRESP_COMPARE_PARAMS_CHANGED,
-                compareParamsChangedListener);
+        // Preferences the view derives from or paints with (an OK of the
+        // Preferences dialog commits them).  The smoothing window reshapes the
+        // compare diff; notch enable / base re-derive the displayed copies
+        // from the raw curves.  Neither alters the view's zoom - see
+        // refreshFromCurves.
+        Bindings.onChange(this, prefs.freqRespCompareSmoothWindowProperty(), v -> onCompareParamsChanged());
+        Bindings.onChange(this, prefs.freqRespNotchEnabledProperty(),        v -> onCalibrationChanged());
+        Bindings.onChange(this, prefs.freqRespNotchBaseHzProperty(),         v -> onCalibrationChanged());
+        // Colours and line width are read at paint time (syncColors, the trace
+        // strokes); the four range properties are the plotted window, also
+        // written outside this view (the pane's scrollbars, the Nyquist clamp
+        // of the Preferences dialog's OK, the Tune-notch dialog on its copy).
+        // A repaint picks each of them up.
+        Bindings.onChange(this, prefs.freqRespSignalColorProperty(),     v -> redraw());
+        Bindings.onChange(this, prefs.freqRespPhaseColorProperty(),      v -> redraw());
+        Bindings.onChange(this, prefs.freqRespReferenceColorProperty(),  v -> redraw());
+        Bindings.onChange(this, prefs.freqRespBackgroundColorProperty(), v -> redraw());
+        Bindings.onChange(this, prefs.freqRespLineWidthProperty(),       v -> redraw());
+        Bindings.onChange(this, prefs.freqRespFreqMinHzProperty(),       v -> redraw());
+        Bindings.onChange(this, prefs.freqRespFreqMaxHzProperty(),       v -> redraw());
+        Bindings.onChange(this, prefs.freqRespMagTopDbProperty(),        v -> redraw());
+        Bindings.onChange(this, prefs.freqRespMagBotDbProperty(),        v -> redraw());
 
         // RIAA overlay prefs (Show / Reverse / IEC) are bound to their tab
-        // checkboxes in the pane; the view simply subscribes to repaint when
-        // any of them changes - onPaint reads the live flags, so a redraw is
-        // all that's needed.  Show additionally carries the one-shot compare
-        // auto-zoom: when Show turns on while Compare is already armed and a
-        // measurement exists, the compare trace becomes active for the first
-        // time, so fit it once (mirrors the Compare-toggle auto-zoom).
+        // checkboxes in the pane; the view follows every change through
+        // refreshFromCurves - onPaint reads the live flags, while the compare
+        // max / min table and the magnitude ceiling are recomputed from the
+        // reference the flags select.  Show additionally carries the one-shot
+        // compare auto-zoom: when Show turns on while Compare is already armed
+        // and a measurement exists, the compare trace becomes active for the
+        // first time, so fit it once (mirrors the Compare-toggle auto-zoom).
         Bindings.onChange(this, prefs.freqRespShowRiaaProperty(), show -> {
             if (show && prefs.isFreqRespCompareMode() && hasAnyResult()) {
                 autoSetupCompare(prefs);
             }
             updateCompareBanner();   // Show gates the compare banner
-            redraw();                // RIAA overlay / compare trace changed
+            refreshFromCurves();     // RIAA overlay / compare trace changed
         });
         // Compare mode + Reverse / IEC drive the compare banner's visibility /
-        // text AND the RIAA/compare trace; refresh the banner + repaint the
-        // canvas when any of them changes.
-        Bindings.onChange(this, prefs.freqRespCompareModeProperty(), v -> { updateCompareBanner(); redraw(); });
-        Bindings.onChange(this, prefs.freqRespReverseRiaaProperty(), v -> { updateCompareBanner(); redraw(); });
-        Bindings.onChange(this, prefs.freqRespIecAmendmentProperty(), v -> { updateCompareBanner(); redraw(); });
+        // text AND the RIAA/compare trace; refresh the banner and every
+        // curve-derived value when any of them changes.
+        Bindings.onChange(this, prefs.freqRespCompareModeProperty(), v -> { updateCompareBanner(); refreshFromCurves(); });
+        Bindings.onChange(this, prefs.freqRespReverseRiaaProperty(), v -> { updateCompareBanner(); refreshFromCurves(); });
+        Bindings.onChange(this, prefs.freqRespIecAmendmentProperty(), v -> { updateCompareBanner(); refreshFromCurves(); });
 
         // Ideal-filter reference - mirror the RIAA subscriptions.  Show carries
         // the same one-shot compare auto-zoom (fit once when the filter compare
@@ -470,19 +483,19 @@ public final class FreqRespView extends AbstractFreqDomainView {
         // The filter TYPE / RESPONSE selectors still own their own prefs, so the
         // view subscribes to them.  The per-type scalar params live in the
         // Preferences params map (the single source of truth) - the Filters tab
-        // writes an edited entry and calls this view's redraw() directly, and
-        // FilterParams.of() re-reads that map on the next paint, so every filter
-        // cache self-validates without a per-scalar subscription here.
+        // writes an edited entry and calls this view's onFilterParamsChanged()
+        // directly, and FilterParams.of() re-reads that map, so no per-scalar
+        // subscription is needed here.
         Bindings.onChange(this, prefs.freqRespShowFilterProperty(), show -> {
             invalidateFilterReference();
             if (show && prefs.isFreqRespFilterCompare() && hasAnyResult()) {
                 autoSetupCompare(prefs);
             }
-            redraw();
+            refreshFromCurves();
         });
-        Bindings.onChange(this, prefs.freqRespFilterCompareProperty(), v -> redraw());
-        Bindings.onChange(this, prefs.freqRespFilterTypeProperty(),        v -> { invalidateFilterReference(); redraw(); });
-        Bindings.onChange(this, prefs.freqRespFilterResponseProperty(),    v -> { invalidateFilterReference(); redraw(); });
+        Bindings.onChange(this, prefs.freqRespFilterCompareProperty(), v -> refreshFromCurves());
+        Bindings.onChange(this, prefs.freqRespFilterTypeProperty(),        v -> { invalidateFilterReference(); refreshFromCurves(); });
+        Bindings.onChange(this, prefs.freqRespFilterResponseProperty(),    v -> { invalidateFilterReference(); refreshFromCurves(); });
 
         // Unevenness prefs - any change re-walks the current curve + repaints.
         Bindings.onChange(this, prefs.freqRespUnevenModeProperty(),    v -> { recomputeUnevenness(); redraw(); });
@@ -492,14 +505,6 @@ public final class FreqRespView extends AbstractFreqDomainView {
         Bindings.onChange(this, prefs.freqRespUnevenStopHzProperty(),  v -> { recomputeUnevenness(); redraw(); });
 
         addDisposeListener(e -> {
-            if (calibrationChangedListener != null) {
-                bus.unsubscribe(Events.FREQRESP_CALIBRATION_CHANGED,
-                        calibrationChangedListener);
-            }
-            if (compareParamsChangedListener != null) {
-                bus.unsubscribe(Events.FREQRESP_COMPARE_PARAMS_CHANGED,
-                        compareParamsChangedListener);
-            }
             disposePalette();
             // chanButtonFont / axisFont / readoutFont are shared instances
             // owned by Fonts - never disposed here.
@@ -512,9 +517,10 @@ public final class FreqRespView extends AbstractFreqDomainView {
     /** (Re-)allocates the user-configurable colours from
      *  {@link Preferences} when the packed-RGB value of any slot has
      *  changed.  Cheap on repeat calls (one int compare per slot when
-     *  nothing moved).  Called from the constructor (first paint) and
-     *  from {@link #onPaint} so an OK from the Preferences dialog
-     *  takes effect on the next redraw without an explicit subscription.
+     *  nothing moved).  Called from {@link #onPaint} on every paint; the
+     *  colour bindings in the constructor repaint when a colour preference
+     *  changes (an OK from the Preferences dialog), so the new colour takes
+     *  effect at once.
      *
      *  <p>The L and R trace fields both point at {@link #color(ColorRole.LEFT_TRACE)};
      *  with the radio-style L/R toggle, only one channel is ever shown
@@ -529,8 +535,20 @@ public final class FreqRespView extends AbstractFreqDomainView {
     }
 
     // -------------------------------------------------------------------------
-    // Public API - host pane and analyzer worker push results in here
+    // Public API - the pane's measurements, the Load-from tab and the
+    // Tune-notch dialog push results in here
     // -------------------------------------------------------------------------
+
+    /** Shows a finished measurement of the pane's controller: clears the old
+     *  trace, then shows both channels.  Only that controller's results
+     *  arrive here, so neither the Tune-notch wizard's sweeps nor a shared
+     *  FREQRESP_MEASUREMENT_STARTED touch this graph. */
+    public void showMeasurement(StereoFreqRespResult stereo) {
+        clearResults();
+        setLeftResult(stereo.left());
+        setRightResult(stereo.right());
+        refreshFromCurves();
+    }
 
     /** Replaces the left-channel result and triggers a repaint.  The argument
      *  is the raw measurement; the displayed copy is derived by dividing it
@@ -541,9 +559,6 @@ public final class FreqRespView extends AbstractFreqDomainView {
         this.leftResult    = applyCurrentCalibration(result);
         if (result != null) lastResultSampleRate = result.getSampleRate();
         updateCompareBanner();   // hasAnyResult changed -> may show/hide compare
-        invalidateFilterAnchor();// new curve -> re-anchor the filter overlay
-        recomputeUnevenness();   // new curve -> refresh the flatness readout
-        redraw();                // new trace
     }
 
     /** Replaces the right-channel result and triggers a repaint.  Same
@@ -553,49 +568,66 @@ public final class FreqRespView extends AbstractFreqDomainView {
         this.rightResult    = applyCurrentCalibration(result);
         if (result != null) lastResultSampleRate = result.getSampleRate();
         updateCompareBanner();   // hasAnyResult changed -> may show/hide compare
-        invalidateFilterAnchor();// new curve -> re-anchor the filter overlay
-        recomputeUnevenness();   // new curve -> refresh the flatness readout
-        redraw();                // new trace
+    }
+
+    /** Refreshes the compare-mode anchor + min/max table after the user
+     *  changes a parameter that affects the smoothed-diff derivation
+     *  (currently the smoothing-window pref), through
+     *  {@link #refreshFromCurves()}: the anchor and table move only while
+     *  compare is active; the redraw shows the newly-smoothed trace even
+     *  when the anchor doesn't meaningfully move. */
+    public void onCompareParamsChanged() {
+        refreshFromCurves();
+    }
+
+    /** Rebuilds the ideal-filter reference after an edit of a per-type
+     *  filter parameter, as the filter type / response bindings do.  The
+     *  parameters live in the Preferences params map, which no Property
+     *  observes, so the Filters tab calls this after every write: with the
+     *  ideal filter as the compared reference, the compare anchor + min/max
+     *  table and the magnitude ceiling follow the new filter curve. */
+    public void onFilterParamsChanged() {
+        invalidateFilterReference();
+        refreshFromCurves();
     }
 
     /** Re-derives the displayed left/right results from their raw copies
-     *  using the calibration currently active in the store.  Subscribed to
-     *  {@code FREQRESP_CALIBRATION_CHANGED} so loading or clearing a
+     *  using the calibration currently active in the store.  The tab
+     *  control calls it after every write of the store and the notch
+     *  bindings on every notch change, so loading or clearing a
      *  calibration immediately retraces the existing measurement.
      *
-     *  <p>When compare mode is on, also re-runs
-     *  {@link #autoSetupCompare(Preferences)} so the median anchor and
-     *  the min / max table refresh to match the new calibrated data -
-     *  otherwise the trace would shift but the 0 dB centreline and
-     *  the table would still reflect the old calibration. */
-    /** Refreshes the compare-mode anchor + min/max table after the user
-     *  changes a parameter that affects the smoothed-diff derivation
-     *  (currently the smoothing-window pref).  No-op when compare mode
-     *  or RIAA is off, or no result is loaded.  Always redraws so the
-     *  newly-smoothed trace appears even when the anchor doesn't
-     *  meaningfully move. */
-    public void onCompareParamsChanged() {
-        if (compareActive()) {
-            recomputeCompareAnchor(prefs);
-        }
-        redraw();
-    }
-
+     *  <p>Ends in {@link #refreshFromCurves()}, which with compare mode on
+     *  also refreshes the median anchor and the min / max table to the new
+     *  calibrated data - otherwise the trace would shift but the 0 dB
+     *  centreline and the table would still reflect the old calibration. */
     public void onCalibrationChanged() {
         if (rawLeftResult  != null) this.leftResult  = applyCurrentCalibration(rawLeftResult);
         if (rawRightResult != null) this.rightResult = applyCurrentCalibration(rawRightResult);
-        invalidateFilterAnchor();// calibrated curve changed -> re-anchor the filter overlay
-        recomputeUnevenness();   // calibrated curve changed -> refresh the readout
-        // Refresh the anchor + min/max table so they track the new
-        // calibration / colour / smoothing state, but DO NOT touch the
-        // freq / magnitude window - only autoSetupCompare is allowed
-        // to re-zoom, and that runs solely from the explicit user
-        // actions (auto-setup button, compare-mode toggle on, Show RIAA
-        // toggled on while compare is already on).  Saving Preferences
-        // must never re-zoom the view.
+        refreshFromCurves();     // calibrated curve changed -> every curve-derived value
+    }
+
+    /** The one place every curve-data change ends in - a new or cleared
+     *  result, a calibration or notch change, the smoothing window, the
+     *  L / R switch, the reference and compare flags, a filter-parameter
+     *  edit.  Re-anchors the
+     *  filter overlay, recomputes the unevenness readout and, while compare
+     *  is active, the compare anchor + min/max table; then has the pane
+     *  re-sync its scrollbars (the magnitude ceiling follows the curves)
+     *  and repaints.
+     *
+     *  <p>DOES NOT touch the freq / magnitude window - only
+     *  autoSetupCompare is allowed to re-zoom, and that runs solely from
+     *  the explicit user actions (auto-setup button, compare-mode toggle
+     *  on, Show RIAA toggled on while compare is already on).  Saving
+     *  Preferences must never re-zoom the view. */
+    void refreshFromCurves() {
+        invalidateFilterAnchor();
+        recomputeUnevenness();
         if (compareActive()) {
             recomputeCompareAnchor(prefs);
         }
+        if (pane != null) pane.syncScrollbars();
         redraw();
     }
 
@@ -605,9 +637,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
         // at save time - applying it again here would double-correct.
         if (raw.isCalibrationApplied()) return raw;
         List<CorrectionStore.Entry> entries = correctionStore.getEntries();
-        StereoFreqRespCalibration direct = correctionStore.getDirect();
-        boolean wantCal   = prefs.isFreqRespApplyCalibration()
-                            && (!entries.isEmpty() || direct != null);
+        boolean wantCal   = prefs.isFreqRespApplyCalibration() && !entries.isEmpty();
         boolean wantNotch = prefs.isFreqRespNotchEnabled();
         if (!wantCal && !wantNotch) return raw;
 
@@ -622,12 +652,6 @@ public final class FreqRespView extends AbstractFreqDomainView {
             // composition of all loaded files.
             for (CorrectionStore.Entry entry : entries) {
                 divideByStereoCal(entry.getCalibration(), rChan, freqs, outMag, outPhase);
-            }
-            // Plus the wizard's transient page-1 calibration (when set) so
-            // page-2 / save-stage displays subtract the loopback without
-            // requiring a file in the entries list.
-            if (direct != null) {
-                divideByStereoCal(direct, rChan, freqs, outMag, outPhase);
             }
         }
         if (wantNotch) {
@@ -743,9 +767,6 @@ public final class FreqRespView extends AbstractFreqDomainView {
         this.leftResult     = null;
         this.rightResult    = null;
         updateCompareBanner();   // no result -> hide the compare banner
-        invalidateFilterAnchor();// no curve -> drop the cached filter anchor
-        recomputeUnevenness();   // no curve -> clear the flatness readout
-        redraw();
     }
 
     /** True when at least one channel has a measurement loaded - used by
@@ -754,26 +775,41 @@ public final class FreqRespView extends AbstractFreqDomainView {
         return leftResult != null || rightResult != null;
     }
 
-    /** Read-only accessor used by the host pane's Save-to handler. */
+    /** Read-only accessor; {@link #copySnapshotFrom} reads the source view's
+     *  curves through it. */
     public FreqRespResult getLeftResultOrNull() {
         return leftResult;
     }
 
-    /** Read-only accessor used by the host pane's Save-to handler. */
+    /** Read-only accessor; {@link #copySnapshotFrom} reads the source view's
+     *  curves through it. */
     public FreqRespResult getRightResultOrNull() {
         return rightResult;
     }
 
+    /** Saves the curves this view shows - already de-embedded by the active
+     *  calibration - through the controller's save (the Save-as dialog and
+     *  the write).  Reached only on the live view; the isolated Tune-notch
+     *  view has no controller.
+     *  @return the written path, or {@code null} when nothing was written */
+    public String save() {
+        return controller.saveMeasurement(leftResult, rightResult);
+    }
+
     /** Copies {@code src}'s displayed state into this view - for the offscreen
-     *  screenshot clone.  The already-calibrated results are fed in: this view's
-     *  correction store is empty, so {@link #applyCurrentCalibration} is identity
-     *  and the clone paints exactly what {@code src} shows (compare / RIAA still
-     *  apply at paint time from the shared preferences). */
+     *  screenshot clone.  The source's display copies are fed in: a corrected
+     *  copy is marked {@link FreqRespResult#isCalibrationApplied()}, so
+     *  {@link #applyCurrentCalibration} hands it through unchanged, and an
+     *  uncorrected one meets the same preference and the same calibration list
+     *  the source had - the clone paints exactly what {@code src} shows
+     *  (compare / RIAA still apply at paint time from the shared
+     *  preferences). */
     public void copySnapshotFrom(FreqRespView src) {
         if (src == null || src == this) return;
         setSourceFilePath(src.getSourceFilePath());
         setLeftResult(src.getLeftResultOrNull());
         setRightResult(src.getRightResultOrNull());
+        refreshFromCurves();
     }
 
     /** Snaps the view to the default frequency / magnitude window
@@ -787,7 +823,6 @@ public final class FreqRespView extends AbstractFreqDomainView {
         prefs.setFreqRespMagTopDb(softMagTopDb(MAG_TOP_MAX_DB, FreqRespConstants.FREQ_MIN_HZ, nyquistHz()));
         prefs.setFreqRespMagBotDb(MAG_DEFAULT_BOT_DB);
         if (!isolated) prefs.save();
-        publishRangeChanged();
         redraw();
     }
 
@@ -850,7 +885,6 @@ public final class FreqRespView extends AbstractFreqDomainView {
         prefs.setFreqRespMagTopDb(softMagTopDb(newTop, fLo, fHi));
         prefs.setFreqRespMagBotDb(newBot);
         if (!isolated) prefs.save();
-        publishRangeChanged();
         redraw();
     }
 
@@ -1112,7 +1146,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
     }
 
     /** Applies through the canonical range-change protocol, clamped like the
-     *  wheel zoom; the pane's FREQRESP_RANGE_CHANGED subscriber re-syncs the
+     *  wheel zoom; the pane's bindings on the range preferences re-sync the
      *  scrollbars. */
     @Override
     protected boolean applyZoomState(ZoomState s) {
@@ -1126,7 +1160,6 @@ public final class FreqRespView extends AbstractFreqDomainView {
         prefs.setFreqRespMagTopDb(top);
         prefs.setFreqRespMagBotDb(bot);
         if (!isolated) prefs.save();
-        publishRangeChanged();
         redraw();
         return true;
     }
@@ -1788,7 +1821,6 @@ public final class FreqRespView extends AbstractFreqDomainView {
         prefs.setFreqRespMagTopDb(newTop);
         prefs.setFreqRespMagBotDb(newBot);
         if (!isolated) prefs.save();
-        publishRangeChanged();
         redraw();
     }
 
@@ -3030,7 +3062,6 @@ public final class FreqRespView extends AbstractFreqDomainView {
         prefs.setFreqRespFreqMinHz(newMin);
         prefs.setFreqRespFreqMaxHz(newMax);
         if (!isolated) prefs.save();
-        publishRangeChanged();
         redraw();
     }
 
@@ -3056,7 +3087,6 @@ public final class FreqRespView extends AbstractFreqDomainView {
         prefs.setFreqRespMagTopDb(newTop);
         prefs.setFreqRespMagBotDb(newBot);
         if (!isolated) prefs.save();
-        publishRangeChanged();
         redraw();
     }
 
@@ -3082,7 +3112,6 @@ public final class FreqRespView extends AbstractFreqDomainView {
         prefs.setFreqRespFreqMinHz(newMin);
         prefs.setFreqRespFreqMaxHz(newMax);
         if (!isolated) prefs.save();
-        publishRangeChanged();
         redraw();
     }
 
@@ -3104,12 +3133,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
         prefs.setFreqRespMagTopDb(newTop);
         prefs.setFreqRespMagBotDb(newBot);
         if (!isolated) prefs.save();
-        publishRangeChanged();
         redraw();
-    }
-
-    private void publishRangeChanged() {
-        if (!isolated) MessageBus.instance().publish(Events.FREQRESP_RANGE_CHANGED);
     }
 
     // -------------------------------------------------------------------------

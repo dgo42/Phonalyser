@@ -75,9 +75,10 @@ class FreqRespWorkerFormatTest {
         backend.setOutputSampleRate(OUTPUT_RATE_HZ);
         backend.setInputBitDepth(INPUT_BITS);
         backend.setOutputBitDepth(OUTPUT_BITS);
-        // The worker's UI marshaller is not reached by the configuration step;
-        // running it inline keeps the test free of an SWT display either way.
-        worker = new FreqRespAnalyzerWorker();
+        // The configuration step reports nothing and never reaches the
+        // controller, so none is given: the test needs neither a controller
+        // nor its pane and SWT display.
+        worker = new FreqRespAnalyzerWorker(null);
     }
 
     @AfterEach

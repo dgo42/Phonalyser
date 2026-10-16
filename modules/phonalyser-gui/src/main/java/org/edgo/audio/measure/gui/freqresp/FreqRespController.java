@@ -18,17 +18,29 @@
 
 package org.edgo.audio.measure.gui.freqresp;
 
+import java.io.File;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
 
+import org.eclipse.swt.SWT;
+import org.eclipse.swt.widgets.FileDialog;
+import org.eclipse.swt.widgets.Shell;
 import org.edgo.audio.measure.bind.Property;
 import org.edgo.audio.measure.dsp.FreqRespCalHelper;
+import org.edgo.audio.measure.dsp.FreqRespCalibration;
+import org.edgo.audio.measure.dsp.StereoFreqRespCalibration;
+import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
-import org.edgo.audio.measure.gui.common.GuiUtil;
+import org.edgo.audio.measure.gui.common.Dialogs;
+import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.StereoCaptureProgress;
+
+import lombok.extern.log4j.Log4j2;
 
 /**
  * Controller of the Frequency Response pane: owns the sweep measurement
@@ -38,17 +50,30 @@ import org.edgo.audio.measure.sound.StereoCaptureProgress;
  * <p>The constructor subscribes to the preferences the timing rules depend
  * on (FFT size, lead-in) and to audio-format changes, re-deriving and
  * persisting {@code freqRespDurationSec} - the tab control only renders it.
- * It also owns the result {@link FreqRespView}: on {@link
- * Events#FREQRESP_RESULT_AVAILABLE} (the worker's finished deconvolution) it
- * clears and repopulates the view directly on the UI thread.  The view is a
- * passive component - it does NOT subscribe to the measurement lifecycle
- * itself, so a shared {@link Events#FREQRESP_MEASUREMENT_STARTED} (e.g. the
- * Tune-notch wizard grabbing the audio device) cannot wipe its graph.  The
- * pane still handles {@link Events#FREQRESP_MEASUREMENT_STOPPED} /
- * {@link Events#FREQRESP_MEASUREMENT_FAILED} for control-locking + errors.
+ *
+ * <p>The worker's reports - result, error, end of the run - arrive marshalled
+ * onto the UI thread ({@link #onResult}, {@link #onFailed}, {@link
+ * #onStopped}) and go straight on to the pane that owns this controller.  The
+ * UI thread starts them in the order the worker posted them; that start order
+ * is the whole guarantee: a modal dialog the pane opens on one report runs the
+ * next report inside its event loop.  The controller keeps no result: the
+ * view holds the curves.  The end of a run is published on the bus as {@link
+ * Events#FREQRESP_MEASUREMENT_STOPPED} before the pane hears of it, so the
+ * other modules take the audio devices back at once, even while a dialog of
+ * the pane is modal.  Only this controller's own runs reach the pane: the
+ * exclusive-measurement events of another module (the Tune-notch wizard, the
+ * delay measurement) never wipe the view's curves or unlock the pane.
+ *
+ * <p>The save of a pair of curves to a {@code .frc} file lives here too
+ * ({@link #saveMeasurement}) - the one save for every caller; its dialogs
+ * open on the pane's shell.
  */
+@Log4j2
 public final class FreqRespController {
 
+    /** The pane that owns this controller: the receiver of the measurement
+     *  reports and, through its shell, the parent of the save dialogs. */
+    private final FreqRespPane pane;
     /** Engine driving the sweep + deconvolution; created lazily on the
      *  first measurement so app startup never opens audio devices. */
     private FreqRespAnalyzerWorker worker;
@@ -56,20 +81,8 @@ public final class FreqRespController {
      *  constructor; run by {@link #shutdown()}. */
     private final List<Runnable> unsubscribes = new ArrayList<>();
 
-    public FreqRespController(FreqRespView view) {
-        // The view is a passive component owned by this controller: when the
-        // worker's deconvolution finishes, drive it directly - clear the old
-        // trace, then show both channels - marshalled to the UI thread.  The
-        // view is NOT a bus subscriber for its result lifecycle, so a shared
-        // FREQRESP_MEASUREMENT_STARTED (e.g. the Tune-notch wizard grabbing the
-        // audio device) can never wipe this graph.
-        onBus(Events.FREQRESP_RESULT_AVAILABLE, (StereoFreqRespResult stereo) ->
-                GuiUtil.marshal(() -> {
-                    if (stereo == null || view.isDisposed()) return;
-                    view.clearResults();
-                    view.setLeftResult(stereo.left());
-                    view.setRightResult(stereo.right());
-                }));
+    public FreqRespController(FreqRespPane pane) {
+        this.pane = pane;
         Preferences prefs = Preferences.instance();
         onPref(prefs.freqRespFftSizeProperty(), n -> deriveDuration());
         onPref(prefs.freqRespLeadInSecProperty(), v -> {
@@ -94,13 +107,33 @@ public final class FreqRespController {
 
     /** Kicks off one sweep measurement (no-op while one is in flight).
      *  {@code progress} streams each capture block's RMS to the caller's
-     *  live meter.  Completion / failure arrive via the bus events. */
+     *  live meter.  Result, failure and the end of the run come back through
+     *  {@link #onResult}, {@link #onFailed} and {@link #onStopped}. */
     public synchronized void startMeasurement(StereoCaptureProgress progress) {
         if (isMeasurementRunning()) return;
         if (worker == null) {
-            worker = new FreqRespAnalyzerWorker();
+            worker = new FreqRespAnalyzerWorker(this);
         }
         worker.start(progress);
+    }
+
+    /** The worker's finished deconvolution of both channels - UI thread. */
+    void onResult(StereoFreqRespResult stereo) {
+        pane.onMeasurementResult(stereo);
+    }
+
+    /** The worker's run ended in an error; {@code message} words it - UI
+     *  thread. */
+    void onFailed(String message) {
+        pane.onMeasurementFailed(message);
+    }
+
+    /** The worker's run ended - completed, cancelled or failed - UI thread.
+     *  The bus first: the other modules take the audio devices back at once,
+     *  even when the pane then opens a modal dialog. */
+    void onStopped() {
+        MessageBus.instance().publish(Events.FREQRESP_MEASUREMENT_STOPPED);
+        pane.onMeasurementStopped();
     }
 
     /** Cooperative cancel of an in-flight measurement; no-op when idle. */
@@ -137,6 +170,92 @@ public final class FreqRespController {
         for (Runnable r : unsubscribes) r.run();
         unsubscribes.clear();
         cancelMeasurement();
+    }
+
+    // -------------------------------------------------------------------------
+    // Saving the measurement
+    // -------------------------------------------------------------------------
+
+    /** Saves {@code left} / {@code right} - the curves the caller shows,
+     *  already de-embedded by the active calibration - to a {@code .frc} file
+     *  the operator picks in a Save-as dialog pre-filled with the last saved
+     *  file name.  Either curve may be {@code null} (no measurement on that
+     *  channel).  The dialogs open on the pane's shell.
+     *  @return the written path; {@code null} when both curves are
+     *          {@code null} (an info dialog says so), on cancel, or when the
+     *          write failed (an error dialog says so) */
+    public String saveMeasurement(FreqRespResult left, FreqRespResult right) {
+        Shell shell = pane.getGroup().getShell();
+        if (left == null && right == null) {
+            Dialogs.info(shell,
+                    I18n.t("freqResp.tab.saveTo"),
+                    I18n.t("freqResp.saveTo.error.noResult"));
+            return null;
+        }
+        Preferences prefs = Preferences.instance();
+        // The Save-as dialog opens on every save so the operator picks (or
+        // confirms) the destination; pre-filled with the last saved file
+        // name, saving to the same file again is two clicks.
+        FileDialog fd = new FileDialog(shell, SWT.SAVE);
+        fd.setText(I18n.t("freqResp.saveTo.dialog"));
+        fd.setFilterExtensions(new String[]{ "*.frc" });
+        fd.setOverwrite(true);
+        String memFolder = prefs.getFreqRespSaveFolder();
+        if (memFolder != null) fd.setFilterPath(memFolder);
+        String lastPath = prefs.getFreqRespSavePath();
+        if (lastPath != null && !lastPath.isEmpty()) {
+            fd.setFileName(new File(lastPath).getName());
+        } else {
+            fd.setFileName("freqresp_" + LocalDateTime.now()
+                    .format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss")) + ".frc");
+        }
+        String picked = fd.open();
+        if (picked == null) return null;
+        try {
+            // Both channels are always written; the file format is strict
+            // stereo (5 columns: f, mag_L_dB, mag_R_dB, phase_L_deg,
+            // phase_R_deg).  When one channel is hidden in the view, the
+            // visible channel is duplicated into the missing slot so the
+            // file stays self-consistent on round-trip.
+            // While the inputs are combined, both channels carry the master.
+            Channel combined = prefs.getFreqRespCombinedMaster();
+            if (combined == Channel.L && left  != null) right = left;
+            if (combined == Channel.R && right != null) left  = right;
+            FreqRespResult primary = left != null ? left : right;
+            FreqRespResult other   = left != null ? right : left;
+            if (other == null) other = primary;
+            FreqRespCalibration calL = new FreqRespCalibration(
+                    primary.getFreqs(), primary.getMagLin(), primary.getPhaseRad());
+            FreqRespCalibration calR = new FreqRespCalibration(
+                    other.getFreqs(),   other.getMagLin(),   other.getPhaseRad());
+            FreqRespSweepParams p = primary.getSweepParams();
+            FreqRespCalHelper.saveFrc(
+                    new StereoFreqRespCalibration(calL, calR),
+                    picked, primary.getSampleRate(),
+                    p.getStartHz(), p.getStopHz(), p.getSweepPoints(),
+                    p.getAmplitudeVrms());
+
+            prefs.setFreqRespSavePath(picked);
+            prefs.setFreqRespSaveFolder(new File(picked).getParent());
+            prefs.save();
+            if (log.isInfoEnabled()) {
+                log.info("FreqResp measurement saved to {}", picked);
+            }
+            // Every calibration list (FreqResp and FFT) learns of the file
+            // through the saved-file broadcast saveFrc sends.
+            return picked;
+        } catch (Exception ex) {
+            if (log.isWarnEnabled()) {
+                log.warn("FreqResp save failed: {}", picked, ex);
+            }
+            // The dialog names the file; the cause is a technical text in
+            // English and stays in the log, so the translated dialog shows no
+            // untranslated words.
+            Dialogs.error(shell,
+                    I18n.t("freqResp.saveTo.dialog"),
+                    I18n.t("freqResp.error.measurement.save").replace("{0}", picked));
+            return null;
+        }
     }
 
     // -------------------------------------------------------------------------

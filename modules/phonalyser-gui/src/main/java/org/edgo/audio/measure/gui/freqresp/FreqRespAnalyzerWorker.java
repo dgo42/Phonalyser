@@ -42,17 +42,15 @@ import lombok.extern.log4j.Log4j2;
  * stereo sweep via {@link FreqRespAnalyzer}, which captures both ADC
  * channels in a single playback and deconvolves them in parallel.
  *
- * <p>All reporting goes through the bus: {@link
- * Events#FREQRESP_MEASUREMENT_STARTED} on start, {@link
- * Events#FREQRESP_RESULT_AVAILABLE} with the {@link StereoFreqRespResult}
- * on success, {@link Events#FREQRESP_MEASUREMENT_FAILED} with a message on
- * error, and {@link Events#FREQRESP_MEASUREMENT_STOPPED} when the run ends
- * (completion, cancellation, or error).  The host pane locks its controls
- * on STARTED/STOPPED; the FFT / scope / generator panes subscribe so they
- * release the shared capture device and gray their Record / Play buttons
- * for the duration.  FAILED and STOPPED are marshalled through the
- * injected UI executor so widget-touching subscribers run on the SWT
- * thread, exactly as before.
+ * <p>A run reports to the {@link FreqRespController} the worker was built
+ * with, each report marshalled onto the UI thread as one direct call: the
+ * {@link StereoFreqRespResult} on success, a message on error, and the end of
+ * the run (completion, cancellation, or error), always posted last, after any
+ * result or error of the same run.  The controller publishes the run's end on
+ * the bus.  The one bus event published here is {@link
+ * Events#FREQRESP_MEASUREMENT_STARTED}, on start: the FFT / scope / generator
+ * panes subscribe so they release the shared capture device and gray their
+ * Record / Play buttons for the duration.
  *
  * <p>Cancellation is cooperative - {@link #cancel()} sets a flag the
  * analyzer polls at every checkpoint and inside the capture sleep loop;
@@ -64,6 +62,13 @@ public final class FreqRespAnalyzerWorker {
     private volatile Thread             workerThread;
     private final AtomicBoolean         cancelFlag       = new AtomicBoolean(false);
     private volatile StereoCaptureProgress activeProgress;
+    /** The owner this worker reports to - every call marshalled onto the UI
+     *  thread. */
+    private final FreqRespController controller;
+
+    FreqRespAnalyzerWorker(FreqRespController controller) {
+        this.controller = controller;
+    }
 
     /** Starts the worker thread (no-op if already running).  See
      *  {@link #start(StereoCaptureProgress)} when a live progress meter
@@ -173,18 +178,17 @@ public final class FreqRespAnalyzerWorker {
                     new FreqRespAnalyzer(buildConfig(out, in)).run(null, cancelFlag::get);
             if (stereo == null) return;
 
-            MessageBus.instance().publish(Events.FREQRESP_RESULT_AVAILABLE, stereo);
+            GuiUtil.marshal(() -> controller.onResult(stereo));
         } catch (InterruptedException ex) {
             log.info("FreqResp measurement cancelled");
         } catch (Exception ex) {
             log.error("FreqResp measurement failed", ex);
             reportError(ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName());
         } finally {
-            // Publish STOPPED on the UI thread.  The host pane re-enables
-            // its controls and closes the progress dialog on it; the other
-            // panes' subscribers restore their Record / Play buttons.
-            GuiUtil.marshal(() ->
-                    MessageBus.instance().publish(Events.FREQRESP_MEASUREMENT_STOPPED));
+            // Every run ends here - completed, cancelled or failed - so the
+            // end of the run is posted after any result / error of the same
+            // run, and the UI thread starts them in that order.
+            GuiUtil.marshal(() -> controller.onStopped());
             synchronized (this) { workerThread = null; }
         }
     }
@@ -262,7 +266,6 @@ public final class FreqRespAnalyzerWorker {
 
     private void reportError(String message) {
         log.warn("FreqResp worker: {}", message);
-        GuiUtil.marshal(() ->
-                MessageBus.instance().publish(Events.FREQRESP_MEASUREMENT_FAILED, message));
+        GuiUtil.marshal(() -> controller.onFailed(message));
     }
 }
