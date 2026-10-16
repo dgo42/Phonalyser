@@ -60,7 +60,6 @@ import org.edgo.audio.measure.enums.TriggerMode;
 import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
-import org.edgo.audio.measure.gui.common.AbstractPane;
 import org.edgo.audio.measure.gui.common.AbstractTabControl;
 import org.edgo.audio.measure.gui.common.CalibrationDialog;
 import org.edgo.audio.measure.gui.common.GuiUtil;
@@ -97,14 +96,14 @@ import lombok.extern.log4j.Log4j2;
  * must target the one pane/controller pair whose setting changed (the
  * screenshot renderer constructs a second, offscreen pane with its own idle
  * controller that must stay independent).  The single pane-owned action, the
- * screenshot dialog, is reached through the generic {@code AbstractTabControl}
- * owner channel.  The pane drives the few widgets it must reach (the scale
+ * screenshot dialog, is reached through the owning pane the
+ * {@code AbstractTabControl} base holds.  The pane drives the few widgets it must reach (the scale
  * selectors on a mouse-wheel zoom or auto-setup, the trigger group on a
  * record / file-load switch, the calibrate button on the capture gate) through
  * this control's small public command API.
  */
 @Log4j2
-public final class ScopeTabControl extends AbstractTabControl {
+public final class ScopeTabControl extends AbstractTabControl<ScopePane> {
 
     /** Side length of every small in-group toggle button (px). */
     public  static final int SQUARE_BUTTON = 32;
@@ -205,8 +204,8 @@ public final class ScopeTabControl extends AbstractTabControl {
     private Consumer<Void>               singleDisarmedListener;
 
     public ScopeTabControl(Composite parent, ScopeView view, ScopeController controller,
-                           boolean liveCapture) {
-        super(parent, SWT.NONE);
+                           boolean liveCapture, ScopePane owner) {
+        super(parent, SWT.NONE, owner);
         this.view       = view;
         this.controller = controller;
 
@@ -1128,11 +1127,8 @@ public final class ScopeTabControl extends AbstractTabControl {
         shotBtn.setToolTipText(I18n.t("scope.screenshot.tooltip"));
         shotBtn.setLayoutData(new RowData(IconUtils.ACTION_BUTTON_PX, IconUtils.ACTION_BUTTON_PX));
         // The screenshot dialog clones the whole pane offscreen, so the pane
-        // (AbstractPane) owns it - reach it through the generic owner channel.
-        shotBtn.addListener(SWT.Selection, e -> {
-            AbstractPane owner = getOwner();
-            if (owner != null) owner.openScreenshotDialog();
-        });
+        // owns it - reach it through the owner.
+        shotBtn.addListener(SWT.Selection, e -> getOwner().openScreenshotDialog());
 
         calibrateButton = new Button(g, SWT.PUSH);
         calibrateButton.setImage(crosshairIcon);

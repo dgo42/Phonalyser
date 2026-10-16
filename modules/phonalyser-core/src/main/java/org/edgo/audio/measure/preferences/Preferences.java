@@ -545,12 +545,13 @@ public final class Preferences {
     private final Property<String>  fftLoadPath          = bound(null);
     private final Property<String>  fftLoadFolder        = bound(null);
 
-    /** FFT-pane Load-calibration rows, in display order.  Entry 0 is the
-     *  former row-0 "primary" calibration; entries 1..N are the former
-     *  extras.  Each entry carries its own path + Active / With-noise
-     *  toggles; the pane renders one row per entry and the FFT view applies
-     *  every active entry's correction in list order. */
-    private final List<CalibrationEntry> fftCalibrations = new ArrayList<>();
+    /** FFT-pane Load-calibration rows, in display order.  Each entry carries
+     *  its own path + Active / With-noise toggles; the pane renders one row
+     *  per entry and the FFT view applies every active entry's correction in
+     *  list order.  Observable like the FreqResp list: a change requests the
+     *  debounced save (constructor) and updates the row it names. */
+    @Getter
+    private final CalibrationList fftCalibrations = new CalibrationList();
     /** Packed RGB of the "before-calibration" dot painted next to each
      *  fundamental / harmonic peak when at least one .frc calibration
      *  is loaded.  Default dark blue (0x00, 0x00, 0x80). */
@@ -793,10 +794,16 @@ public final class Preferences {
      *  loaded.  Defaults on so a loaded calibration takes effect by
      *  default. */
     private final Property<Boolean> freqRespApplyCalibration = bound(true);
-    /** FreqResp-pane Load-calibration rows, in display order.  Entry 0 is the
-     *  former row-0 "primary" calibration; entries 1..N are the former extras.
-     *  The FreqResp pane ignores each entry's With-noise toggle. */
-    private final List<CalibrationEntry> freqRespCalibrations = new ArrayList<>();
+    /** FreqResp-pane Load-calibration rows, in display order.  The
+     *  calibration wizard writes entry 0 (its loopback step) and entry 1 (its
+     *  filter step); further entries are loaded by hand.  The FreqResp pane
+     *  ignores each entry's With-noise toggle.  Observable:
+     *  any change of the list or of an entry reaches its listeners - the
+     *  pane's calibration tab registers one to follow every change; another,
+     *  registered by the constructor of the live instance, requests the
+     *  debounced save. */
+    @Getter
+    private final CalibrationList freqRespCalibrations = new CalibrationList();
 
     /** Last-used folder for the "Save to..." tab; persisted across launches. */
     private final Property<String>  freqRespSaveFolder = bound(null);
@@ -855,6 +862,11 @@ public final class Preferences {
         // the bin-bandwidth cache listens on the properties themselves.
         fftLength.addListener(v -> recomputeBinBw());
         backend.addListener(v -> recomputeBinBw());
+        // Every change of a calibration list - an entry added, removed or
+        // replaced, an entry's file or toggle changed - persists through the
+        // debounced save, like a bound property.
+        freqRespCalibrations.addListener(this::onCalibrationsChanged);
+        fftCalibrations.addListener(this::onCalibrationsChanged);
         load();
         // The per-card profile store lives in its own devices.yaml: seed it from
         // the bundle on first run, then load it.
@@ -1227,68 +1239,25 @@ public final class Preferences {
         return p;
     }
 
-    /** Subscribes a calibration entry's two observable toggles to the
-     *  debounced auto-save, so flipping Active / With-noise persists exactly
-     *  like a scalar bound property.  The {@code path} is NOT observable -
-     *  the pane saves explicitly after a browse / clear. */
-    private void trackCalibration(CalibrationEntry entry) {
-        entry.active().addListener(v -> requestSave());
-        entry.withNoise().addListener(v -> requestSave());
+    /** The saved-file broadcast: a calibration file has just been written to
+     *  {@code path}.  The writer itself calls this once per saved file
+     *  ({@code FreqRespCalHelper.saveFrc}), so no save path needs a call of
+     *  its own.  Every {@link CalibrationList} of this instance hears it and
+     *  sends its own listeners a {@code FILE_SAVED} change for each item that
+     *  references the file - the item's path is unchanged, but the curve
+     *  behind it is new. */
+    public void broadcastSavedFile(String path) {
+        freqRespCalibrations.onFileSaved(path);
+        fftCalibrations.onFileSaved(path);
     }
 
-    /** Live FFT calibration list (entry 0 = former primary, 1..N = extras).
-     *  The pane iterates this to build / rebuild its rows. */
-    public List<CalibrationEntry> getFftCalibrations() {
-        return fftCalibrations;
-    }
-
-    /** Appends an FFT calibration entry, wires its toggles to auto-save, and
-     *  requests a save (covers the structural change).  Synchronized (like
-     *  the preset mutators) so the structural change can't race the save
-     *  daemon iterating the list in {@link #toMap()}. */
-    public synchronized void addFftCalibration(CalibrationEntry entry) {
-        fftCalibrations.add(entry);
-        trackCalibration(entry);
-        requestSave();
-    }
-
-    /** Removes an FFT calibration entry and requests a save. */
-    public synchronized void removeFftCalibration(CalibrationEntry entry) {
-        if (fftCalibrations.remove(entry)) {
+    /** A calibration list changed: every change persists through the
+     *  debounced save but a saved file, which leaves the preferences as they
+     *  are. */
+    private void onCalibrationsChanged(CalibrationList.Change change) {
+        if (change.kind() != CalibrationList.Kind.FILE_SAVED) {
             requestSave();
         }
-    }
-
-    /** Live FreqResp calibration list (entry 0 = former primary, 1..N = extras). */
-    public List<CalibrationEntry> getFreqRespCalibrations() {
-        return freqRespCalibrations;
-    }
-
-    /** Appends a FreqResp calibration entry, wires its toggles to auto-save,
-     *  and requests a save. */
-    public synchronized void addFreqRespCalibration(CalibrationEntry entry) {
-        freqRespCalibrations.add(entry);
-        trackCalibration(entry);
-        requestSave();
-    }
-
-    /** Removes a FreqResp calibration entry and requests a save. */
-    public synchronized void removeFreqRespCalibration(CalibrationEntry entry) {
-        if (freqRespCalibrations.remove(entry)) {
-            requestSave();
-        }
-    }
-
-    /** Sets the path of the FreqResp primary (entry 0) calibration, creating
-     *  entry 0 when the list is empty, then requests a save.  Used by the
-     *  FreqResp wizard's Apply step to record the just-applied file without
-     *  flipping the row's Active flag. */
-    public synchronized void setFreqRespPrimaryCalibrationPath(String path) {
-        if (freqRespCalibrations.isEmpty()) {
-            addFreqRespCalibration(new CalibrationEntry());
-        }
-        freqRespCalibrations.get(0).setPath(path);
-        requestSave();
     }
 
     /** Persists after a bound property changed - a no-op while {@link #load()}
@@ -2904,7 +2873,6 @@ public final class Preferences {
                 boolean active = m.get("active") instanceof Boolean b && b;
                 CalibrationEntry e = new CalibrationEntry(path, active, false);
                 freqRespCalibrations.add(e);
-                trackCalibration(e);
             }
         }
         if (root.get("freqRespSaveFolder")        instanceof String  s) freqRespSaveFolder.set(s);
@@ -2920,9 +2888,7 @@ public final class Preferences {
                 String  path      = m.get("path")      instanceof String  s ? s : null;
                 boolean active    = m.get("active")    instanceof Boolean b && b;
                 boolean withNoise = m.get("withNoise") instanceof Boolean b && b;
-                CalibrationEntry e = new CalibrationEntry(path, active, withNoise);
-                fftCalibrations.add(e);
-                trackCalibration(e);
+                fftCalibrations.add(new CalibrationEntry(path, active, withNoise));
             }
         }
         Object beforeCalColorObj = root.get("fftBeforeCalDotColor");

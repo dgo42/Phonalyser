@@ -34,6 +34,7 @@ import org.edgo.audio.measure.common.FileVersions;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.fft.ImdResult;
 import org.edgo.audio.measure.fft.MathUtil;
+import org.edgo.audio.measure.preferences.Preferences;
 import org.jtransforms.fft.DoubleFFT_1D;
 
 import lombok.experimental.UtilityClass;
@@ -596,8 +597,15 @@ public class FreqRespCalHelper {
      *
      * <p>Header lines (prefixed by {@code #}) record measurement params
      * for round-trip fidelity; {@link #loadFrc} only needs the data rows,
-     * while {@link #readSampleRateHz} reads the capture rate back from the
-     * header block.
+     * while the FreqResp pane's Load-from tab reads the capture rate back from
+     * the header block.
+     *
+     * <p>Once the file is complete (the writer closed) it is reported through
+     * the saved-file broadcast of {@link Preferences}, so a calibration list
+     * holding a row that references this file notifies its listeners and the
+     * row re-reads the new curve - no caller reports the save on its own.
+     * Nothing is reported when this method throws (a missing channel, a file
+     * that cannot be opened or written).
      */
     public void saveFrc(StereoFreqRespCalibration stereo, String path,
                         int sampleRate,
@@ -634,7 +642,14 @@ public class FreqRespCalHelper {
                 pw.printf(Locale.US, "%.6f,%.6f,%.6f,%.4f,%.4f%n",
                         left.freqs[i], dbL, dbR, phaseL, phaseR);
             }
+            // A PrintWriter swallows write errors; checkError flushes the
+            // buffer and reports any, so a full disk or a lost share fails the
+            // save instead of leaving a truncated file reported as written.
+            if (pw.checkError()) {
+                throw new IOException("Could not write the calibration file: " + path);
+            }
         }
+        Preferences.instance().broadcastSavedFile(path);
     }
 
     /**

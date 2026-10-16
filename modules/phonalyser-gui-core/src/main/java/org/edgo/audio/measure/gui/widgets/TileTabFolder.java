@@ -276,7 +276,7 @@ public class TileTabFolder extends CTabFolder {
             gd.verticalAlignment       = SWT.FILL;
             gd.grabExcessVerticalSpace = true;
         }
-        AbstractTabControl parent = (AbstractTabControl) getParent();
+        AbstractTabControl<?> parent = (AbstractTabControl<?>) getParent();
         if (parent != null && !parent.isDisposed()) {
             parent.onTabCollapsed();
         }

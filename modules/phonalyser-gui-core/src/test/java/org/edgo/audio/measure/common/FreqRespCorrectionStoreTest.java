@@ -18,122 +18,59 @@
 
 package org.edgo.audio.measure.common;
 
-// CorrectionStore moved to gui.common with the shared GUI infrastructure; this
-// test used to reach it as a same-package neighbour.
-import org.edgo.audio.measure.gui.common.CorrectionStore;
-
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.Consumer;
+import java.util.List;
 
 import org.edgo.audio.measure.dsp.FreqRespCalibration;
 import org.edgo.audio.measure.dsp.StereoFreqRespCalibration;
-import org.edgo.audio.measure.gui.bus.MessageBus;
-import org.junit.jupiter.api.AfterEach;
+import org.edgo.audio.measure.gui.common.CorrectionStore;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Behaviour tests for {@link CorrectionStore}.  Verifies the
- * entries / direct slots' independence, the change-notifier semantics, and
- * the snapshot / restore pair used by the wizard's cancel path.
- *
- * <p>Each test subscribes a counter to the store's configured {@code MessageBus}
- * event, so the change count is asserted directly.
+ * Behaviour tests for {@link CorrectionStore}: added entries are kept in
+ * order with their path and With-noise flag, and clearing empties the store.
  */
 class FreqRespCorrectionStoreTest {
 
-    private static final String TEST_EVENT = "test.calibration.changed";
-
-    private final AtomicInteger  changes = new AtomicInteger();
-    private final Consumer<Void> counter = ignored -> changes.incrementAndGet();
     private CorrectionStore store;
 
     @BeforeEach
     void setup() {
-        changes.set(0);
-        MessageBus.instance().subscribe(TEST_EVENT, counter);
-        store = new CorrectionStore("test", TEST_EVENT);
-    }
-
-    @AfterEach
-    void teardown() {
-        MessageBus.instance().unsubscribe(TEST_EVENT, counter);
+        store = new CorrectionStore("test");
     }
 
     @Test
-    void setCurrentNotifiesAndRetainsValues() {
-        StereoFreqRespCalibration cal = sampleStereo();
-        store.setCurrent(cal, "/tmp/cal.csv");
-        assertSame(cal, store.getCurrent());
-        assertEquals("/tmp/cal.csv", store.getCurrentPath());
-        assertEquals(1, changes.get(), "setCurrent should fire one notification");
+    void addedEntriesAreKeptInOrder() {
+        StereoFreqRespCalibration first  = sampleStereo();
+        StereoFreqRespCalibration second = sampleStereo();
+        store.addEntry(first, "/tmp/a.frc", false);
+        store.addEntry(second, "/tmp/b.frc", true);
+
+        List<CorrectionStore.Entry> entries = store.getEntries();
+        assertEquals(2, entries.size());
+        assertSame(first, entries.get(0).getCalibration());
+        assertEquals("/tmp/a.frc", entries.get(0).getPath());
+        assertFalse(entries.get(0).isWithNoise());
+        assertSame(second, entries.get(1).getCalibration());
+        assertEquals("/tmp/b.frc", entries.get(1).getPath());
+        assertTrue(entries.get(1).isWithNoise());
     }
 
     @Test
-    void clearCurrentNotifiesOnlyWhenSomethingChanges() {
-        store.setCurrent(sampleStereo(), "/tmp/a.csv");
-        changes.set(0);
+    void clearAllEmptiesTheStore() {
+        store.addEntry(sampleStereo(), "/tmp/a.frc", false);
 
-        store.clearCurrent();
-        assertNull(store.getCurrent());
-        assertNull(store.getCurrentPath());
-        assertEquals(1, changes.get());
+        store.clearAll();
+        assertTrue(store.getEntries().isEmpty());
 
-        // Second clear is a no-op - no extra notification.
-        store.clearCurrent();
-        assertEquals(1, changes.get());
-    }
-
-    @Test
-    void directSlotNotifiesButDoesNotLeakIntoEntries() {
-        StereoFreqRespCalibration direct = sampleStereo();
-        store.setDirect(direct);
-        assertSame(direct, store.getDirect());
-        assertNull(store.getCurrent(),
-                "setDirect must not leak into the entries list");
-        assertEquals(1, changes.get(),
-                "setDirect notifies so the view re-applies");
-    }
-
-    @Test
-    void snapshotRestoreReturnsBothSlotsAndOneNotification() {
-        StereoFreqRespCalibration originalCurrent = sampleStereo();
-        StereoFreqRespCalibration originalDirect  = sampleStereo();
-        store.setCurrent(originalCurrent, "/tmp/orig.csv");
-        store.setDirect(originalDirect);
-
-        CorrectionStore.Snapshot snap = store.snapshot();
-
-        // Mutate both slots.
-        StereoFreqRespCalibration tempCurrent = sampleStereo();
-        store.setCurrent(tempCurrent, "/tmp/temp.csv");
-        store.setDirect(sampleStereo());
-        assertSame(tempCurrent, store.getCurrent());
-
-        changes.set(0);
-        store.restore(snap);
-
-        assertSame(originalCurrent, store.getCurrent(), "current restored");
-        assertEquals("/tmp/orig.csv", store.getCurrentPath(), "path restored");
-        assertSame(originalDirect,  store.getDirect(),  "direct restored");
-        assertEquals(1, changes.get(),
-                "restore should fire exactly one notification when current moved");
-    }
-
-    @Test
-    void snapshotRestoreIsSilentWhenCurrentDidNotMove() {
-        store.setCurrent(sampleStereo(), "/tmp/x.csv");
-        CorrectionStore.Snapshot snap = store.snapshot();
-        store.setDirect(sampleStereo());
-        changes.set(0);
-
-        store.restore(snap);
-        assertEquals(0, changes.get(),
-                "restore that doesn't change the current slot must not fire");
+        // A second clear is a no-op.
+        store.clearAll();
+        assertTrue(store.getEntries().isEmpty());
     }
 
     private StereoFreqRespCalibration sampleStereo() {

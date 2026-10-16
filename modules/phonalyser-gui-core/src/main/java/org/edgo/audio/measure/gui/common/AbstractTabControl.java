@@ -30,7 +30,6 @@ import org.edgo.audio.measure.gui.widgets.TileTabFolder;
 
 import lombok.AccessLevel;
 import lombok.Getter;
-import lombok.Setter;
 
 /**
  * Shared base for a pane's toolbar tab control (FFT / oscilloscope / frequency
@@ -42,8 +41,12 @@ import lombok.Setter;
  *
  * <p>{@link #toolbarTabs} is assigned by the subclass <em>after</em> it has run
  * its layout, so every method here null-guards it.
+ *
+ * @param <P> the type of the owning pane, so a subclass reaches that pane's
+ *            own methods through {@link #getOwner()} without a second
+ *            reference
  */
-public abstract class AbstractTabControl extends Composite {
+public abstract class AbstractTabControl<P extends AbstractPane> extends Composite {
 
     /** Pixel height of the camera / crosshair utility-bar icons, shared so
      *  every pane's screenshot / calibrate buttons render at the same size. */
@@ -59,16 +62,17 @@ public abstract class AbstractTabControl extends Composite {
      *  delegations below null-guard against the pre-assignment window. */
     protected TileTabFolder toolbarTabs;
 
-    /** The pane that owns this tab strip, set by it via {@code setOwner}.  Its
-     *  {@link AbstractPane#onTabCollapse()} re-flows the pane when the tab body
-     *  collapses / expands, and subclasses reach pane-owned actions (the
-     *  screenshot dialog) through it; {@code null} during the pre-wiring window. */
+    /** The pane that owns this tab strip, constructor-injected - the one
+     *  reference to it.  Its {@link AbstractPane#onTabCollapse()} re-flows the
+     *  pane when the tab body collapses / expands, and subclasses reach the
+     *  pane's actions (the screenshot dialog, the pane's own commands) through
+     *  it. */
     @Getter(AccessLevel.PROTECTED)
-    @Setter
-    private AbstractPane owner;
+    private final P owner;
 
-    protected AbstractTabControl(Composite parent, int style) {
+    protected AbstractTabControl(Composite parent, int style, P owner) {
         super(parent, style);
+        this.owner = owner;
         Display d = getDisplay();
         this.cameraIcon    = IconUtils.icon(d, Icon.CAMERA);
         this.crosshairIcon = IconUtils.icon(d, Icon.CROSSHAIR_BIG);
@@ -78,7 +82,7 @@ public abstract class AbstractTabControl extends Composite {
      *  the owning pane can re-flow its own layout into (or out of) the freed
      *  space.  Delegates to the pane - no callback indirection. */
     public void onTabCollapsed() {
-        if (owner != null) owner.onTabCollapse();
+        owner.onTabCollapse();
     }
 
     /** True when the tab body is collapsed to just the strip. */

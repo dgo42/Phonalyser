@@ -294,7 +294,7 @@ public abstract class AbstractPane {
     /** The pane's settings tab strip, or {@code null} for panes without one.
      *  Exposed so the base can own the collapse delegation instead of each
      *  pane repeating it; subclasses with a strip override it. */
-    protected AbstractTabControl tabStrip() {
+    protected AbstractTabControl<?> tabStrip() {
         return null;
     }
 
@@ -310,7 +310,7 @@ public abstract class AbstractPane {
      *  unreliable until it has been laid out once expanded (the live pane is
      *  always laid out expanded first, which is why it never clips). */
     public void setTabsCollapsed(boolean collapsed) {
-        AbstractTabControl t = tabStrip();
+        AbstractTabControl<?> t = tabStrip();
         if (t != null && !t.isDisposed()) t.setTabsCollapsed(collapsed);
     }
 

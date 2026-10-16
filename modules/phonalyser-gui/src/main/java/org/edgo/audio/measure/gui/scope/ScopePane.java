@@ -435,13 +435,12 @@ public final class ScopePane extends AbstractPane {
         // The tile-tab folder + every channel / trigger / preset / utility /
         // save-load tab live in a self-contained control; the pane keeps only
         // the chart, sliders and Record button.  Cross-boundary operations flow
-        // down through the shared controller (injected here, not a pane
-        // back-reference).
-        tabControl = new ScopeTabControl(toolbar, view, controller, liveCapture);
+        // down through the shared controller (injected here).  The control's
+        // owner - this pane, its one back-reference - re-flows the scope view
+        // into the space a collapsed tab body frees (the Record button stays
+        // reachable) and opens the screenshot dialog.
+        tabControl = new ScopeTabControl(toolbar, view, controller, liveCapture, this);
         tabControl.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
-        // Collapsing the tab body keeps the Record button reachable and
-        // re-flows the scope view into the freed space.
-        tabControl.setOwner(this);
 
         // Flush layout caches up the parent chain so the toolbar's
         // GridLayout picks up the new (taller) tab-folder preferred size.
@@ -653,7 +652,7 @@ public final class ScopePane extends AbstractPane {
     }
 
     @Override
-    protected AbstractTabControl tabStrip() {
+    protected AbstractTabControl<?> tabStrip() {
         return tabControl;
     }
 
