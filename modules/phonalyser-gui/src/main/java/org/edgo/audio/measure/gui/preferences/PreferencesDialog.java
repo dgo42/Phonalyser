@@ -76,7 +76,6 @@ import org.edgo.audio.measure.gui.common.RemoteBackendUi;
 import org.edgo.audio.measure.gui.common.ShellIcons;
 import org.edgo.audio.measure.gui.registry.UiRegistry;
 import org.edgo.audio.measure.gui.sound.ServerCards;
-import org.edgo.audio.measure.gui.sound.CalibrationCopyOffers;
 import org.edgo.audio.measure.gui.sound.DeviceCatalog;
 import org.edgo.audio.measure.gui.widgets.NumericStepField;
 import org.edgo.audio.measure.enums.TabOrientation;
@@ -838,8 +837,9 @@ public final class PreferencesDialog {
         // label so the user still sees the concrete band track the typed
         // percent - it reads the live input sample rate (display-only) and the
         // working percent, never a live pref.  On OK the apply below writes the
-        // fraction, clamps the freq window down if the new max moved below the
-        // current right edge, and the OK handler fires FREQRESP_RANGE_CHANGED.
+        // fraction and clamps the freq window down if the new max moved below
+        // the current right edge; the FreqResp pane follows both, and its view
+        // the window, through their preference bindings.
         nyqWork = new Property<>(edit.getFreqRespNyquistFraction() * 100.0);
         Bindings.stepField(nyqField, nyqWork);
         nyqField.addSelectionListener(e -> {
@@ -855,10 +855,10 @@ public final class PreferencesDialog {
         // Compare-mode smoothing window (points).  Used by the FreqResp
         // view's getSmoothedDiffDb to draw the (measured − reference)
         // curve and to compute the anchor / min-max table that the
-        // auto-setup snaps to.  Live-applied: every edit publishes
-        // FREQRESP_COMPARE_PARAMS_CHANGED so the view re-derives the
-        // smoothed array and refreshes the table without disturbing
-        // the current zoom.
+        // auto-setup snaps to.  The view follows the committed window
+        // through its preference binding: it re-derives the smoothed
+        // array and refreshes the table without disturbing the current
+        // zoom.
         gridLabel(freqRespTab,I18n.t("preferences.freqResp.compareSmoothWindow"));
         NumericStepField smoothField = new NumericStepField(freqRespTab, UnitFamily.NONE,
                 FREQRESP_SMOOTH_W_MIN, FREQRESP_SMOOTH_W_MAX,
@@ -866,17 +866,16 @@ public final class PreferencesDialog {
         smoothField.setLayoutData(comboData());
         smoothField.setToolTipText(I18n.t("preferences.freqResp.compareSmoothWindow.tooltip"));
         // Working copy: the field clamps to [0,100] and rounds to an int itself;
-        // it edits a working value applied on OK.  The view refresh
-        // (FREQRESP_COMPARE_PARAMS_CHANGED) fires once from the OK handler, not
-        // live, so there is no preview.
+        // it edits a working value applied on OK.  The view refresh follows the
+        // committed preference, not the working value, so there is no preview.
         Bindings.stepFieldInt(smoothField, edit.freqRespCompareSmoothWindowProperty());
 
         // Industrial-noise notch filter.  When enabled, the FreqResp view
         // linearly interpolates across each harmonic of the chosen base
         // frequency (50 / 60 Hz mains) before drawing - removes the
-        // mains-hum spikes without re-running the measurement.  Live-applied
-        // via FREQRESP_CALIBRATION_CHANGED so the view re-derives the
-        // displayed copy and redraws.
+        // mains-hum spikes without re-running the measurement.  The view's
+        // bindings on the committed notch preferences re-derive the
+        // displayed copy and redraw.
         Button notchEnableBtn = buildCheckRow(freqRespTab,
                 "preferences.freqResp.notch.enable", "preferences.freqResp.notch.enable.tooltip");
 
@@ -889,8 +888,8 @@ public final class PreferencesDialog {
         notchBaseCombo.setLayoutData(comboData());
 
         // Working copy: the enable flag and the base-Hz combo edit working
-        // values applied on OK.  The view refresh (FREQRESP_CALIBRATION_CHANGED)
-        // fires once from the OK handler, not live, so there is no preview.
+        // values applied on OK.  The view refresh follows the committed
+        // preferences, not the working values, so there is no preview.
         Bindings.check(notchEnableBtn, edit.freqRespNotchEnabledProperty());
         notchBaseCombo.addListener(SWT.Selection, e ->
                 edit.setFreqRespNotchBaseHz(notchBaseCombo.getSelectionIndex() == 1 ? 60 : 50));
@@ -900,9 +899,8 @@ public final class PreferencesDialog {
         // session as a working copy.  Each button shows its current colour as
         // the background; clicking opens the system ColorDialog and updates only
         // the holder.  The live pref is written on OK; Cancel discards by not
-        // applying.  The FreqResp view reads these prefs every paint, and the
-        // OK handler fires FREQRESP_CALIBRATION_CHANGED so the next redraw uses
-        // the committed colours.
+        // applying.  The FreqResp view reads these prefs every paint and
+        // redraws when a committed colour changes.
         int[] freqRespSignalColorHolder     = { edit.getFreqRespSignalColor() };
         int[] freqRespPhaseColorHolder      = { edit.getFreqRespPhaseColor() };
         int[] freqRespReferenceColorHolder  = { edit.getFreqRespReferenceColor() };
@@ -1193,13 +1191,7 @@ public final class PreferencesDialog {
             // carrier being LEFT is bounded by the wire timeouts plus the
             // carrier-switch settle.
             AudioBackend.instance().setActive(edit.getSelectedBackend());
-            // Fire the FreqResp refresh events once so the pane / view re-sync
-            // to the committed state (range / scrollbars, smoothing table,
-            // notch + colours).
             MessageBus bus = MessageBus.instance();
-            bus.publish(Events.FREQRESP_RANGE_CHANGED);
-            bus.publish(Events.FREQRESP_COMPARE_PARAMS_CHANGED);
-            bus.publish(Events.FREQRESP_CALIBRATION_CHANGED);
             // Backend / device / rate edits move the Nyquist-derived field
             // bounds - let the panes re-pull them from the committed prefs.
             bus.publish(Events.AUDIO_FORMAT_CHANGED);
@@ -2713,8 +2705,8 @@ public final class PreferencesDialog {
 
         /**
          * A device on a BENCH that has no calibration of its own, whose name this
-         * machine does have a calibrated card for, is offered - once, explicitly -
-         * to be copied to the bench.  The copy is never silent: the operator is
+         * machine does have a calibrated card for, is offered - explicitly - to be
+         * copied to the bench.  The copy is never silent: the operator is
          * asked before the client's values go up.
          *
          * <p>Only from a user-driven selection, never from {@link #refresh()}: a
@@ -2726,34 +2718,22 @@ public final class PreferencesDialog {
          *
          * <p>Accepting puts the card on the bench at once and STAGES the locked
          * writes - the binding, or the values alone - for OK, when the session is
-         * routed at the backend and a locked write can go out; declining is
-         * remembered for the run ({@link CalibrationCopyOffers}), so neither
-         * switching device and back nor reopening this dialog asks again.
+         * routed at the backend and a locked write can go out.
          */
         private void offerServerCard() {
             BackendKey server = edit.getSelectedBackend();
             String dev = deviceName();
-            if (server == null || !server.remote() || dev == null || mainWindow == null) return;
+            if (server == null || !server.remote() || dev == null) return;
             DeviceRef ref = refFor(refs(), dev);
             if (ref == null || ref.calibration() != null) return;   // the bench has its own
             AudioDeviceProfile local = edit.resolveDeviceProfile(dev);
             boolean copyable = local != null && !endpointOf(local).isCalibrationFromDevice()
                     && endpointOf(local).calibration() != null;
-            // ONE offer per bench + direction + device per run, whichever of the two
-            // it turns out to be: they are the same question - "this bench device
-            // has no calibration; shall we give it one?" - and an operator who said
-            // no must not be asked the other way round straight after.
             if (!copyable && ref.boundCard() != null) return;       // a card IS in force there
-            if (!mainWindow.getCalibrationCopyOffers().mayAsk(server, input, dev)) return;
-            boolean answered = copyable
-                    ? copyLocalCardToServer(server, dev, local)
-                    : createServerCard(server, dev);
-            // ONLY a settled question is remembered.  An attempt that never reached
-            // the bench - a wire glitch, a device somebody took a second ago - is
-            // not an answer, and burning the one offer on it would leave the device
-            // uncalibrated for the whole run with no way back but a restart.
-            if (answered) {
-                mainWindow.getCalibrationCopyOffers().settle(server, input, dev);
+            if (copyable) {
+                copyLocalCardToServer(server, dev, local);
+            } else {
+                createServerCard(server, dev);
             }
         }
 
@@ -2770,16 +2750,13 @@ public final class PreferencesDialog {
          * no-silent-copy rule cuts both ways - what actually happened has to be
          * as visible as the offer was.  A write the bench refuses on OK is
          * reported by the commit's own dialog.
-         *
-         * @return whether the question was ANSWERED (a decline, or something
-         *         staged for the bench) - see {@link CalibrationCopyOffers#settle}
          */
-        private boolean copyLocalCardToServer(BackendKey server, String dev,
+        private void copyLocalCardToServer(BackendKey server, String dev,
                 AudioDeviceProfile local) {
             int answer = Dialogs.confirm(parent,
                     I18n.t("preferences.audio.card.copyCalibration.title"),
                     I18n.t("preferences.audio.card.copyCalibration.message", dev, local.getName()));
-            if (answer != SWT.YES) return true;             // declined - asked and answered
+            if (answer != SWT.YES) return;                  // declined
             ServerCards.Copied copied = serverCards.propagateLocalCard(server, dev, input);
             switch (copied) {
                 case CARD -> { }                            // whole card, binding staged
@@ -2790,11 +2767,10 @@ public final class PreferencesDialog {
                 default -> {
                     Dialogs.error(parent, I18n.t("net.servers.error.title"),
                             I18n.t("preferences.audio.card.copyCalibration.failed", dev));
-                    return false;                           // nothing staged - ask again later
+                    return;                                 // nothing staged
                 }
             }
             refresh();   // the bench's card list - and the staged pick - just moved
-            return true;
         }
 
         /**
@@ -2809,11 +2785,11 @@ public final class PreferencesDialog {
          * ({@code device.setCalibration} creates on write) - the create-an-empty-card
          * fallback, with no second protocol verb needed for it.
          */
-        private boolean createServerCard(BackendKey server, String dev) {
+        private void createServerCard(BackendKey server, String dev) {
             int answer = Dialogs.confirm(parent,
                     I18n.t("preferences.audio.card.noCardAssigned.title"),
                     I18n.t("preferences.audio.card.noCardAssigned.message", dev));
-            if (answer != SWT.YES) return true;            // declined - asked and answered
+            if (answer != SWT.YES) return;                 // declined
             AudioDeviceProfile seed = new AudioDeviceProfile();
             seed.setName(edit.normalizeDeviceName(dev));
             seed.getMatch().add(dev);
@@ -2822,14 +2798,13 @@ public final class PreferencesDialog {
                           : CardEditorDialog.Capability.OUTPUT_ONLY,
                     serverCardNames(), null, DEFAULT_ADC_FS_VRMS, DEFAULT_DAC_FS_AMPL);
             AudioDeviceProfile card = dlg.open();
-            if (card == null) return true;                 // cancelled - nothing anywhere
+            if (card == null) return;                      // cancelled - nothing anywhere
             if (!serverCards.createAndStage(server, dev, input, card)) {
                 Dialogs.error(parent, I18n.t("net.servers.error.title"),
                         I18n.t("preferences.audio.card.bindFailed", card.getName()));
-                return false;                              // the bench took nothing
+                return;                                    // the bench took nothing
             }
             refresh();
-            return true;
         }
 
         /** The card names the BENCH already has, for the editor's uniqueness check
@@ -3144,7 +3119,7 @@ public final class PreferencesDialog {
 
         /** Builds one range row: active radio(s), editable unique label, and
          *  add / remove icon buttons (row 0's remove is hidden, matching the
-         *  FftCalRow convention so columns line up).  In INDEPENDENT mode the row
+         *  calibration-row convention so columns line up).  In INDEPENDENT mode the row
          *  is TWO mirrored groups sharing one range label - [Left] radio + label
          *  field, [Right] radio + mirrored label field - with the "Left"/"Right"
          *  captions carried by every row but visible only on row 0 (an invisible

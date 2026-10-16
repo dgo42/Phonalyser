@@ -62,7 +62,6 @@ import org.edgo.audio.measure.gui.scope.gl.GpuSupport;
 import org.edgo.audio.measure.gui.tips.TipOfTheDayDialog;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.gui.preferences.PreferencesDialog;
-import org.edgo.audio.measure.gui.sound.CalibrationCopyOffers;
 
 import lombok.Getter;
 import lombok.extern.log4j.Log4j2;
@@ -119,13 +118,6 @@ public final class MainWindow {
      *  rebuild instead of caching the instance. */
     @Getter
     private MainTab mainTab;
-    /** App-lifetime memory of the copy-calibration offers already put to the
-     *  operator (ruling D4: offered once, a decline remembered for the session).
-     *  It lives here because the Preferences dialog does not: a new one is built
-     *  every time the menu item is chosen, and a decline that died with it would
-     *  come back on the very next open. */
-    @Getter
-    private final CalibrationCopyOffers calibrationCopyOffers = new CalibrationCopyOffers();
 
     public MainWindow(Display display) {
         this.display = display;
