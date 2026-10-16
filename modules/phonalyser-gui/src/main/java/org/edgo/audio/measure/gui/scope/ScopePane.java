@@ -51,6 +51,7 @@ import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.scope.gl.GlScopeSurface;
+import org.edgo.audio.measure.gui.scope.gl.GpuSupport;
 import org.edgo.audio.measure.gui.sound.SignalBufferReader;
 import org.edgo.audio.measure.gui.widgets.FlatScrollbar;
 import org.edgo.audio.measure.gui.widgets.PaneTitle;
@@ -134,7 +135,8 @@ public final class ScopePane extends AbstractPane {
     @Getter
     private final ZoomedView             condensed;
     /** GPU surface when the scope renders on the GPU (phonalyser.scope.gpu); null on
-     *  the CPU path.  Its GL canvas replaces the view as the visible scope widget. */
+     *  the CPU path.  Its GL canvas replaces the view as the visible scope widget;
+     *  attached and removed by {@link #syncGpuSurface}. */
     private GlScopeSurface               glSurface;
     @Getter
     private final Composite              toolbar;
@@ -198,6 +200,9 @@ public final class ScopePane extends AbstractPane {
      *  rebuilds - a rebuilt pane re-attaches to a still-running capture);
      *  the screenshot-only variant builds its own, which stays idle. */
     private final ScopeController controller;
+    /** True on the live pane; the screenshot-only variant never opens a device
+     *  and stays on the CPU path. */
+    private final boolean liveCapture;
     /**
      * Synchronous file loader for the "Open signal..." feature.  Owned by the
      * pane (cleared on dispose / record-start) and attached to the controller,
@@ -210,8 +215,7 @@ public final class ScopePane extends AbstractPane {
      * Constructs the live pane around the injected app-lifetime capture
      * controller: the Record toggle drives it (showing an error MessageBox
      * on capture-open failure), and when the controller is already
-     * capturing - this is a rebuilt pane after a language / font change -
-     * the views re-attach to the live buffer immediately.
+     * capturing the views re-attach to the live buffer immediately.
      */
     public ScopePane(Composite parent, ScopeController controller) {
         this(parent, controller, true);
@@ -228,7 +232,8 @@ public final class ScopePane extends AbstractPane {
 
     private ScopePane(Composite parent, ScopeController controller, boolean liveCapture) {
         super(parent);
-        this.controller = controller;
+        this.controller  = controller;
+        this.liveCapture = liveCapture;
         Display d = parent.getDisplay();
         this.recordDim      = IconUtils.icon(d, Icon.RECORD_DARK);
         this.recordLit      = IconUtils.icon(d, Icon.RECORD_LIT);
@@ -238,73 +243,15 @@ public final class ScopePane extends AbstractPane {
         // clicks on the chrome title before any SWT listener (or even
         // Display.addFilter) can see them.
         title = new PaneTitle(group, Events.PANE_ID_SCOPE,
-                I18n.t("scope.title.expanded"),
-                I18n.t("scope.title.collapsed"),
-                I18n.t("scope.pane.toggle.tooltip"));
-
-        // GPU scope surface (system property phonalyser.scope.gpu; Win/Linux for
-        // now).  When present, the GL canvas is the visible scope at column 0 and
-        // ScopeView stays the state/paint owner but hidden, rendered into the
-        // surface via view.paintCanvas.  Created BEFORE the view so it takes the
-        // column-0 grid cell; the view is then excluded from the layout.
-        glSurface = liveCapture ? GlScopeSurface.of(group) : null;
-        if (glSurface != null) {
-            glSurface.control().setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
-        }
+                "scope.title.expanded",
+                "scope.title.collapsed",
+                "scope.pane.toggle.tooltip");
 
         view = new ScopeView(group);
         // Column 0 of the 2-col paneLayout - leaves column 1 free for the
-        // vertical scrollbar that follows.
-        GridData viewGd = new GridData(SWT.FILL, SWT.FILL, true, true);
-        view.setLayoutData(viewGd);
-        if (glSurface != null) {
-            // GPU: the GL canvas is the visible+interactive scope; the view stays the
-            // state/paint owner but hidden, rendered into the surface.  Forward the
-            // canvas's pointer events to the view's handlers, and route the view's
-            // repaints + cursor/tooltip back to the canvas.
-            viewGd.exclude = true;
-            view.setVisible(false);
-            glSurface.setRenderer(view);
-            Control gl = glSurface.control();
-            gl.addMouseListener(new MouseAdapter() {
-                @Override public void mouseDown(MouseEvent ev)        { view.pointerDown(ev.x, ev.y, ev.button, ev.stateMask); }
-                @Override public void mouseUp(MouseEvent ev)          { view.pointerUp(); }
-                @Override public void mouseDoubleClick(MouseEvent ev) { view.pointerDoubleClick(ev.x, ev.y, ev.button); }
-            });
-            gl.addMouseMoveListener(ev -> view.pointerMove(ev.x, ev.y));
-            // Coalesce repaints to ONE render per UI event.  A single gesture (e.g.
-            // zoom-around-cursor) sets two prefs - the scale, then the corrected
-            // offset - each requesting a repaint; rendering each immediately would
-            // flash the intermediate stale-offset frame.  asyncExec + a pending flag
-            // collapse them into one correct frame.  The realtime loop renders the
-            // surface directly (not via this), so live cadence is unchanged.
-            // Two request levels share one coalesced render: FULL (geometry / settings
-            // changed -> renderInteractive resets the phosphor to the new coordinates)
-            // and OVERLAY-only (rect-zoom rubber band / focus border -> renderOverlay
-            // re-composites, preserving a stopped scope's afterglow).  If both arrive
-            // in the same batch, FULL wins.
-            final boolean[] renderPending = { false };
-            final boolean[] fullPending   = { false };
-            Runnable schedule = () -> {
-                if (renderPending[0] || gl.isDisposed()) return;
-                renderPending[0] = true;
-                // Deliberate SAME-thread deferral (the coalescing above depends
-                // on it) - not a marshal, so not GuiUtil.marshal.
-                gl.getDisplay().asyncExec(() -> {
-                    renderPending[0] = false;
-                    boolean full = fullPending[0];
-                    fullPending[0] = false;
-                    if (gl.isDisposed()) return;
-                    // A gesture / settings change is NOT a new captured frame - re-render the
-                    // trace and reset persistence (geometry changed) instead of accumulating.
-                    if (full) glSurface.renderInteractive();
-                    else      glSurface.renderOverlay();
-                });
-            };
-            view.attachGlInput(gl,
-                    () -> { fullPending[0] = true; schedule.run(); },
-                    schedule);
-        }
+        // vertical scrollbar that follows.  On the GPU path the GL surface takes
+        // this cell and the view is excluded (attachGpuSurface).
+        view.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
 
         // ----- Right-gap vertical scrollbar (column 1 of the same row) -----
         vertSlider = new FlatScrollbar(group, SWT.VERTICAL);
@@ -313,7 +260,7 @@ public final class ScopePane extends AbstractPane {
         vertSlider.setThumb(Math.max(1, NAV_RANGE / 10));
         vertSlider.setIncrement(NAV_RANGE / 100);
         vertSlider.setPageIncrement(NAV_RANGE / 10);
-        vertSlider.setToolTipText(I18n.t("scope.vertSlider.tooltip"));
+        Bindings.text(vertSlider, "scope.vertSlider.tooltip", vertSlider::setToolTipText);
         GridData vsGd = new GridData(SWT.FILL, SWT.FILL, false, true);
         vsGd.widthHint = SCROLLBAR_THICKNESS;
         vertSlider.setLayoutData(vsGd);
@@ -350,7 +297,7 @@ public final class ScopePane extends AbstractPane {
         navSlider.setMaximum(NAV_RANGE);
         navSlider.setThumb(Math.max(1, NAV_RANGE / 20));
         navSlider.setSelection(NAV_RANGE);
-        navSlider.setToolTipText(I18n.t("scope.navSlider.tooltip"));
+        Bindings.text(navSlider, "scope.navSlider.tooltip", navSlider::setToolTipText);
         // Column 0 only (NOT spanning the vertical-scrollbar gutter) so the
         // slider's width matches the scope canvas / condensed strip and its
         // right edge lines up with the vertical scrollbar's left edge instead
@@ -409,7 +356,6 @@ public final class ScopePane extends AbstractPane {
         loader = liveCapture ? new ScopeOpenSignal(view, condensed) : null;
         controller.attachViews(view, condensed, loader);
         view.attachController(controller);   // file-mode rect zoom drives viewCenterFrames
-        controller.attachGlSurface(glSurface);   // null on the CPU path - clears any stale (disposed) surface
         // The nav scrollbar mirrors the controller's TRANSIENT view-centre state
         // (not a preference), so it re-syncs off the controller's view-state
         // event - fired by every applyViewState() recompute.
@@ -448,7 +394,7 @@ public final class ScopePane extends AbstractPane {
         group.layout(true, true);
 
         recordButton = addToggleButton(toolbar, recordDim, recordLit);
-        recordButton.setToolTipText(I18n.t("scope.record.tooltip"));
+        Bindings.text(recordButton, "scope.record.tooltip", recordButton::setToolTipText);
         // addToggleButton sets grabExcessHorizontalSpace=true to push
         // the record LED to the far right of an old single-row toolbar.
         // In the new two-cell layout the tab control already grabs the
@@ -465,10 +411,17 @@ public final class ScopePane extends AbstractPane {
         }
 
         // The wheel handler steps the tab control's scale selectors, so it is
-        // installed after the tab control exists.
-        installScopeViewWheelHandler(glSurface != null ? glSurface.control() : view);
+        // installed after the tab control exists (on the GL canvas too, once
+        // attached).
+        installScopeViewWheelHandler(view);
 
         if (liveCapture) {
+            // The drawing surface follows the GPU preference and the GPU probe,
+            // which on Linux runs only once the shell is shown - only the surface
+            // changes; the view, its state and a running capture stay.
+            syncGpuSurface();
+            Bindings.onChange(group, Preferences.instance().useGpuAccelerationProperty(), on -> syncGpuSurface());
+            Bindings.onChange(group, GpuSupport.instance().availableProperty(),          ok -> syncGpuSurface());
             wireLiveCaptureLifecycle();
             reattachLiveCapture();
         }
@@ -526,10 +479,9 @@ public final class ScopePane extends AbstractPane {
             bus2.unsubscribe(Events.FREQRESP_MEASUREMENT_STOPPED, freqRespStoppedListener);
             bus2.unsubscribe(Events.SCOPE_RECORDING_STOPPED,      recordingStoppedListener);
             loader.clear();
-            // The injected controller deliberately keeps capturing - a
-            // content rebuild (language / font change) must not drop the
-            // device; the rebuilt pane re-attaches to the live buffer.
-            // UIEngines releases the capture at application exit.  The
+            // The injected controller deliberately keeps capturing past the
+            // pane's dispose; UIEngines releases the capture at application
+            // exit.  The
             // view's own dispose listener stops its measurement worker.
         });
     }
@@ -695,6 +647,111 @@ public final class ScopePane extends AbstractPane {
     @Override
     protected void onExpanding() {
         if (glSurface != null) glSurface.setSurfaceVisible(true);
+    }
+
+    /** Puts the scope on the GPU surface when the GPU is available and the
+     *  "use GPU acceleration" preference is on, and back on the CPU path
+     *  otherwise - only the drawing surface changes.  The availability check
+     *  runs first: a probe it triggers re-enters through the availability
+     *  binding, and the state check after it sees what that call did. */
+    private void syncGpuSurface() {
+        // Collapsed: wait for the expand (setCollapsed) - the collapse snapshot
+        // is kept per child, and adding / removing the surface in between would
+        // break its restore.
+        if (!liveCapture || collapsed) return;
+        boolean wantGl = GpuSupport.instance().isAvailable(group)
+                && Preferences.instance().isUseGpuAcceleration();
+        if (wantGl == (glSurface != null)) return;
+        if (wantGl) {
+            attachGpuSurface();
+        } else {
+            detachGpuSurface();
+        }
+    }
+
+    /** GPU: the GL surface becomes the visible + interactive scope in the view's
+     *  column-0 cell; the view stays the state/paint owner but hidden, rendered
+     *  into the surface.  The canvas's pointer events go to the view's handlers,
+     *  the view's repaints + cursor/tooltip to the canvas.  On macOS the surface
+     *  is a GLFW child window tracking a placeholder control. */
+    private void attachGpuSurface() {
+        GlScopeSurface surface = GlScopeSurface.of(group);
+        if (surface == null) return;
+        glSurface = surface;
+        Control gl = surface.control();
+        gl.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
+        gl.moveAbove(view);
+        ((GridData) view.getLayoutData()).exclude = true;
+        view.setVisible(false);
+        surface.setRenderer(view);
+        gl.addMouseListener(new MouseAdapter() {
+            @Override public void mouseDown(MouseEvent ev)        { view.pointerDown(ev.x, ev.y, ev.button, ev.stateMask); }
+            @Override public void mouseUp(MouseEvent ev)          { view.pointerUp(); }
+            @Override public void mouseDoubleClick(MouseEvent ev) { view.pointerDoubleClick(ev.x, ev.y, ev.button); }
+        });
+        gl.addMouseMoveListener(ev -> view.pointerMove(ev.x, ev.y));
+        // Coalesce repaints to ONE render per UI event.  A single gesture (e.g.
+        // zoom-around-cursor) sets two prefs - the scale, then the corrected
+        // offset - each requesting a repaint; rendering each immediately would
+        // flash the intermediate stale-offset frame.  asyncExec + a pending flag
+        // collapse them into one correct frame.  The realtime loop renders the
+        // surface directly (not via this), so live cadence is unchanged.
+        // Two request levels share one coalesced render: FULL (geometry / settings
+        // changed -> renderInteractive resets the phosphor to the new coordinates)
+        // and OVERLAY-only (rect-zoom rubber band / focus border -> renderOverlay
+        // re-composites, preserving a stopped scope's afterglow).  If both arrive
+        // in the same batch, FULL wins.
+        final boolean[] renderPending = { false };
+        final boolean[] fullPending   = { false };
+        Runnable schedule = () -> {
+            if (renderPending[0] || gl.isDisposed()) return;
+            renderPending[0] = true;
+            // Deliberate SAME-thread deferral (the coalescing above depends
+            // on it) - not a marshal, so not GuiUtil.marshal.
+            gl.getDisplay().asyncExec(() -> {
+                renderPending[0] = false;
+                boolean full = fullPending[0];
+                fullPending[0] = false;
+                if (gl.isDisposed()) return;
+                // A gesture / settings change is NOT a new captured frame - re-render the
+                // trace and reset persistence (geometry changed) instead of accumulating.
+                if (full) surface.renderInteractive();
+                else      surface.renderOverlay();
+            });
+        };
+        view.attachGlInput(gl,
+                () -> { fullPending[0] = true; schedule.run(); },
+                schedule);
+        installScopeViewWheelHandler(gl);
+        controller.attachGlSurface(surface);
+        group.layout(true, true);
+        view.redraw();
+    }
+
+    /** CPU: removes the GL surface and shows the view in its cell again.  The GL
+     *  resources are released while the surface's control - and with it the
+     *  context - still exists; disposing the control afterwards re-runs the
+     *  surface's dispose, a no-op by then (macOS: it also drops the shell-move
+     *  tracking of the child window). */
+    private void detachGpuSurface() {
+        GlScopeSurface surface = glSurface;
+        glSurface = null;
+        controller.attachGlSurface(null);
+        view.detachGlInput();
+        surface.dispose();
+        surface.control().dispose();
+        ((GridData) view.getLayoutData()).exclude = false;
+        view.setVisible(true);
+        group.layout(true, true);
+        view.redraw();
+    }
+
+    /** Expanding applies a GPU switch that arrived while the pane was
+     *  collapsed - after the base restored the children it hid. */
+    @Override
+    public void setCollapsed(boolean wantCollapsed) {
+        super.setCollapsed(wantCollapsed);
+        if (!wantCollapsed) syncGpuSurface();
     }
 
     // -------------------------------------------------------------------------

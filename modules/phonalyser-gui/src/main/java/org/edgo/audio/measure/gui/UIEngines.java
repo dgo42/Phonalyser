@@ -34,11 +34,9 @@ import lombok.Getter;
  * ({@link FftController}, which owns its analyser worker).
  *
  * <p>Built once by {@link MainWindow} and injected down through
- * {@link MainTab} / {@link MultifunctionalTab} into the panes, so the
- * engines survive the in-place content rebuilds (language / UI-font
- * changes): the rebuilt panes re-attach to the still-running engines
- * instead of stopping and restarting them.  {@link #shutdown()} runs once,
- * from the shell's dispose listener at application exit.
+ * {@link MainTab} / {@link MultifunctionalTab} into the panes; the engines
+ * live for the whole application.  {@link #shutdown()} runs once, from the
+ * shell's dispose listener at application exit.
  */
 public final class UIEngines {
 

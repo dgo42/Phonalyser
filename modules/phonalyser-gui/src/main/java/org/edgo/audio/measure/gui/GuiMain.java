@@ -312,9 +312,11 @@ public final class GuiMain {
         // runs so it never sits in front of a screenshot capture.
         StartupSplash splash = automation ? null : new StartupSplash(display);
         if (splash != null) splash.open();
-        // Language / font changes rebuild the window CONTENT in place
-        // (MainWindow.rebuildContent) - the shell lives for the whole
-        // session, so no recreate loop is needed.
+        // The GPU toggle swaps only the scope's drawing surface (ScopePane), a
+        // language change re-translates the content in place
+        // (MainWindow.applyLanguage) and a font change re-fonts the views in
+        // place (Fonts.generationProperty) - the shell and its content live for
+        // the whole session, so no recreate loop is needed.
         MainWindow window = new MainWindow(display);
         window.open();
         if (splash != null) splash.close();

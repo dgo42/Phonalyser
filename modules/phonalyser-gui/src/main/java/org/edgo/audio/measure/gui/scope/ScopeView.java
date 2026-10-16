@@ -415,9 +415,9 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     /**
      * Cached {@code textExtent} of the static {@link #HEADERS} strings.
      * Populated lazily on first paint with the GC already wearing {@code
-     * monoFont}; the headers never change so this stays valid for the rest
-     * of the view's life.  Saves ~325 {@code Point} allocations/sec at high
-     * cap/s.
+     * monoFont}; the headers never change, so this stays valid until a font
+     * change drops it ({@link #applyFonts}).  Saves ~325 {@code Point}
+     * allocations/sec at high cap/s.
      */
     private Point[] headerExtents;
 
@@ -606,10 +606,12 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         headerBar = new Toolbar(this, BTN_W, BTN_H);
         Preferences prefs = Preferences.instance();
         Channel mc = prefs.getOscMeasurementChannel();
+        // No tooltip here: it depends on the combined channel, so showLinked
+        // sets it (restoreCombinedMaster below) and re-sets it on a language switch.
         leftBtn  = headerBar.chanButton("L", color(ColorRole.LEFT_CHANNEL_MID), color(ColorRole.LEFT_CHANNEL_MID),
-                color(ColorRole.LEFT_TRACE),  chanButtonFont, I18n.t("scope.stats.left.tooltip"),  mc == Channel.L, "channel");
+                color(ColorRole.LEFT_TRACE),  chanButtonFont, null, mc == Channel.L, "channel");
         rightBtn = headerBar.chanButton("R", color(ColorRole.RIGHT_CHANNEL_MID), color(ColorRole.RIGHT_CHANNEL_MID),
-                color(ColorRole.RIGHT_TRACE), chanButtonFont, I18n.t("scope.stats.right.tooltip"), mc == Channel.R, "channel");
+                color(ColorRole.RIGHT_TRACE), chanButtonFont, null, mc == Channel.R, "channel");
         // Channel-colour prefs are observable: rebind so a colour change recolours
         // the traces + L/R buttons immediately, not on the next paint.
         Bindings.onChange(this, prefs.oscLeftChannelColorProperty(),  rgb -> { syncChannelColors(); redraw(); });
@@ -617,22 +619,28 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         // Auto-setup (always), then the signal-gated gauge / external / stats / reset.
         headerBar.spacer(2);
         autoSetupBtn = headerBar.pushButton(Icon.ARROWS_TO_CIRCLE_LIT, Icon.ARROWS_TO_CIRCLE_DARK,
-                color(ColorRole.TEXT), I18n.t("scope.autosetup.tooltip"));
+                color(ColorRole.TEXT), null);
+        Bindings.text(autoSetupBtn, "scope.autosetup.tooltip", autoSetupBtn::setToolTipText);
         dataSpacer = headerBar.spacer(2);
         histogramBtn = headerBar.toggleButton(Icon.HISTOGRAM_LIT, Icon.HISTOGRAM_DARK,
                 color(ColorRole.TEXT),
-                I18n.t("scope.histogram.tooltip"), prefs.isOscShowHistogram());
+                null, prefs.isOscShowHistogram());
+        Bindings.text(histogramBtn, "scope.histogram.tooltip", histogramBtn::setToolTipText);
         tableToggleBtn = headerBar.toggleButton(Icon.GAUGE_HIGH_LIT, Icon.GAUGE_HIGH_DARK,
                 color(ColorRole.TEXT),
-                I18n.t("scope.stats.table.tooltip"), prefs.isOscShowMeasurementTable());
+                null, prefs.isOscShowMeasurementTable());
+        Bindings.text(tableToggleBtn, "scope.stats.table.tooltip", tableToggleBtn::setToolTipText);
         externalBtn = headerBar.toggleButton(Icon.WINDOW_RESTORE_LIT, Icon.WINDOW_RESTORE_DARK,
                 color(ColorRole.TEXT),
-                I18n.t("scope.external.window.tooltip"), tableExtracted);
+                null, tableExtracted);
+        Bindings.text(externalBtn, "scope.external.window.tooltip", externalBtn::setToolTipText);
         statsToggleBtn = headerBar.toggleButton(Icon.CHART_LIT, Icon.CHART_DARK,
                 color(ColorRole.TEXT),
-                I18n.t("scope.stats.toggle.tooltip"), prefs.isOscShowStats());
+                null, prefs.isOscShowStats());
+        Bindings.text(statsToggleBtn, "scope.stats.toggle.tooltip", statsToggleBtn::setToolTipText);
         resetBtn = headerBar.pushButton(Icon.ROTATE_LEFT_RED, Icon.ROTATE_LEFT_DARK,
-                color(ColorRole.RESET), I18n.t("scope.stats.reset.tooltip"));
+                color(ColorRole.RESET), null);
+        Bindings.text(resetBtn, "scope.stats.reset.tooltip", resetBtn::setToolTipText);
         Point hbSize = headerBar.computeSize(SWT.DEFAULT, SWT.DEFAULT);
         headerBar.setBounds(COL_NAME_X, 5, hbSize.x, hbSize.y);
         headerBar.layout();
@@ -719,6 +727,17 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         syncScopeButtons();       // apply the initial signal-gated visibility
         syncMeasurementChannelButtons();   // grey the L/R selector for any channel that starts off
         restoreCombinedMaster();           // the saved combined channel, if both channels are on
+        // Language switch: showLinked re-picks the L/R tooltips for the combined
+        // channel in force.  The cap/s readout and the measurement table format
+        // their numbers with the default locale and are cached in fields, so the
+        // cap/s cache is dropped (the next paint rebuilds it) and the cached rows
+        // are re-formatted; the repaint itself is the base view's.
+        Bindings.onChange(this, I18n.localeProperty(), l -> {
+            showLinked(prefs.getOscCombinedMaster());
+            cachedCapsString = "";
+            reformatMeasurementRows();
+        });
+        Bindings.onChange(this, Fonts.instance().generationProperty(), g -> applyFonts());
 
         setBackground(color(ColorRole.BACKGROUND));
         addPaintListener(this::onPaint);
@@ -1495,6 +1514,20 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         lastBuiltMeasResult   = null;
     }
 
+    /** Re-formats the cached table rows with the current default locale.  The
+     *  readings themselves are kept, so a frozen table still shows exactly the
+     *  values it showed at the stop (hold/freeze rule 1); only the number
+     *  format follows the language. */
+    private void reformatMeasurementRows() {
+        MeasurementRow[] rows = cachedMeasurementRows;
+        if (rows == null) return;
+        MeasurementRow[] out = new MeasurementRow[rows.length];
+        for (int i = 0; i < rows.length; i++) {
+            out[i] = rows[i].reformatted();
+        }
+        cachedMeasurementRows = out;
+    }
+
     /** Resets the running measurement statistics (avg / min / max / σ) and repaints
      *  - called when the generator signal changes (USER_INPUT) so the table doesn't
      *  average the old signal's readings into the new one. */
@@ -1656,11 +1689,11 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      *  in-canvas table reappears. */
     private void createMeasurementWindow() {
         ToolWindow w = newToolWindow(false);
-        w.setTitle(I18n.t("scope.external.window.title"));
+        w.setTitleKey("scope.external.window.title");
         // Stats-toggle re-enables the σ columns from inside the window; reset clears the
         // running statistics.  Both flow back through redraw().
         w.addButton(Icon.CHART_LIT, Icon.CHART_DARK, true, Preferences.instance().isOscShowStats(),
-                color(ColorRole.TEXT), I18n.t("scope.stats.toggle.tooltip"), e -> {
+                color(ColorRole.TEXT), "scope.stats.toggle.tooltip", e -> {
                     Preferences p = Preferences.instance();
                     p.setOscShowStats(!p.isOscShowStats());   // auto-saved; the main
                     // stats-toggle's pref subscriber mirrors the header button + reflows.
@@ -1668,7 +1701,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
                     redraw();
                 });
         w.addButton(Icon.ROTATE_LEFT_RED, Icon.ROTATE_LEFT_DARK, false, false,
-                color(ColorRole.RESET), I18n.t("scope.stats.reset.tooltip"), e -> {
+                color(ColorRole.RESET), "scope.stats.reset.tooltip", e -> {
                     clearMeasurementHistory();
                     redraw();
                 });
@@ -1717,6 +1750,22 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         } finally {
             tmp.dispose();
         }
+    }
+
+    /** Takes the current shared fonts - the readout font and the L/R button
+     *  font - drops the header extents measured with the old one, re-sizes the
+     *  extracted measurements window to the new line height and repaints. */
+    private void applyFonts() {
+        Fonts fonts = Fonts.instance();
+        monoFont       = fonts.normal(getDisplay());
+        chanButtonFont = fonts.channel(getDisplay());
+        leftBtn.setFont(chanButtonFont);
+        rightBtn.setFont(chanButtonFont);
+        leftBtn.redraw();
+        rightBtn.redraw();
+        headerExtents = null;
+        sizeMeasurementWindow();
+        redraw();
     }
 
     @Override
@@ -2057,7 +2106,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         gc.setFont(monoFont);
         gc.setForeground(color(ColorRole.TEXT));
         // First paint: cache textExtent of each header now that the GC is
-        // wearing monoFont.  Headers never change, so this stays valid.
+        // wearing monoFont.  Headers never change; a font change drops the cache.
         if (headerExtents == null) {
             headerExtents = new Point[HEADERS.length];
             for (int i = 0; i < HEADERS.length; i++) {
@@ -2859,6 +2908,18 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         // behind the GL-drawn buttons.  Hiding it explicitly clears that; the
         // per-button getVisible() flags (and bounds) the overlay reads stay intact.
         if (headerBar != null && !headerBar.isDisposed()) headerBar.setVisible(false);
+    }
+
+    /** Undoes {@link #attachGlInput} when the GPU surface is removed: pointer
+     *  input, cursor / tooltip and repaints return to this view, the rect zoom
+     *  re-homes onto it and the real header bar is shown again. */
+    public void detachGlInput() {
+        this.pointerHost      = this;
+        this.glRepaint        = null;
+        this.glOverlayRepaint = null;
+        this.pressedHeaderButton = null;
+        installRectZoom(this, false);
+        if (headerBar != null && !headerBar.isDisposed()) headerBar.setVisible(true);
     }
 
     private void updateSliderFromMouse(int mouseX, int mouseY) {

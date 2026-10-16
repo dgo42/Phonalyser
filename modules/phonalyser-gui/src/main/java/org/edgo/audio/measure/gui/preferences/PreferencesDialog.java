@@ -1054,16 +1054,13 @@ public final class PreferencesDialog {
         cancelButton.setText(I18n.t("common.cancel"));
         dialog.setDefaultButton(okButton);
 
-        // Audio-config / font / GPU snapshot of the working copy taken when the
-        // dialog opens; the OK handler recomputes each to decide what the commit
-        // must bounce (live streams) or rebuild (panes).  The audio half is taken
-        // here for an OK pressed while the first device scan is still out (the
-        // combos are empty then, so there is nothing to have edited) and re-taken
-        // by that scan's fill - see the openState field.
+        // Audio-config snapshot of the working copy taken when the dialog
+        // opens; the OK handler recomputes it to decide whether the commit must
+        // bounce the live streams.  It is taken here for an OK pressed while the
+        // first device scan is still out (the combos are empty then, so there is
+        // nothing to have edited) and re-taken by that scan's fill - see the
+        // openState field.
         openState = takeOpenState();
-        String fontsBefore = edit.getUiFontNormal() + "/" + edit.getUiFontBold();
-
-        boolean gpuBefore  = edit.isUseGpuAcceleration();
 
         okButton.addListener(SWT.Selection, e -> {
 
@@ -1075,7 +1072,6 @@ public final class PreferencesDialog {
             // --- Per-backend device / rate / depth for the shown backend.
             captureUiToActive();
 
-            String fontsAfter = edit.getUiFontNormal() + "/" + edit.getUiFontBold();
             // A committed audio-config change bounces the live streams: STOP them
             // now - on the current panes and the OLD backend, before the commit
             // and the pane rebuild below - and restart after setActive (guarded by
@@ -1174,17 +1170,10 @@ public final class PreferencesDialog {
             if (outCalAfter.device() != null && (needStartAudio || !outCalAfter.equals(outCalBefore))) {
                 MessageBus.instance().publish(Events.DAC_CALIBRATION_CHANGED, outCalAfter.device());
             }
-            // The GPU toggle, like fonts, takes effect by rebuilding the panes -
-            // the scope pane chooses its surface (GL vs GC) at construction.
-            // AFTER the commit above, deliberately: the rebuilt panes read the
-            // LIVE singleton, and a rebuild before it re-created them on the
-            // settings being replaced - a GPU toggle then only took effect on
-            // the NEXT rebuild, which for most operators is the next start.
-            // Before setActive and the pane-refresh events below, so the new
-            // panes are the ones that receive them.
-            if (!fontsAfter.equals(fontsBefore) || edit.isUseGpuAcceleration() != gpuBefore) {
-                mainWindow.rebuildContent();
-            }
+            // The GPU toggle and a font change need nothing here: the commit
+            // above wrote the live preferences, and the scope pane swaps its
+            // drawing surface (useGpuAccelerationProperty) and the views re-font
+            // (Fonts.generationProperty) through their bindings.
             // Activate the chosen selection - BOTH its levels - on the live
             // AudioBackend; kept in the dialog so Preferences stays free of the
             // sound/hardware layer.  DIRECT on the OK path: the teardown of the

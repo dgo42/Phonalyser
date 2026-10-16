@@ -49,6 +49,7 @@ import org.eclipse.swt.widgets.Spinner;
 import org.eclipse.swt.widgets.Text;
 import org.edgo.audio.measure.enums.MagnitudeUnit;
 import org.edgo.audio.measure.gui.bind.Bindings;
+import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.widgets.ToolButton;
 import org.edgo.audio.measure.preferences.Preferences;
 
@@ -208,6 +209,10 @@ public abstract class AbstractMeasurementView extends Canvas {
             if (rgb == null) continue;     // role unused by this view
             palette.put(role, newColor(rgb));
         }
+        // Tick labels and readouts are formatted at paint time, partly with
+        // the default locale (decimal separator); every subclass also paints
+        // translated text, so one repaint per language switch covers both.
+        Bindings.onChange(this, I18n.localeProperty(), l -> redraw());
     }
 
     // =========================================================================
@@ -292,21 +297,25 @@ public abstract class AbstractMeasurementView extends Canvas {
     /**
      * Activates rectangular zoom with {@code host} as the interaction control
      * ({@code this} normally; the GL canvas on the GPU scope, which re-installs
-     * when it attaches).  With {@code hookMouse} the base wires the drag to the
-     * host's own mouse events; the scope passes {@code false} and forwards from
-     * its pointer funnel instead.
+     * when it attaches, and {@code this} again when it is removed).  With
+     * {@code hookMouse} the base wires the drag to the host's own mouse events;
+     * the scope passes {@code false} and forwards from its pointer funnel
+     * instead.  A host is wired once: installing on a host that already carries
+     * this view only makes it the interaction control again.
      */
     protected final void installRectZoom(Control host, boolean hookMouse) {
         this.zoomHost = host;
-        host.setData(ZOOM_HOST_DATA_KEY, this);
-        host.addListener(SWT.FocusIn,    e -> { zoomHostFocused = true;  requestZoomOverlayRepaint(); });
-        host.addListener(SWT.FocusOut,   e -> { zoomHostFocused = false; requestZoomOverlayRepaint(); });
-        host.addListener(SWT.MouseEnter, e -> { zoomHostHovered = true;  requestZoomOverlayRepaint(); });
-        host.addListener(SWT.MouseExit,  e -> { zoomHostHovered = false; requestZoomOverlayRepaint(); });
-        if (hookMouse) {
-            host.addListener(SWT.MouseDown, e -> rectZoomPointerDown(e.x, e.y, e.button));
-            host.addListener(SWT.MouseMove, e -> rectZoomPointerMove(e.x, e.y));
-            host.addListener(SWT.MouseUp,   e -> rectZoomPointerUp());
+        if (host.getData(ZOOM_HOST_DATA_KEY) != this) {
+            host.setData(ZOOM_HOST_DATA_KEY, this);
+            host.addListener(SWT.FocusIn,    e -> { zoomHostFocused = true;  requestZoomOverlayRepaint(); });
+            host.addListener(SWT.FocusOut,   e -> { zoomHostFocused = false; requestZoomOverlayRepaint(); });
+            host.addListener(SWT.MouseEnter, e -> { zoomHostHovered = true;  requestZoomOverlayRepaint(); });
+            host.addListener(SWT.MouseExit,  e -> { zoomHostHovered = false; requestZoomOverlayRepaint(); });
+            if (hookMouse) {
+                host.addListener(SWT.MouseDown, e -> rectZoomPointerDown(e.x, e.y, e.button));
+                host.addListener(SWT.MouseMove, e -> rectZoomPointerMove(e.x, e.y));
+                host.addListener(SWT.MouseUp,   e -> rectZoomPointerUp());
+            }
         }
         if (zoomKeyFilter == null) {
             zoomKeyFilter = e -> {

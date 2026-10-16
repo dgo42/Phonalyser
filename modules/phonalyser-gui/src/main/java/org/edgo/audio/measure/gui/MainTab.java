@@ -114,9 +114,8 @@ public final class MainTab {
         this.display = shell.getDisplay();
         Preferences prefs = Preferences.instance();
         activeTabIndex = clampSelection(prefs.getActiveTabIndex(), 2);
-        // A language / font change builds a fresh MainTab; reset the component
-        // registry so the panes below re-register their new controls instead
-        // of leaving the disposed ones behind.
+        // Reset the component registry before the panes below register their
+        // controls.
         UiRegistry.instance().clear();
         // Content first (parented to the shell), chrome around it after -
         // buildHost() re-parents the content into the active chrome.
@@ -248,13 +247,13 @@ public final class MainTab {
         hostChrome = tabFolder;
 
         TabItem multiItem = new TabItem(tabFolder, SWT.NONE);
-        multiItem.setText(I18n.t("tab.multifunctional"));
+        Bindings.text(multiItem, "tab.multifunctional", multiItem::setText);
         multiItem.setImage(renderTabIcon(small ? Icon.SWISS_SMALL : Icon.SWISS_MID));
         multiContent.setParent(tabFolder);
         multiItem.setControl(multiContent);
 
         TabItem frItem = new TabItem(tabFolder, SWT.NONE);
-        frItem.setText(I18n.t("tab.frequencyResponse"));
+        Bindings.text(frItem, "tab.frequencyResponse", frItem::setText);
         frItem.setImage(renderTabIcon(small ? Icon.RIAA_SMALL : Icon.RIAA_MID));
         frContent.setParent(tabFolder);
         frItem.setControl(frContent);
@@ -310,11 +309,11 @@ public final class MainTab {
         SidebarButton[] buttons = new SidebarButton[2];
         buttons[0] = new SidebarButton(sidebar,
                 renderTabIcon(small ? Icon.SWISS_MID : Icon.SWISS_BIG),
-                I18n.t("tab.multifunctional"),
+                "tab.multifunctional",
                 multiContent, hoverBg, selectedBg);
         buttons[1] = new SidebarButton(sidebar,
                 renderTabIcon(small ? Icon.RIAA_MID : Icon.RIAA_BIG),
-                I18n.t("tab.frequencyResponse"),
+                "tab.frequencyResponse",
                 frContent, hoverBg, selectedBg);
 
         for (int i = 0; i < buttons.length; i++) {
@@ -372,22 +371,24 @@ public final class MainTab {
         private static final int GAP_Y = 2;
 
         private final Image icon;
-        private final String label;
+        /** i18n key of the label - resolved at size and paint time, so the
+         *  painted label follows the active language. */
+        private final String labelKey;
         private final Color hoverBg;
         private final Color selectedBg;
         private final Composite content;
-        private final Font labelFont;
+        private Font labelFont;
         private SidebarButton[] siblings;
         private StackLayout stack;
         private Composite contentHost;
         private boolean selected;
         private boolean hovered;
 
-        SidebarButton(Composite parent, Image icon, String label,
+        SidebarButton(Composite parent, Image icon, String labelKey,
                       Composite content, Color hoverBg, Color selectedBg) {
             super(parent, SWT.DOUBLE_BUFFERED);
             this.icon       = icon;
-            this.label      = label;
+            this.labelKey   = labelKey;
             this.hoverBg    = hoverBg;
             this.selectedBg = selectedBg;
             this.content    = content;
@@ -404,6 +405,22 @@ public final class MainTab {
             addListener(SWT.MouseDown,  e -> select());
             addListener(SWT.MouseEnter, e -> setHovered(true));
             addListener(SWT.MouseExit,  e -> setHovered(false));
+            // A language switch or a font change changes the label's run
+            // length: re-fit the height hint, re-lay the sidebar and repaint -
+            // whoever switched the locale or the font.
+            Bindings.onChange(this, I18n.localeProperty(), l -> refit());
+            Bindings.onChange(this, Fonts.instance().generationProperty(), g -> {
+                labelFont = Fonts.instance().normal(getDisplay());
+                refit();
+            });
+        }
+
+        /** Re-fits the height hint to the label's current run length, re-lays
+         *  the sidebar and repaints. */
+        private void refit() {
+            ((GridData) getLayoutData()).heightHint = computePreferredHeight();
+            getParent().layout();
+            redraw();
         }
 
         void setSiblings(SidebarButton[] siblings) {
@@ -448,7 +465,7 @@ public final class MainTab {
             GC gc = new GC(this);
             try {
                 gc.setFont(labelFont);
-                labelRun = gc.textExtent(label).x;
+                labelRun = gc.textExtent(I18n.t(labelKey)).x;
             } finally {
                 gc.dispose();
             }
@@ -485,6 +502,7 @@ public final class MainTab {
             // so it reads bottom-to-top below the icon.  Mirrors the
             // collapsed PaneTitle treatment in narrow strips so the
             // sidebar feels consistent with the rest of the app.
+            String label = I18n.t(labelKey);
             e.gc.setFont(labelFont);
             e.gc.setForeground(getDisplay().getSystemColor(SWT.COLOR_WIDGET_FOREGROUND));
             Point textExt = e.gc.textExtent(label);

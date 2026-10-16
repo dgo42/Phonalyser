@@ -38,10 +38,9 @@ import org.eclipse.swt.widgets.Control;
  * as a single-level wildcard ({@code multifunctional/} '*' {@code /tabs/save}
  * matches the Save tab of whichever pane).
  *
- * <h2>Rebuild safety</h2>
- * <p>A language / font change recreates every pane, so the registry is
- * {@link #clear() cleared} at the start of each main-tab build and
- * re-populated as the panes reconstruct.  Callers resolve fresh on every
+ * <h2>Freshness</h2>
+ * <p>The registry is {@link #clear() cleared} at the start of the main-tab
+ * build and populated as the panes construct.  Callers resolve fresh on every
  * access, so a node never hands back a disposed control.
  *
  * <h2>Threading</h2>

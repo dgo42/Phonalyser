@@ -37,15 +37,13 @@ import java.util.jar.JarFile;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.Point;
-import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.layout.FillLayout;
 import org.eclipse.swt.program.Program;
-import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
-import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Menu;
 import org.eclipse.swt.widgets.MenuItem;
 import org.eclipse.swt.widgets.Shell;
+import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.GuiUtil;
 import org.edgo.audio.measure.gui.common.Icon;
@@ -69,7 +67,7 @@ import lombok.extern.log4j.Log4j2;
 /**
  * Application's main window.  Owns the top menu bar (File / Language /
  * Tools / Help), the {@link Shell} itself, and the shell-level concerns
- * (icons, minimum / saved size, language-switch handshake).  All
+ * (icons, minimum / saved size, in-place language switch).  All
  * measurement panes and tab content live in {@link MainTab}; all
  * {@link Image} resources flow through {@link IconUtils}, whose cache is
  * registered against the shell so disposal is centralised.
@@ -99,25 +97,16 @@ public final class MainWindow {
     private static final int MIN_SHELL_WIDTH  = 1024;
     private static final int MIN_SHELL_HEIGHT = 720;
 
-    /** Top-level "please wait" shell shown while a language switch is in
-     *  flight.  Static so it survives the disposal of the old MainWindow
-     *  and gets closed by the new instance's {@link #open()}.  Only one
-     *  may exist at a time. */
-    private static Shell languageSwitchShell;
-
     private final Display display;
     private final Shell   shell;
     /** App-lifetime audio engines (generator / scope / FFT) - created once
-     *  here and injected down into the panes, so they keep running through
-     *  every {@link #rebuildContent()}; shut down on shell dispose. */
+     *  here and injected down into the panes; shut down on shell dispose. */
     @Getter
     private final UIEngines engines;
-    /** Rebuilt in place by {@link #rebuildContent()} (language / UI-font
-     *  changes) - the shell itself survives.  Consumers (the
-     *  {@code gui.automation} scripts) must re-read this after every
-     *  rebuild instead of caching the instance. */
+    /** Built once with the shell: a language, font or GPU change applies in
+     *  place, so the content is never rebuilt. */
     @Getter
-    private MainTab mainTab;
+    private final MainTab mainTab;
 
     public MainWindow(Display display) {
         this.display = display;
@@ -127,7 +116,7 @@ public final class MainWindow {
         // Widget.getShell() may only be called on the display thread anyway);
         // this window is the process-wide owner.
         GuiUtil.setMainShell(shell);
-        shell.setText(I18n.t("app.title"));
+        Bindings.text(shell, "app.title", shell::setText);
         shell.setLayout(new FillLayout());
         ShellIcons.apply(shell);
 
@@ -181,12 +170,9 @@ public final class MainWindow {
         shell.setSize(w, h);
     }
 
-    /** Shows the window and logs the start event.  Caller drives the SWT event loop.
-     *  Also closes the "Switching language..." loading dialog if one was put
-     *  up by the previous instance's {@link #requestRecreate()}. */
+    /** Shows the window and logs the start event.  Caller drives the SWT event loop. */
     public void open() {
         shell.open();
-        closeRebuildSplash();
         log.info("GUI started.");
         // The SashForms allocate their first pane heights from weights applied
         // during construction - before the shell is realised at its on-screen
@@ -198,15 +184,15 @@ public final class MainWindow {
         display.asyncExec(() -> {
             if (shell.isDisposed()) return;
             shell.layout(true, true);
-            // The GL probe needs a realised window, so it was deferred past
-            // construction (the scope built on the CPU path).  Now the shell is
-            // shown, probe for real exactly once; if the GPU is available and
-            // enabled, rebuild so the scope takes the GL path.  Skipping the probe
-            // until here is what stops the X11 glXMakeCurrent abort at startup.
-            if (!GpuSupport.instance().isProbed()
-                    && GpuSupport.instance().isAvailable(shell)
-                    && Preferences.instance().isUseGpuAcceleration()) {
-                rebuildContent(false);   // silent: idle scope, no "Applying settings..." flash
+            // On Linux the GL probe needs a realised window, so it was deferred
+            // past construction (the scope built on the CPU path).  Now the shell
+            // is shown, probe for real exactly once; the scope pane follows
+            // GpuSupport.availableProperty and moves onto the GPU surface if the
+            // GPU is available and enabled.  Skipping the probe until here is
+            // what stops the X11 glXMakeCurrent abort at startup.  Windows and
+            // macOS probed already while the pane was built.
+            if (!GpuSupport.instance().isProbed()) {
+                GpuSupport.instance().isAvailable(shell);
             }
         });
         // Fire the silent update check once the shell is up.  The
@@ -255,79 +241,20 @@ public final class MainWindow {
         if (!shell.isDisposed()) shell.close();
     }
 
-    /** Rebuilds the menu bar + tab content INSIDE the live shell - the
-     *  window itself (position, size, maximized state) survives.  Used by
-     *  the language switch and by UI-font changes.  The audio engines live
-     *  in {@link UIEngines}, outside the widget tree, and keep running
-     *  through the teardown - the rebuilt panes re-attach to them, so a
-     *  font / language change never silences a running measurement; a
-     *  brief "Applying settings..." splash covers the work. */
-    public void rebuildContent() {
-        rebuildContent(true);
-    }
-
-    /** As {@link #rebuildContent()}, but {@code showSplash=false} skips the
-     *  "Applying settings..." splash - used by the one-shot startup CPU->GPU swap
-     *  (the scope is idle then, so the swap is invisible and the splash would just
-     *  flash). */
-    public void rebuildContent(boolean showSplash) {
-        if (showSplash) showRebuildSplash(display);
-        try {
-            Menu oldMenu = shell.getMenuBar();
-            for (Control c : shell.getChildren()) {
-                c.dispose();
-            }
-            if (oldMenu != null) oldMenu.dispose();
-            shell.setText(I18n.t("app.title"));
-            buildMenuBar();
-            mainTab = new MainTab(shell, engines);
-            // Recompute only the MINIMUM size - the current window size and
-            // position deliberately stay untouched.
-            Point natural = mainTab.computeNaturalShellSize();
-            shell.setMinimumSize(Math.min(natural.x, MIN_SHELL_WIDTH),
-                    Math.max(natural.y, MIN_SHELL_HEIGHT));
-            mainTab.applySavedLayoutState();
-            shell.layout(true, true);
-        } finally {
-            if (showSplash) closeRebuildSplash();
-        }
-        // A live language switch rebuilt the main window above; carry the
-        // separate help window (if open) to the new language too - it is its own
-        // Shell, so the rebuild does not reach it.  No-op unless the language
-        // actually changed and help is open.
+    /** Switches the UI language IN PLACE: the menu bar, the shell title and
+     *  every bound text of the content follow the new locale through their
+     *  bindings - nothing is disposed or rebuilt, so the panes, the tab
+     *  controls and the running measurements carry on untouched.  Translated
+     *  labels change the content's natural size, so the whole tree is
+     *  re-laid out.  The minimum shell size is deliberately NOT re-fitted:
+     *  on the live sash weights SashForm.computeSize inflates the natural
+     *  size (see the constructor), which would grow the window.  The
+     *  separate help window is its own Shell and is carried to the new
+     *  language too (a no-op while help is closed). */
+    public void applyLanguage(Locale locale) {
+        I18n.setLocale(locale);
+        shell.layout(true, true);
         HelpViewer.instance().refreshLanguage();
-    }
-
-    /** Builds and shows the brief splash covering a content rebuild. */
-    private static void showRebuildSplash(Display d) {
-        if (languageSwitchShell != null && !languageSwitchShell.isDisposed()) return;
-        Shell ld = new Shell(d, SWT.ON_TOP | SWT.TITLE | SWT.BORDER);
-        ld.setText(I18n.t("ui.applying.title"));
-        FillLayout fl = new FillLayout();
-        fl.marginWidth  = 24;
-        fl.marginHeight = 18;
-        ld.setLayout(fl);
-        Label l = new Label(ld, SWT.CENTER);
-        l.setText(I18n.t("ui.applying"));
-        ld.pack();
-        Rectangle screen = d.getPrimaryMonitor().getBounds();
-        Point sz = ld.getSize();
-        ld.setLocation(screen.x + (screen.width  - sz.x) / 2,
-                       screen.y + (screen.height - sz.y) / 2);
-        ld.open();
-        // Run a few event-loop ticks so the OS actually paints the shell
-        // before the heavy teardown work begins on this same thread.
-        for (int i = 0; i < 5; i++) {
-            if (!d.readAndDispatch()) break;
-        }
-        languageSwitchShell = ld;
-    }
-
-    private static void closeRebuildSplash() {
-        if (languageSwitchShell != null && !languageSwitchShell.isDisposed()) {
-            languageSwitchShell.close();
-        }
-        languageSwitchShell = null;
     }
 
     // -------------------------------------------------------------------------
@@ -347,11 +274,11 @@ public final class MainWindow {
         // menu is omitted there.
         if (!mac) {
             MenuItem fileCascade = new MenuItem(menuBar, SWT.CASCADE);
-            fileCascade.setText(I18n.t("menu.file"));
+            Bindings.text(fileCascade, "menu.file", fileCascade::setText);
             Menu fileMenu = new Menu(shell, SWT.DROP_DOWN);
             fileCascade.setMenu(fileMenu);
             MenuItem exitItem = new MenuItem(fileMenu, SWT.PUSH);
-            exitItem.setText(I18n.t("menu.file.exit"));
+            Bindings.text(exitItem, "menu.file.exit", exitItem::setText);
             exitItem.addListener(SWT.Selection, e -> shell.close());
         }
 
@@ -372,54 +299,54 @@ public final class MainWindow {
         // is only added on non-macOS - on macOS it is the application-menu
         // "Settings..." item (wired in wireMacSystemMenu).
         MenuItem toolsCascade = new MenuItem(menuBar, SWT.CASCADE);
-        toolsCascade.setText(I18n.t("menu.tools"));
+        Bindings.text(toolsCascade, "menu.tools", toolsCascade::setText);
         Menu toolsMenu = new Menu(shell, SWT.DROP_DOWN);
         toolsCascade.setMenu(toolsMenu);
         MenuItem tuneNotchItem = new MenuItem(toolsMenu, SWT.PUSH);
-        tuneNotchItem.setText(I18n.t("menu.tools.tuneNotch"));
+        Bindings.text(tuneNotchItem, "menu.tools.tuneNotch", tuneNotchItem::setText);
         tuneNotchItem.setImage(IconUtils.icon(shell.getDisplay(), Icon.NOTCH_FILTER));
         tuneNotchItem.addListener(SWT.Selection, e -> openTuneNotchDialog());
         MenuItem measureDelayItem = new MenuItem(toolsMenu, SWT.PUSH);
-        measureDelayItem.setText(I18n.t("menu.tools.measureDelay"));
+        Bindings.text(measureDelayItem, "menu.tools.measureDelay", measureDelayItem::setText);
         measureDelayItem.setImage(IconUtils.icon(shell.getDisplay(), Icon.SIGNAL_RECTANGLE));
         measureDelayItem.addListener(SWT.Selection, e -> openMeasureDelayDialog());
         if (!mac) {
             MenuItem preferencesItem = new MenuItem(toolsMenu, SWT.PUSH);
-            preferencesItem.setText(I18n.t("menu.tools.preferences"));
+            Bindings.text(preferencesItem, "menu.tools.preferences", preferencesItem::setText);
             preferencesItem.setImage(IconUtils.icon(shell.getDisplay(), Icon.GEAR));
             preferencesItem.addListener(SWT.Selection, e -> openPreferencesDialog());
         }
 
         MenuItem helpCascade = new MenuItem(menuBar, SWT.CASCADE);
-        helpCascade.setText(I18n.t("menu.help"));
+        Bindings.text(helpCascade, "menu.help", helpCascade::setText);
         Menu helpMenu = new Menu(shell, SWT.DROP_DOWN);
         helpCascade.setMenu(helpMenu);
 
         MenuItem helpShow = new MenuItem(helpMenu, SWT.PUSH);
-        helpShow.setText(I18n.t("menu.help.show"));
+        Bindings.text(helpShow, "menu.help.show", helpShow::setText);
         helpShow.setAccelerator(SWT.F1);
         helpShow.addListener(SWT.Selection, e -> HelpViewer.instance().show(shell));
 
         MenuItem helpShowActive = new MenuItem(helpMenu, SWT.PUSH);
-        helpShowActive.setText(I18n.t("menu.help.showActive"));
+        Bindings.text(helpShowActive, "menu.help.showActive", helpShowActive::setText);
         helpShowActive.setAccelerator(SWT.CTRL | SWT.F1);
         helpShowActive.addListener(SWT.Selection, e -> HelpViewer.instance().showForActiveItem(shell));
 
         new MenuItem(helpMenu, SWT.SEPARATOR);
 
         MenuItem helpCheckUpdate = new MenuItem(helpMenu, SWT.PUSH);
-        helpCheckUpdate.setText(I18n.t("menu.help.checkForUpdate"));
+        Bindings.text(helpCheckUpdate, "menu.help.checkForUpdate", helpCheckUpdate::setText);
         helpCheckUpdate.addListener(SWT.Selection, e -> UpdateChecker.checkNow(shell));
 
         MenuItem helpCheckOnStartup = new MenuItem(helpMenu, SWT.CHECK);
-        helpCheckOnStartup.setText(I18n.t("menu.help.checkOnStartup"));
+        Bindings.text(helpCheckOnStartup, "menu.help.checkOnStartup", helpCheckOnStartup::setText);
         helpCheckOnStartup.setSelection(prefs.isCheckForUpdatesOnStartup());
         helpCheckOnStartup.addListener(SWT.Selection, e -> {
             prefs.setCheckForUpdatesOnStartup(helpCheckOnStartup.getSelection());
         });
 
         MenuItem helpIncludeBeta = new MenuItem(helpMenu, SWT.CHECK);
-        helpIncludeBeta.setText(I18n.t("menu.help.includeBeta"));
+        Bindings.text(helpIncludeBeta, "menu.help.includeBeta", helpIncludeBeta::setText);
         helpIncludeBeta.setSelection(prefs.isIncludeBetaInUpdateChecks());
         helpIncludeBeta.addListener(SWT.Selection, e -> {
             prefs.setIncludeBetaInUpdateChecks(helpIncludeBeta.getSelection());
@@ -428,17 +355,17 @@ public final class MainWindow {
         new MenuItem(helpMenu, SWT.SEPARATOR);
 
         MenuItem helpReport = new MenuItem(helpMenu, SWT.PUSH);
-        helpReport.setText(I18n.t("menu.help.reportProblem"));
+        Bindings.text(helpReport, "menu.help.reportProblem", helpReport::setText);
         helpReport.addListener(SWT.Selection, e -> Program.launch(HelpUrls.ISSUES_URL));
 
         new MenuItem(helpMenu, SWT.SEPARATOR);
 
         MenuItem helpTip = new MenuItem(helpMenu, SWT.PUSH);
-        helpTip.setText(I18n.t("menu.help.tipOfDay"));
+        Bindings.text(helpTip, "menu.help.tipOfDay", helpTip::setText);
         helpTip.addListener(SWT.Selection, e -> new TipOfTheDayDialog(shell).open());
 
         MenuItem helpRebuildIndex = new MenuItem(helpMenu, SWT.PUSH);
-        helpRebuildIndex.setText(I18n.t("menu.help.rebuildIndex"));
+        Bindings.text(helpRebuildIndex, "menu.help.rebuildIndex", helpRebuildIndex::setText);
         helpRebuildIndex.addListener(SWT.Selection, e -> rebuildHelpIndex());
 
         // Help -> About.  On macOS this is the application-menu "About Phonalyser"
@@ -446,7 +373,7 @@ public final class MainWindow {
         if (!mac) {
             new MenuItem(helpMenu, SWT.SEPARATOR);
             MenuItem helpAbout = new MenuItem(helpMenu, SWT.PUSH);
-            helpAbout.setText(I18n.t("menu.help.about"));
+            Bindings.text(helpAbout, "menu.help.about", helpAbout::setText);
             helpAbout.addListener(SWT.Selection, e -> showAboutDialog());
         }
 
@@ -457,7 +384,7 @@ public final class MainWindow {
 
     /** Opens the Preferences ("Settings") dialog.  Streams keep running while it
      *  is up; only a committed AUDIO-config change bounces live playback /
-     *  capture, and a font change rebuilds the content in place.  Shared by the
+     *  capture; font and GPU changes apply in place.  Shared by the
      *  Tools menu (non-macOS) and the macOS application-menu Settings item. */
     private void openPreferencesDialog() {
         PreferencesDialog dialog = new PreferencesDialog(shell);
@@ -654,8 +581,9 @@ public final class MainWindow {
     }
 
     /** Appends one radio-style entry to the Language submenu.  Selecting
-     *  it persists the BCP-47 tag, applies the locale, and tears down /
-     *  rebuilds the shell so every widget picks up the new translations. */
+     *  it persists the BCP-47 tag and re-translates the window in place
+     *  ({@link #applyLanguage(Locale)}) - no rebuild; the panes and the
+     *  running measurements are untouched. */
     private void addLanguageMenuItem(Menu menu, String tag, String label) {
         Preferences prefs = Preferences.instance();
         MenuItem item = new MenuItem(menu, SWT.RADIO);
@@ -666,12 +594,11 @@ public final class MainWindow {
             // RADIO fires both for the newly-selected item (selection=true)
             // and the previously-selected one (selection=false); only act
             // on the gain event.  Also skip when the user re-clicks the
-            // already-active language - saves an unnecessary shell rebuild.
+            // already-active language - saves an unnecessary re-translation.
             if (!item.getSelection()) return;
             if (tag.equals(prefs.getUiLanguage())) return;
             prefs.setUiLanguage(tag);
-            I18n.setLocale(Locale.forLanguageTag(tag));
-            rebuildContent();
+            applyLanguage(Locale.forLanguageTag(tag));
         });
     }
 }

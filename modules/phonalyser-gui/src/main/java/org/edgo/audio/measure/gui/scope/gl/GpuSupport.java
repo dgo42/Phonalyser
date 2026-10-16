@@ -24,6 +24,7 @@ import org.eclipse.swt.SWT;
 import org.eclipse.swt.opengl.GLCanvas;
 import org.eclipse.swt.opengl.GLData;
 import org.eclipse.swt.widgets.Composite;
+import org.edgo.audio.measure.bind.Property;
 import org.lwjgl.nanovg.NanoVGGL3;
 import org.lwjgl.opengl.GL;
 
@@ -70,12 +71,23 @@ public final class GpuSupport {
 
     /** Null until first probed; then the cached availability for this process. */
     private Boolean available;
+    /** The probe result as an observable value - {@code false} until a real
+     *  probe found a working GPU. */
+    private final Property<Boolean> availableProperty = new Property<>(false);
 
     private GpuSupport() {
     }
 
     public static GpuSupport instance() {
         return INSTANCE;
+    }
+
+    /** Becomes {@code true} when a probe finds a working GPU.  On Linux the
+     *  probe runs only once the shell is shown (see {@link #isAvailable(Composite)}),
+     *  after the scope was built on the CPU path - the scope pane follows this
+     *  value and moves onto the GPU surface then. */
+    public Property<Boolean> availableProperty() {
+        return availableProperty;
     }
 
     /** Probes GPU availability the first time using {@code parent} as a transient
@@ -86,9 +98,10 @@ public final class GpuSupport {
             // On X11 a GLCanvas needs a REALIZED native window; probing before the
             // shell is shown makes glXMakeCurrent abort the process (BadDrawable).
             // So on Linux, until the shell is visible, report unavailable WITHOUT
-            // caching - the post-open re-probe (MainWindow.open) finds the GPU once
-            // the window is up.  Windows (GLCanvas) and macOS (GLFW) probe fine
-            // pre-realize, so they aren't deferred (no startup CPU->GPU rebuild).
+            // caching - the post-open probe (MainWindow.open) finds the GPU once
+            // the window is up, and the scope pane, following availableProperty,
+            // moves onto the GPU surface then.  Windows (GLCanvas) and macOS (GLFW)
+            // probe fine pre-realize, so they aren't deferred.
             String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
             boolean linux = !os.contains("win") && !os.contains("mac");
             if (linux && (parent == null || parent.isDisposed()
@@ -99,6 +112,7 @@ public final class GpuSupport {
             if (log.isInfoEnabled()) {
                 log.info("GPU scope acceleration {}.", available ? "available" : "unavailable");
             }
+            availableProperty.set(available);
         }
         return available;
     }
