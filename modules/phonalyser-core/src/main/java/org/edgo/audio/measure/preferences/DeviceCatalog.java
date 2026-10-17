@@ -16,7 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-package org.edgo.audio.measure.gui.sound;
+package org.edgo.audio.measure.preferences;
 
 import java.util.List;
 import java.util.Map;

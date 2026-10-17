@@ -56,10 +56,10 @@ class EventsTest {
         // fire on another event's publish.  Walk the well-known set
         // and assert no two strings collide.
         String[] all = {
-                Events.FFT_LENGTH_CHANGED,
+                Events.AUDIO_FORMAT_CHANGED,
                 Events.GENERATOR_RUNNING,
-                Events.FILE_PLAY_STOPPED,
-                Events.SCOPE_AUTO_SETUP,
+                Events.GENERATOR_SIGNAL_CHANGED,
+                Events.FREQRESP_MEASUREMENT_STARTED,
         };
         for (int i = 0; i < all.length; i++) {
             for (int j = i + 1; j < all.length; j++) {

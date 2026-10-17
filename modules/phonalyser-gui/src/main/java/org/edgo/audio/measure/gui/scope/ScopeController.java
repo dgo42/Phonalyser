@@ -25,7 +25,6 @@ import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.widgets.Control;
 import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.bus.Events;
-import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.GuiUtil;
 import org.edgo.audio.measure.gui.scope.gl.GlScopeSurface;
 import org.edgo.audio.measure.gui.sound.SharedCapture;
@@ -100,8 +99,8 @@ public final class ScopeController {
     @Getter
     private volatile boolean capturing;
     /** WHY the last capture ended from below - CLAIMED from the shared buffer
-     *  by the measurement worker's terminal consult, consumed by the pane on
-     *  {@link Events#SCOPE_RECORDING_STOPPED}.  {@code null} while capturing,
+     *  by the measurement worker's terminal consult, consumed by the pane in
+     *  {@link ScopePane#onRecordingStopped}.  {@code null} while capturing,
      *  after a user / programmatic stop, and when another consumer of the same
      *  dead capture (the FFT) claimed the one operator report. */
     @Getter
@@ -142,6 +141,13 @@ public final class ScopeController {
      *  state, not a preference, so the widget can't observe it any other way). */
     @Setter
     private Runnable   onViewStateChanged;
+    /** The pane that owns this controller - told when the controller stopped
+     *  a capture itself. */
+    private final ScopePane pane;
+
+    public ScopeController(ScopePane pane) {
+        this.pane = pane;
+    }
 
     /** Requests the shared capture via the bus and holds the returned live
      *  buffer.  Returns {@code null} when the device fails to open - the
@@ -174,13 +180,6 @@ public final class ScopeController {
         SharedCapture.instance().release();
         log.info("Oscilloscope stopped.");
         return frozen;
-    }
-
-    /** The live capture buffer held while {@link #isCapturing()} -
-     *  {@code null} otherwise.  Lets a rebuilt pane re-attach its views to
-     *  a capture that survived an in-place content rebuild. */
-    public synchronized SignalBufferReader liveBuffer() {
-        return currentBuffer;
     }
 
     /** Starts live capture and attaches the views to the live buffer: acquires the
@@ -231,8 +230,8 @@ public final class ScopeController {
      * device half of the stop must stay off the display thread (see
      * {@link #stopCaptureAndFreeze()}), and that thread is already stopping, so
      * it is the natural place.  Records the claimed reason for the pane, stops
-     * the capture, then marshals the visuals - the frozen trace onto the views
-     * and {@link Events#SCOPE_RECORDING_STOPPED} so the pane pops its Record
+     * the capture, then marshals the visuals - the frozen trace onto the views,
+     * and the pane's {@link ScopePane#onRecordingStopped} so it pops its Record
      * toggle and localizes the reason.
      *
      * @param reason the claimed reason; {@code null} when another consumer of
@@ -248,20 +247,8 @@ public final class ScopeController {
         if (frozen == null) return;   // lost the race to a concurrent user stop
         GuiUtil.marshal(() -> {
             attachFrozen(frozen);
-            MessageBus.instance().publish(Events.SCOPE_RECORDING_STOPPED);
+            pane.onRecordingStopped();
         });
-    }
-
-    /** Re-attaches the views to a capture that survived an in-place pane rebuild
-     *  ({@link #liveBuffer()} still held); returns whether one was re-attached so the
-     *  pane can re-light its Record button. */
-    public synchronized boolean reattachLiveCapture() {
-        SignalBufferReader buf = liveBuffer();
-        if (buf == null) return false;
-        if (view != null)      view.setBuffer(buf);
-        if (condensed != null) condensed.setBuffer(buf);
-        if (view != null)      view.startMeasurementThread();
-        return true;
     }
 
     /** Human-readable description of the last {@link #acquireCapture()}
@@ -406,7 +393,7 @@ public final class ScopeController {
     /**
      * Loads a signal file into the scope: stops a running live capture first (the
      * loaded file swaps the shared buffer out from under it; the pane pops its
-     * Record toggle via {@link Events#SCOPE_RECORDING_STOPPED}), decodes the file
+     * Record toggle in {@link ScopePane#onRecordingStopped}), decodes the file
      * through the attached {@link ScopeOpenSignal}, then centres the view on the
      * file's start and recomputes the view state.  Returns whether the load
      * succeeded - on {@code false} the caller surfaces
@@ -416,7 +403,7 @@ public final class ScopeController {
         if (loader == null) return false;
         if (isCapturing()) {
             stopCapture();
-            MessageBus.instance().publish(Events.SCOPE_RECORDING_STOPPED);
+            pane.onRecordingStopped();
         }
         if (!loader.loadFile(file)) return false;
         SignalBufferReader reader = (view != null) ? view.getReader() : null;
@@ -577,7 +564,7 @@ public final class ScopeController {
      * mid-screen, an AC-coupled one at 0&nbsp;V) and resets the trigger to
      * centre.  The same V/div is applied to both channels (driven by the
      * measurement channel's Vpp).  Wired to the Auto-Setup button in
-     * {@link ScopeView}'s header via {@link Events#SCOPE_AUTO_SETUP}.
+     * {@link ScopeView}'s header through {@link ScopePane#performAutoSetup}.
      *
      * <p>No-op unless the scope is actively recording: without a live capture
      * there is no fresh frequency / Vpp to fit, and reading the shared buffer
@@ -652,8 +639,8 @@ public final class ScopeController {
         prefs.save();
     }
 
-    /** Releases a still-held capture and closes the tool window it owns - called by
-     *  {@code UIEngines} at application exit. */
+    /** Releases a still-held capture and closes the tool window it owns - called
+     *  from the owning live pane's dispose listener. */
     public void shutdown() {
         releaseCapture();
         disposeHistogramWindow();

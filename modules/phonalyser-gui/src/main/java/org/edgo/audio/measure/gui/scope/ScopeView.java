@@ -308,6 +308,9 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     /** The GPU-drawn header button currently pressed (the mouse was forwarded to it),
      *  so the release goes to the same button.  Null on the CPU path / no press. */
     private ToolButton pressedHeaderButton;
+    /** The pane this view belongs to - the Auto-Setup button and a SINGLE
+     *  shot's disarm go to it. */
+    private final ScopePane pane;
     /** Pane-attached controller - the rect zoom's FILE-mode horizontal part
      *  goes through its {@code viewCenterFrames} + {@code applyViewState}. */
     private ScopeController controller;
@@ -571,7 +574,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     private static final String[] HEADERS       = {"cur", "avg", "min", "max", "σ"};
     private static final int[]    HEADER_RIGHTS = {COL_CUR_RIGHT, COL_AVG_RIGHT, COL_MIN_RIGHT, COL_MAX_RIGHT, COL_SIGMA_RIGHT};
 
-    public ScopeView(Composite parent) {
+    public ScopeView(Composite parent, ScopePane pane) {
         // Dark-theme overrides + prefs-driven trace colours, all consumed
         // by AbstractMeasurementView in a single per-role allocation
         // pass.  The mid-channel colours (~65 % attenuation of the trace
@@ -589,6 +592,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
                 ColorRole.DISABLED_CHANNEL,  0x828282,
                 ColorRole.LEFT_TRACE,        Preferences.instance().getOscLeftChannelColor(),
                 ColorRole.RIGHT_TRACE,       Preferences.instance().getOscRightChannelColor()));
+        this.pane = pane;
         // Chapter-level help anchor: Ctrl+F1 anywhere on the canvas
         // opens oscilloscope.html.
         setData("helpAnchor", "oscilloscope.html");
@@ -687,7 +691,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         Bindings.onChange(this, prefs.oscLeftChannelEnabledProperty(),  en -> { if (!en) disconnect(); });
         Bindings.onChange(this, prefs.oscRightChannelEnabledProperty(), en -> { if (!en) disconnect(); });
         Bindings.onChange(this, prefs.oscCombinedMasterProperty(), this::applyCombinedMaster);
-        autoSetupBtn.addListener(SWT.Selection, e -> MessageBus.instance().publish(Events.SCOPE_AUTO_SETUP));
+        autoSetupBtn.addListener(SWT.Selection, e -> pane.performAutoSetup());
         histogramBtn.addListener(SWT.Selection, e ->
                 prefs.setOscShowHistogram(histogramBtn.isToggled()));
         // Only the button state is this view's business - the window the preference
@@ -1003,8 +1007,8 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     /**
      * Arms (or cancels) a single-shot capture in SINGLE trigger mode.  While
      * armed the display stays frozen on the held frame; the next trigger captures
-     * a fresh frame, disarms, and publishes {@link Events#SCOPE_SINGLE_DISARMED}
-     * so the Start toggle pops back out.  No effect in AUTO / NORMAL modes (those
+     * a fresh frame, disarms, and calls {@link ScopePane#onSingleDisarmed} so
+     * the Start toggle pops back out.  No effect in AUTO / NORMAL modes (those
      * never read {@code singleArmed}).
      */
     public void setSingleArmed(boolean armed) {
@@ -3395,7 +3399,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
             captureSingleFrame(capStart, displaySamples, available, subSampleOffset, triggerFrac);
             if (triggerMode == TriggerMode.SINGLE && singleArmed) {
                 singleArmed = false;
-                MessageBus.instance().publish(Events.SCOPE_SINGLE_DISARMED);
+                pane.onSingleDisarmed();
             }
         }
         if (dispCount < 2) return;

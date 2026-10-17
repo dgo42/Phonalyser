@@ -65,6 +65,7 @@ import org.edgo.audio.measure.enums.WindowType;
 import org.edgo.audio.measure.gui.widgets.UnitConversion;
 import org.edgo.audio.measure.gui.widgets.UnitFamily;
 import org.edgo.audio.measure.gui.widgets.UnitValue;
+import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.sound.DeviceCalibration;
 import org.yaml.snakeyaml.DumperOptions;
 import org.yaml.snakeyaml.Yaml;
@@ -823,6 +824,11 @@ public final class Preferences {
      *  singleton is non-detached. */
     private final boolean detached;
 
+    /** The device-list snapshot the Preferences dialog is served from;
+     *  {@code null} in a {@link #detached} copy. */
+    @Getter
+    private final DeviceCatalog deviceCatalog;
+
     /** Overrides the {@code devices.yaml} location for a test that seeds /
      *  migrates / round-trips the store against a temp dir; {@code null} on the
      *  live singleton, where {@link #devicesPath()} falls back to
@@ -858,6 +864,7 @@ public final class Preferences {
 
     private Preferences() {
         this.detached = false;
+        this.deviceCatalog = new DeviceCatalog(AudioBackend.instance());
         // Bidi-bound GUI edits write these properties directly (no setter), so
         // the bin-bandwidth cache listens on the properties themselves.
         fftLength.addListener(v -> recomputeBinBw());
@@ -888,6 +895,7 @@ public final class Preferences {
      *  out on {@code detached} - never starts the save thread. */
     private Preferences(boolean detached) {
         this.detached = detached;
+        this.deviceCatalog = null;
         recomputeBinBw();
     }
 

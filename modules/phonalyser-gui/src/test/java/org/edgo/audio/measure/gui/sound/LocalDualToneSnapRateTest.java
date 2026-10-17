@@ -164,7 +164,7 @@ class LocalDualToneSnapRateTest {
     @Test
     @DisplayName("a local dual-tone start drives tone 2 on the analysis grid")
     void toneTwoIsSnappedOnTheCaptureRate() throws InterruptedException {
-        controller = new GeneratorController();
+        controller = new GeneratorController(null);
         controller.start();
 
         SignalGenerator played = awaitPlayedGenerator();

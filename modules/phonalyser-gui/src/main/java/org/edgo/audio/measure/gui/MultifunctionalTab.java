@@ -84,10 +84,10 @@ public final class MultifunctionalTab {
     private Consumer<Boolean> onScopeToggle;
     private Consumer<Boolean> onFftToggle;
 
-    public MultifunctionalTab(Composite parent, Shell shell, UIEngines engines) {
+    public MultifunctionalTab(Composite parent, Shell shell) {
         this.shell   = shell;
         this.display = shell.getDisplay();
-        buildPanes(parent, engines);
+        buildPanes(parent);
     }
 
     /** Two-phase setup: applied after the host has clamped the shell's
@@ -145,18 +145,18 @@ public final class MultifunctionalTab {
     // Pane construction
     // -------------------------------------------------------------------------
 
-    private void buildPanes(Composite parent, UIEngines engines) {
+    private void buildPanes(Composite parent) {
         // SWT.SMOOTH on a SashForm makes the contained Sash widgets update
         // the content live while the user drags - without it you get the
         // rubber-band ghost outline and the panes only reflow on release.
         hSplit = new SashForm(parent, SWT.HORIZONTAL | SWT.SMOOTH);
         hSplit.setSashWidth(4);
 
-        genPane = new GeneratorPane(hSplit, engines.getGeneratorController());
+        genPane = new GeneratorPane(hSplit);
 
         vSplit = new SashForm(hSplit, SWT.VERTICAL | SWT.SMOOTH);
         vSplit.setSashWidth(4);
-        this.oscPane = new ScopePane(vSplit, engines.getScopeController());
+        this.oscPane = new ScopePane(vSplit);
 
         fftPane = new FftPane(vSplit);
 

@@ -146,11 +146,6 @@ public final class ScopePane extends AbstractPane {
      *  preset / utility / save-load tab; see {@link ScopeTabControl}. */
     private ScopeTabControl              tabControl;
 
-    /** Subscriber for {@link Events#SCOPE_AUTO_SETUP}.  Held as a field
-     *  so the dispose listener can unsubscribe - bound only on the live
-     *  pane so the offscreen screenshot-renderer doesn't respond to user
-     *  clicks on the live pane.  {@code null} on the offscreen variant. */
-    private Consumer<Void>               autoSetupListener;
     /** {@link Events#FREQRESP_MEASUREMENT_STARTED} subscriber - stops a
      *  running scope capture and disables the Record button so the
      *  Frequency Response sweep can use the device exclusively. */
@@ -158,12 +153,6 @@ public final class ScopePane extends AbstractPane {
     /** {@link Events#FREQRESP_MEASUREMENT_STOPPED} subscriber - re-enables
      *  the Record button once the sweep finishes. */
     private Consumer<Void>               freqRespStoppedListener;
-    /** {@link Events#SCOPE_RECORDING_STOPPED} subscriber - pops the Record
-     *  toggle back out when the controller stops a capture programmatically
-     *  (an open-signal load) or the capture ended from below (then the
-     *  controller's recorded reason is localized here, once).  Live pane
-     *  only. */
-    private Consumer<Void>               recordingStoppedListener;
 
     /** Horizontal navigation slider sitting above the condensed strip. */
     private FlatScrollbar                navSlider;
@@ -195,10 +184,9 @@ public final class ScopePane extends AbstractPane {
      *  state ({@code isCapturing}), the live buffer reference and the
      *  ACQUIRE/RELEASE bus round-trip.  The pane wires the views around
      *  it: buffer attach + measurement thread on start (the realtime render
-     *  loop drives repaints), frozen-snapshot re-attach on stop.  The live pane receives the
-     *  app-lifetime instance (lives in {@code UIEngines}, survives content
-     *  rebuilds - a rebuilt pane re-attaches to a still-running capture);
-     *  the screenshot-only variant builds its own, which stays idle. */
+     *  loop drives repaints), frozen-snapshot re-attach on stop.  Shut down
+     *  in the live pane's dispose listener; the screenshot-only variant's
+     *  stays idle. */
     private final ScopeController controller;
     /** True on the live pane; the screenshot-only variant never opens a device
      *  and stays on the CPU path. */
@@ -212,27 +200,22 @@ public final class ScopePane extends AbstractPane {
     private final ScopeOpenSignal        loader;
 
     /**
-     * Constructs the live pane around the injected app-lifetime capture
-     * controller: the Record toggle drives it (showing an error MessageBox
-     * on capture-open failure), and when the controller is already
-     * capturing the views re-attach to the live buffer immediately.
+     * Constructs the live pane: the Record toggle drives the capture
+     * controller it builds (showing an error MessageBox on capture-open
+     * failure).
      */
-    public ScopePane(Composite parent, ScopeController controller) {
-        this(parent, controller, true);
+    public ScopePane(Composite parent) {
+        this(parent, true);
     }
 
     /**
-     * Screenshot-only variant: builds its own (idle) controller and never
-     * opens an audio device.  Its camera / calibrate buttons still exist
-     * for layout fidelity but are never clicked.
+     * {@code liveCapture} false is the screenshot-only variant: its controller
+     * stays idle and it never opens an audio device.  Its camera / calibrate
+     * buttons still exist for layout fidelity but are never clicked.
      */
-    public ScopePane(Composite parent) {
-        this(parent, new ScopeController(), false);
-    }
-
-    private ScopePane(Composite parent, ScopeController controller, boolean liveCapture) {
+    private ScopePane(Composite parent, boolean liveCapture) {
         super(parent);
-        this.controller  = controller;
+        this.controller  = new ScopeController(this);
         this.liveCapture = liveCapture;
         Display d = parent.getDisplay();
         this.recordDim      = IconUtils.icon(d, Icon.RECORD_DARK);
@@ -247,7 +230,7 @@ public final class ScopePane extends AbstractPane {
                 "scope.title.collapsed",
                 "scope.pane.toggle.tooltip");
 
-        view = new ScopeView(group);
+        view = new ScopeView(group, this);
         // Column 0 of the 2-col paneLayout - leaves column 1 free for the
         // vertical scrollbar that follows.  On the GPU path the GL surface takes
         // this cell and the view is excluded (attachGpuSurface).
@@ -423,7 +406,6 @@ public final class ScopePane extends AbstractPane {
             Bindings.onChange(group, Preferences.instance().useGpuAccelerationProperty(), on -> syncGpuSurface());
             Bindings.onChange(group, GpuSupport.instance().availableProperty(),          ok -> syncGpuSurface());
             wireLiveCaptureLifecycle();
-            reattachLiveCapture();
         }
 
         // Keep the Utility-tab calibrate button's gate honest as recording
@@ -434,64 +416,65 @@ public final class ScopePane extends AbstractPane {
         wireHelpAnchors();
     }
 
-    /** Live-pane capture wiring: Record button, Auto-Setup bus subscription,
-     *  and a dispose listener that unsubscribes the pane's bus handlers
-     *  (a running capture deliberately survives the pane - see the
-     *  controller field).  Called only when {@code liveCapture} is true - the
-     *  screenshot pane mirrors the Record-button visual state externally
-     *  via {@link #setRecordingState} but never opens an audio device of
-     *  its own.  The "Reconstructed beat" generator-form subscription lives
-     *  inside {@link ScopeTabControl} (the checkbox is its widget). */
+    /** Live-pane capture wiring: Record button, the FreqResp bus
+     *  subscriptions, and a dispose listener that unsubscribes them and stops
+     *  the controller this pane owns.  Called only when {@code liveCapture} is
+     *  true - the screenshot pane mirrors the Record-button visual state
+     *  externally via {@link #setRecordingState} but never opens an audio
+     *  device of its own.  The "Reconstructed beat" generator-form
+     *  subscription lives inside {@link ScopeTabControl} (the checkbox is its
+     *  widget). */
     private void wireLiveCaptureLifecycle() {
         wireRecordButton();
-        autoSetupListener        = ignored -> controller.performAutoSetup(view, tabControl);
         freqRespStartedListener  = ignored -> onFreqRespMeasurementStarted();
         freqRespStoppedListener  = ignored -> onFreqRespMeasurementStopped();
-        recordingStoppedListener = ignored -> {
-            if (recordButton != null && !recordButton.isDisposed() && recordButton.getSelection()) {
-                recordButton.setSelection(false);
-                recordButton.setImage(recordDim);
-            }
-            // Capture ended from below (device lost / delivery stalled): the
-            // controller recorded the claimed reason - this pane owns the
-            // failed operation, so this pane tells the operator ONCE, in
-            // their language.  Null for a programmatic stop (open-signal
-            // load) and when the FFT pane claimed the one report.
-            CaptureEndReason reason = controller.getCaptureEndReason();
-            if (reason != null && recordButton != null && !recordButton.isDisposed()) {
-                // The unified stop message: the reason enum picks the text,
-                // the BACKEND is named, the technical detail lives in the log
-                // alone.
-                Dialogs.error(recordButton.getShell(), I18n.t("audio.deviceError.title"),
-                        I18n.t("capture.error.ended." + reason.name(),
-                                Preferences.instance().getSelectedBackend().type().getDisplayName()));
-            }
-        };
         MessageBus bus = MessageBus.instance();
-        bus.subscribe(Events.SCOPE_AUTO_SETUP,             autoSetupListener);
         bus.subscribe(Events.FREQRESP_MEASUREMENT_STARTED, freqRespStartedListener);
         bus.subscribe(Events.FREQRESP_MEASUREMENT_STOPPED, freqRespStoppedListener);
-        bus.subscribe(Events.SCOPE_RECORDING_STOPPED,      recordingStoppedListener);
         group.addDisposeListener(e -> {
             MessageBus bus2 = MessageBus.instance();
-            bus2.unsubscribe(Events.SCOPE_AUTO_SETUP,             autoSetupListener);
             bus2.unsubscribe(Events.FREQRESP_MEASUREMENT_STARTED, freqRespStartedListener);
             bus2.unsubscribe(Events.FREQRESP_MEASUREMENT_STOPPED, freqRespStoppedListener);
-            bus2.unsubscribe(Events.SCOPE_RECORDING_STOPPED,      recordingStoppedListener);
             loader.clear();
-            // The injected controller deliberately keeps capturing past the
-            // pane's dispose; UIEngines releases the capture at application
-            // exit.  The
-            // view's own dispose listener stops its measurement worker.
+            // The view's own dispose listener stops its measurement worker.
+            controller.shutdown();
         });
     }
 
-    /** A rebuilt pane may find the injected controller still capturing
-     *  (the engines survive content rebuilds): re-attach both views to the
-     *  live buffer, restart the measurement worker and light the Record LED
-     *  (the realtime render loop resumes repainting it). */
-    private void reattachLiveCapture() {
-        if (controller.reattachLiveCapture()) setRecordingState(true);
+    /** The view's Auto-Setup button: re-fits the vertical / horizontal scales
+     *  to the current signal. */
+    void performAutoSetup() {
+        controller.performAutoSetup(view, tabControl);
+    }
+
+    /** The view's call when a SINGLE shot disarmed itself because the awaited
+     *  trigger fired - the trigger Start toggle pops back out. */
+    void onSingleDisarmed() {
+        tabControl.onSingleDisarmed();
+    }
+
+    /** The controller's call when it stopped a capture itself - an open-signal
+     *  load swapping the buffer out, or a capture that ended from below - so
+     *  the Record toggle pops back out.  UI thread. */
+    void onRecordingStopped() {
+        if (recordButton != null && !recordButton.isDisposed() && recordButton.getSelection()) {
+            recordButton.setSelection(false);
+            recordButton.setImage(recordDim);
+        }
+        // Capture ended from below (device lost / delivery stalled): the
+        // controller recorded the claimed reason - this pane owns the
+        // failed operation, so this pane tells the operator ONCE, in
+        // their language.  Null for a programmatic stop (open-signal
+        // load) and when the FFT pane claimed the one report.
+        CaptureEndReason reason = controller.getCaptureEndReason();
+        if (reason != null && recordButton != null && !recordButton.isDisposed()) {
+            // The unified stop message: the reason enum picks the text,
+            // the BACKEND is named, the technical detail lives in the log
+            // alone.
+            Dialogs.error(recordButton.getShell(), I18n.t("audio.deviceError.title"),
+                    I18n.t("capture.error.ended." + reason.name(),
+                            Preferences.instance().getSelectedBackend().type().getDisplayName()));
+        }
     }
 
     /** Stops a running capture and pops the Record toggle out - the device is
@@ -764,7 +747,7 @@ public final class ScopePane extends AbstractPane {
      *  works while stopped), tab body collapsed, Record LED matching live. */
     @Override
     protected AbstractPane createSnapshotClone(Composite parent) {
-        ScopePane clone = new ScopePane(parent);
+        ScopePane clone = new ScopePane(parent, false);
         if (view != null && !view.isDisposed()) {
             ScopeView.RenderedFrame snap = view.getRenderedFrameSnapshot();
             if (snap != null) clone.getView().setFrozenFrame(snap);

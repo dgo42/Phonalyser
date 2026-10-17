@@ -28,11 +28,6 @@ package org.edgo.audio.measure.gui.bus;
  */
 public final class Events {
 
-    /** Fired by the FFT pane when the user picks a new FFT length.
-     *  No payload - subscribers read the fresh value from
-     *  {@code Preferences.instance().getFftLength()}. */
-    public static final String FFT_LENGTH_CHANGED = "fft.length.changed";
-
     /** Fired once by the Preferences dialog's OK after the working copy is
      *  committed - the audio backend, devices, sample rates or bit depths may
      *  have changed.  No payload - subscribers read the fresh values from
@@ -200,49 +195,6 @@ public final class Events {
      *  {@link GeneratorOutput}; {@code null} when no responder is
      *  registered, which the caller treats as "no pilot". */
     public static final String GENERATOR_OUTPUT = "generator.output";
-
-    /** Notification - the generator's file-player thread finished
-     *  (user stop, EOF without loop, or playback error).  Subscribers
-     *  (the generator pane) reset the play-from LED.  No payload.
-     *  Published on the play thread - subscribers must marshal to the
-     *  UI thread if they touch widgets. */
-    public static final String FILE_PLAY_STOPPED = "filePlay.stopped";
-
-    /** Notification - the generator is uploading a file to a network bench.
-     *  Subscribers (the generator pane) put a "being uploaded" notice on
-     *  screen.  No payload.  Published on the play thread - subscribers
-     *  must marshal to the UI thread if they touch widgets.
-     *
-     *  <p>ALWAYS paired with {@link #FILE_UPLOAD_FINISHED}, on the success
-     *  path and on every failure path alike: a notice that outlives its
-     *  transfer is worse than none. */
-    public static final String FILE_UPLOAD_STARTED = "fileUpload.started";
-
-    /** Notification - the upload above ended, however it ended (the bench has
-     *  the file, or it was refused, or the link died).  Subscribers take the
-     *  notice down.  No payload; same threading as
-     *  {@link #FILE_UPLOAD_STARTED}. */
-    public static final String FILE_UPLOAD_FINISHED = "fileUpload.finished";
-
-    /** Notification - the user clicked the scope's Auto-Setup button.
-     *  Subscribers (the scope pane) re-fit the vertical / horizontal
-     *  scales to the current signal.  No payload.  Published on the
-     *  UI thread (the click handler runs there). */
-    public static final String SCOPE_AUTO_SETUP = "scope.autoSetup";
-
-    /** Published by {@code ScopeView} on the UI thread when a SINGLE-mode shot
-     *  disarms itself because the awaited trigger fired, so the trigger Start
-     *  toggle can pop back out.  No payload. */
-    public static final String SCOPE_SINGLE_DISARMED = "scope.single.disarmed";
-
-    /** Published by {@code ScopeController} on the UI thread when it stops a
-     *  running live capture programmatically (an open-signal load swapping the
-     *  buffer out), and - marshalled - when the capture ended from below (the
-     *  measurement worker's reader answered terminally), so the pane can pop
-     *  its Record toggle back out.  No payload; the pane consults the
-     *  controller's recorded capture-end reason to tell the cases apart.
-     *  Subscriber: {@code ScopePane}. */
-    public static final String SCOPE_RECORDING_STOPPED = "scope.recording.stopped";
 
     /** Notification - the FreqResp pane started a measurement.  No
      *  payload.  Other panes (FFT, scope) subscribe to disable their

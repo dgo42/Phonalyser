@@ -109,7 +109,7 @@ public final class MainTab {
      *  drives the current chrome. */
     private IntConsumer topTabSelector;
 
-    public MainTab(Shell shell, UIEngines engines) {
+    public MainTab(Shell shell) {
         this.shell   = shell;
         this.display = shell.getDisplay();
         Preferences prefs = Preferences.instance();
@@ -121,7 +121,7 @@ public final class MainTab {
         // buildHost() re-parents the content into the active chrome.
         multiContent = new Composite(shell, SWT.NONE);
         multiContent.setLayout(new FillLayout());
-        multifunctional = new MultifunctionalTab(multiContent, shell, engines);
+        multifunctional = new MultifunctionalTab(multiContent, shell);
         frContent = new Composite(shell, SWT.NONE);
         frequencyResponse = new FrequencyResponseTab(frContent);
         buildHost();

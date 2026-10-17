@@ -100,10 +100,6 @@ public final class MainWindow {
 
     private final Display display;
     private final Shell   shell;
-    /** App-lifetime audio engines (generator / scope / FFT) - created once
-     *  here and injected down into the panes; shut down on shell dispose. */
-    @Getter
-    private final UIEngines engines;
     /** Built once with the shell: a language, font or GPU change applies in
      *  place, so the content is never rebuilt. */
     @Getter
@@ -131,18 +127,16 @@ public final class MainWindow {
         // thinks the device failed to open.
         SharedCapture.instance();
 
-        this.engines = new UIEngines();
-        shell.addDisposeListener(e -> engines.shutdown());
         // Prime the device catalog off the UI thread - the server's boot order
         // (enumerate first, setup sweep after) on one background thread, so
         // the Preferences dialog opens onto filled combos instead of a driver
         // walk.  The backend setup sweep is started by the priming thread when
         // its enumeration is done (see DeviceCatalog.primeInBackground).
-        engines.getDeviceCatalog().primeInBackground();
+        Preferences.instance().getDeviceCatalog().primeInBackground();
 
         buildMenuBar();
 
-        this.mainTab = new MainTab(shell, engines);
+        this.mainTab = new MainTab(shell);
         // applyMinimumShellSize MUST run before any saved collapse state is
         // restored: a collapsed pane sets SashForm weights to {N, 28}, and
         // SashForm.computeSize balloons the natural size to whatever total

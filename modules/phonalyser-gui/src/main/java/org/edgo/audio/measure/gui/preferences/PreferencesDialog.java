@@ -76,7 +76,7 @@ import org.edgo.audio.measure.gui.common.RemoteBackendUi;
 import org.edgo.audio.measure.gui.common.ShellIcons;
 import org.edgo.audio.measure.gui.registry.UiRegistry;
 import org.edgo.audio.measure.gui.sound.ServerCards;
-import org.edgo.audio.measure.gui.sound.DeviceCatalog;
+import org.edgo.audio.measure.preferences.DeviceCatalog;
 import org.edgo.audio.measure.gui.widgets.NumericStepField;
 import org.edgo.audio.measure.enums.TabOrientation;
 import org.edgo.audio.measure.gui.i18n.I18n;
@@ -1791,16 +1791,10 @@ public final class PreferencesDialog {
         // (PortAudio) this is the ONLY way a card plugged in since start-up can
         // appear at all.  Backends whose lists are live answer false and the
         // re-population below simply reads the current truth.  Through the
-        // catalog when there is one: its snapshot must fall with the caches it
-        // rides, or the re-population would be served the very list the
-        // operator just distrusted.
-        DeviceCatalog catalog = mainWindow != null
-                ? mainWindow.getEngines().getDeviceCatalog() : null;
-        if (catalog != null) {
-            catalog.drop(edit.getSelectedBackend().carrier());
-        } else {
-            AudioBackend.instance().refreshDeviceLists(edit.getSelectedBackend().carrier());
-        }
+        // catalog: its snapshot must fall with the caches it rides, or the
+        // re-population would be served the very list the operator just
+        // distrusted.
+        Preferences.instance().getDeviceCatalog().drop(edit.getSelectedBackend().carrier());
         captureUiToActive();
         populateBackendCombo();
         if (!applyBackendSelection(edit.getSelectedBackend())) {
@@ -1874,10 +1868,8 @@ public final class PreferencesDialog {
         // The scan below still runs and re-fills with formats and cards; with
         // the snapshot present it reuses those lists instead of walking the
         // drivers again, so the completion only adds detail.
-        DeviceCatalog catalog = mainWindow != null
-                ? mainWindow.getEngines().getDeviceCatalog() : null;
-        DeviceCatalog.DeviceLists cached = catalog != null
-                ? catalog.lists(shown.carrier()) : null;
+        DeviceCatalog catalog = Preferences.instance().getDeviceCatalog();
+        DeviceCatalog.DeviceLists cached = catalog.lists(shown.carrier());
         if (cached != null) {
             fillDeviceCombos(shown, cached);
         }

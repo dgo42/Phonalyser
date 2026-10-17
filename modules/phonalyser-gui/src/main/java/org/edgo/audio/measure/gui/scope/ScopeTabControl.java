@@ -198,9 +198,6 @@ public final class ScopeTabControl extends AbstractTabControl<ScopePane> {
      *  "Reconstructed beat" checkbox enabled only in DUAL_TONE mode.  Bound
      *  only on the live pane; {@code null} on the screenshot variant. */
     private Consumer<GenChangeCause>     genChangeListener;
-    /** {@link Events#SCOPE_SINGLE_DISARMED} subscriber - pops the trigger Start
-     *  toggle back out when a SINGLE shot fires.  Live pane only. */
-    private Consumer<Void>               singleDisarmedListener;
 
     public ScopeTabControl(Composite parent, ScopeView view, ScopeController controller,
                            boolean liveCapture, ScopePane owner) {
@@ -299,25 +296,22 @@ public final class ScopeTabControl extends AbstractTabControl<ScopePane> {
                 });
             };
             MessageBus.instance().subscribe(Events.GENERATOR_SIGNAL_CHANGED, genChangeListener);
-            singleDisarmedListener = ignored -> {
-                if (!isDisposed()) GuiUtil.marshal(() -> {
-                    if (triggerStartBtn != null && !triggerStartBtn.isDisposed()) {
-                        triggerStartBtn.setSelection(false);
-                    }
-                });
-            };
-            MessageBus.instance().subscribe(Events.SCOPE_SINGLE_DISARMED, singleDisarmedListener);
         }
         addDisposeListener(e -> {
             if (genChangeListener != null) {
                 MessageBus.instance().unsubscribe(Events.GENERATOR_SIGNAL_CHANGED, genChangeListener);
             }
-            if (singleDisarmedListener != null) {
-                MessageBus.instance().unsubscribe(Events.SCOPE_SINGLE_DISARMED, singleDisarmedListener);
-            }
         });
 
         wireHelpAnchors();
+    }
+
+    /** The owner's call when a SINGLE shot disarmed itself: pops the trigger
+     *  Start toggle back out.  UI thread. */
+    void onSingleDisarmed() {
+        if (triggerStartBtn != null && !triggerStartBtn.isDisposed()) {
+            triggerStartBtn.setSelection(false);
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -893,7 +887,7 @@ public final class ScopeTabControl extends AbstractTabControl<ScopePane> {
         triggerStartBtn.setLayoutData(new RowData(SQUARE_BUTTON, SQUARE_BUTTON));
         triggerStartBtn.setEnabled(modeSingle.getSelection());
         // Toggle: pressed = a single shot is armed (display frozen, waiting);
-        // the view pops it back out via SCOPE_SINGLE_DISARMED when the trigger
+        // the view pops it back out through onSingleDisarmed when the trigger
         // fires.  Un-pressing it manually cancels the pending shot.
         triggerStartBtn.addListener(SWT.Selection,
                 e -> view.setSingleArmed(triggerStartBtn.getSelection()));

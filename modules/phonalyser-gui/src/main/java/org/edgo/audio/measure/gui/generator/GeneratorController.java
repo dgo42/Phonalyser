@@ -129,8 +129,12 @@ public final class GeneratorController {
      *  does not read the gap between the command and the first pushed state as
      *  an end-of-file.  Remote path only. */
     private volatile boolean       remoteFileSeenPlaying;
+    /** The pane that owns this controller - told, on the UI thread, when a
+     *  file session ended and when an upload starts and ends. */
+    private final GeneratorPane pane;
 
-    public GeneratorController() {
+    public GeneratorController(GeneratorPane pane) {
+        this.pane = pane;
         bindPreferences(Preferences.instance());
         bindBus();
     }
@@ -162,6 +166,11 @@ public final class GeneratorController {
         onPref(prefs.genSnapToFftBinProperty(), v -> {
             lane.reapplySnap();
             publishSignalChanged();
+        });
+        // FFT length changed: slide the running tone(s) onto the new bin
+        // grid without the user having to toggle the snap checkbox.
+        onPref(prefs.fftLengthProperty(), v -> {
+            if (prefs.isGenSnapToFftBin()) lane.reapplySnap();
         });
         onPref(prefs.genSignalFormProperty(), f -> {
             // The run is derived HERE, from the settings as they now stand, so a
@@ -322,12 +331,6 @@ public final class GeneratorController {
             lane.reapplySnap();
         };
         onBus(Events.GENERATOR_FREQ_TRIM_RESET, freqTrimReset);
-        // FFT length changed: slide the running tone(s) onto the new bin
-        // grid without the user having to toggle the snap checkbox.
-        Consumer<Void> fftLength = ignored -> {
-            if (Preferences.instance().isGenSnapToFftBin()) lane.reapplySnap();
-        };
-        onBus(Events.FFT_LENGTH_CHANGED, fftLength);
         // The FreqResp sweep needs the DAC exclusively - stop both engines.
         Consumer<Void> freqRespStarted = ignored -> stopEngines();
         onBus(Events.FREQRESP_MEASUREMENT_STARTED, freqRespStarted);
@@ -779,7 +782,7 @@ public final class GeneratorController {
             // vanished after the wait it was meant to explain, leaving the operator
             // with five seconds of nothing.  It comes down the moment playback is
             // commanded and never covers playback itself.
-            MessageBus.instance().publish(Events.FILE_UPLOAD_STARTED);
+            GuiUtil.marshal(() -> pane.openUploadNotice());
             try {
                 // gen.playFile names a lane that must already exist, and only the
                 // TONE's start ever opened one - so a file played without first
@@ -822,7 +825,7 @@ public final class GeneratorController {
                 // Every exit of the block above takes the notice down: a refused
                 // open, a read that failed, a stop while reading, a refused
                 // upload, and the success that follows it.
-                MessageBus.instance().publish(Events.FILE_UPLOAD_FINISHED);
+                GuiUtil.marshal(() -> pane.closeUploadNotice());
             }
             // OUTSIDE the notice: the file is playing now, and a "being uploaded"
             // shell must not sit over it for the length of the track.
@@ -854,7 +857,7 @@ public final class GeneratorController {
             // engines.  Without it a remote failure had nowhere to surface: the
             // pane's one-shot check after startFilePlayback races this thread and
             // usually wins, and the error died in a log line.
-            publishFilePlayStopped();
+            notifyFilePlayStopped();
         }
     }
 
@@ -864,10 +867,10 @@ public final class GeneratorController {
      * <p>A file session can fail two ways and both must reach a dialog exactly
      * once: synchronously, before {@code startFilePlayback} returns (a missing
      * file), or asynchronously on the play thread minutes later (a bench that
-     * refused, a device that died).  The pane checks after the call AND on
-     * {@link Events#FILE_PLAY_STOPPED}; whichever arrives first takes the
-     * message, and the other finds nothing - so a re-sync cannot repeat a dialog
-     * the operator has already dismissed.
+     * refused, a device that died).  The pane checks after the call AND when
+     * the session ended ({@link GeneratorPane#onFilePlayStopped}); whichever
+     * comes first takes the message, and the other finds nothing - so a re-sync
+     * cannot repeat a dialog the operator has already dismissed.
      */
     public synchronized String takeFilePlayErrorForReport() {
         String claimed = filePlayError;
@@ -875,22 +878,16 @@ public final class GeneratorController {
         return claimed;
     }
 
-    /** Publishes {@link Events#FILE_PLAY_STOPPED} for a session that is ending,
-     *  from the thread that ran it - the one signal the pane resets its LED and
-     *  reports a late failure on.  Guarded on the CURRENT thread still being the
-     *  play thread so a join-timed-out session finishing late cannot notify for
-     *  a session started after it. */
-    private void publishFilePlayStopped() {
+    /** Tells the pane, on the UI thread, that a session is ending - from the
+     *  thread that ran it, the one moment the pane resets its LED and reports
+     *  a late failure.  Guarded on the CURRENT thread still being the play
+     *  thread so a join-timed-out session finishing late cannot notify for a
+     *  session started after it. */
+    private void notifyFilePlayStopped() {
         if (Thread.currentThread() != playThread) {
             return;
         }
-        // Published straight from the play thread, which is the contract
-        // Events.FILE_PLAY_STOPPED states: "subscribers must marshal to the UI
-        // thread if they touch widgets" - and the pane's listener does.
-        // Marshalling HERE instead would hand the event to GuiUtil, which is a
-        // no-op until MainWindow has published its shell: a failure raised before
-        // the window exists, or in any headless run, was simply discarded.
-        MessageBus.instance().publish(Events.FILE_PLAY_STOPPED);
+        GuiUtil.marshal(() -> pane.onFilePlayStopped());
     }
 
     /** Polls the bench's pushed file state until it stops playing - the remote
@@ -1115,7 +1112,7 @@ public final class GeneratorController {
             if (Thread.currentThread() == playThread) {
                 filePlayRunning = false;
             }
-            publishFilePlayStopped();
+            notifyFilePlayStopped();
         }
     }
 

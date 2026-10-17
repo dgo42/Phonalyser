@@ -41,6 +41,8 @@ import org.eclipse.swt.widgets.FileDialog;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
+import org.edgo.audio.measure.bind.Property;
+import org.edgo.audio.measure.dsp.FftBinSnap;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.enums.OutputChannels;
@@ -50,8 +52,6 @@ import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.AbstractPane;
 import org.edgo.audio.measure.gui.common.CalibrationDialog;
 import org.edgo.audio.measure.gui.common.Dialogs;
-import org.edgo.audio.measure.gui.common.GuiUtil;
-import org.edgo.audio.measure.dsp.FftBinSnap;
 import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.i18n.I18n;
@@ -60,7 +60,6 @@ import org.edgo.audio.measure.gui.widgets.PaneTitle;
 import org.edgo.audio.measure.gui.widgets.SignalFormCombo;
 import org.edgo.audio.measure.gui.widgets.UnitFamily;
 import org.edgo.audio.measure.gui.widgets.UnitValue;
-import org.edgo.audio.measure.bind.Property;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.sound.DeviceCalibration;
@@ -177,10 +176,7 @@ public final class GeneratorPane extends AbstractPane {
     private final Image           calibrateDacIcon;
     private final Button          playBtn;
 
-    /** App-lifetime engine controller, injected by the host (lives in
-     *  {@code UIEngines}) - survives the in-place content rebuilds, so a
-     *  freshly built pane may find the tone already playing and only has
-     *  to sync its visuals. */
+    /** The engine controller; shut down in the pane's dispose listener. */
     private final GeneratorController controller;
 
     /** "ON AIR" banner LED + label at the top right of the pane.
@@ -196,19 +192,6 @@ public final class GeneratorPane extends AbstractPane {
     private Font    onAirFont;
     private boolean onAirActive;
     private boolean onAirBlinkOn;
-    /** Handler for {@link Events#FFT_LENGTH_CHANGED}.  Held as a field
-     *  so the dispose listener can unsubscribe it from the bus - without
-     *  that, the bus would keep this pane alive forever. */
-    private Consumer<Void> fftLengthListener;
-    /** Handler for {@link Events#FILE_PLAY_STOPPED}.  Fires on the
-     *  play thread when the file player ends (user stop, EOF without
-     *  loop, or playback error) - resets the play-from LED on the UI
-     *  thread.  Held as a field so the dispose listener can unsubscribe. */
-    private Consumer<Void> filePlayStoppedListener;
-    /** Handlers for {@link Events#FILE_UPLOAD_STARTED} / {@link
-     *  Events#FILE_UPLOAD_FINISHED} - the "uploading to the bench" notice. */
-    private Consumer<Void> uploadStartedListener;
-    private Consumer<Void> uploadFinishedListener;
     /** The notice shell while an upload is in flight, else null. */
     private Shell uploadShell;
     /** Handler for {@link Events#FREQRESP_MEASUREMENT_STARTED} - stops
@@ -231,9 +214,9 @@ public final class GeneratorPane extends AbstractPane {
      *  can restore it on expand. */
     private int        preCollapseWidthPx;
 
-    public GeneratorPane(Composite parent, GeneratorController controller) {
+    public GeneratorPane(Composite parent) {
         super(parent);
-        this.controller = controller;
+        this.controller = new GeneratorController(this);
         // Seed the tracked pane width from prefs BEFORE the host
         // SashForm's first layout pass - the controlListener that picks
         // up paneWidthPx fires immediately after construction and we
@@ -812,29 +795,6 @@ public final class GeneratorPane extends AbstractPane {
         playFromBtn.setLayoutData(playFromGd);
         // Its tooltip follows the playback state - see showPlayFromToolTip.
         playFromBtn.addListener(SWT.Selection, e -> togglePlayFrom());
-        // Auto-reset the LED when playback ends naturally (EOF without
-        // loop) or fails on the play thread.  The bus delivers
-        // FILE_PLAY_STOPPED on the play thread; marshal to the UI thread
-        // before touching widgets.  The visuals follow the controller state:
-        // the stop of a restarted session lands after the new one is lit.
-        filePlayStoppedListener = ignored -> GuiUtil.marshal(() -> {
-            syncPlayButtonVisuals();
-            syncFilePlayVisuals();
-            // A file session can fail LONG after the click - a bench that refused
-            // the upload, a device that died mid-file.  This is the only moment
-            // such a failure can be reported, and the claim is once, so the
-            // one-shot check in togglePlayFrom and this cannot both raise it.
-            reportFilePlayFailure();
-        });
-        // The upload to a network bench can take minutes on a slow link; without
-        // a notice the operator has a dead-looking window and no idea anything
-        // is happening.  Non-modal on purpose: Stop must stay clickable.
-        uploadStartedListener  = ignored -> GuiUtil.marshal(this::openUploadNotice);
-        uploadFinishedListener = ignored -> GuiUtil.marshal(this::closeUploadNotice);
-        MessageBus bus = MessageBus.instance();
-        bus.subscribe(Events.FILE_PLAY_STOPPED, filePlayStoppedListener);
-        bus.subscribe(Events.FILE_UPLOAD_STARTED,  uploadStartedListener);
-        bus.subscribe(Events.FILE_UPLOAD_FINISHED, uploadFinishedListener);
 
         // --------------------------------------------------------------- Play
         // Main play button sits on its own row, indented to the right
@@ -893,15 +853,12 @@ public final class GeneratorPane extends AbstractPane {
 
         // FFT length changes re-snap the running tone in the controller;
         // the pane only follows with its bracket labels (they show the
-        // bin-snapped frequency).  Stored as a field so the dispose
-        // listener below can unsubscribe and let the bus release its
-        // reference to this pane.
-        fftLengthListener = ignored -> {
-            if (group.isDisposed()) return;
+        // bin-snapped frequency).
+        Bindings.onChange(group, prefs.fftLengthProperty(), v -> {
             updateFreqLabel();
             updateDualToneFreqLabels();
-        };
-        bus.subscribe(Events.FFT_LENGTH_CHANGED, fftLengthListener);
+        });
+        MessageBus bus = MessageBus.instance();
         freqRespStartedListener = ignored -> onFreqRespMeasurementStarted();
         freqRespStoppedListener = ignored -> onFreqRespMeasurementStopped();
         bus.subscribe(Events.FREQRESP_MEASUREMENT_STARTED, freqRespStartedListener);
@@ -932,15 +889,10 @@ public final class GeneratorPane extends AbstractPane {
         };
         bus.subscribe(Events.AUDIO_FORMAT_CHANGED, audioFormatListener);
 
-        // Dispose-time: detach the pane's own bus subscriptions and tear
-        // down the icon cache owned by this pane's display.  The injected
-        // controller deliberately keeps running past the pane's dispose; it
-        // is shut down by UIEngines at application exit.
+        // Dispose-time: detach the pane's own bus subscriptions, tear down
+        // the icon cache owned by this pane's display, and stop the
+        // controller this pane owns.
         group.addDisposeListener(e -> {
-            bus.unsubscribe(Events.FFT_LENGTH_CHANGED,            fftLengthListener);
-            bus.unsubscribe(Events.FILE_PLAY_STOPPED,             filePlayStoppedListener);
-            bus.unsubscribe(Events.FILE_UPLOAD_STARTED,          uploadStartedListener);
-            bus.unsubscribe(Events.FILE_UPLOAD_FINISHED,         uploadFinishedListener);
             closeUploadNotice();
             bus.unsubscribe(Events.FREQRESP_MEASUREMENT_STARTED,  freqRespStartedListener);
             bus.unsubscribe(Events.FREQRESP_MEASUREMENT_STOPPED,  freqRespStoppedListener);
@@ -949,6 +901,7 @@ public final class GeneratorPane extends AbstractPane {
             if (onAirRedDimColor != null && !onAirRedDimColor.isDisposed()) onAirRedDimColor.dispose();
             if (onAirGreyColor   != null && !onAirGreyColor.isDisposed())   onAirGreyColor.dispose();
             if (onAirFont        != null && !onAirFont.isDisposed())        onAirFont.dispose();
+            controller.shutdown();
         });
 
         // Initial label render - picks up the freq / duty values just
@@ -959,9 +912,7 @@ public final class GeneratorPane extends AbstractPane {
         updateDitherLabel();
         updateDualToneFreqLabels();
 
-        // The injected controller survives content rebuilds - when this
-        // pane is a rebuilt instance the tone / file playback may already
-        // be running; light the Play LEDs + ON-AIR banner accordingly.
+        // Initial Play LEDs + ON-AIR banner from the controller state.
         syncPlayButtonVisuals();
         syncFilePlayVisuals();
 
@@ -1750,7 +1701,7 @@ public final class GeneratorPane extends AbstractPane {
         if (!controller.isFilePlaying()) {
             // A failure that was already certain before the call returned - a
             // missing file, a refused open.  A failure that lands LATER arrives
-            // through FILE_PLAY_STOPPED instead; the claim below makes sure only
+            // through onFilePlayStopped instead; the claim below makes sure only
             // one of the two ever speaks.
             if (!reportFilePlayFailure()) {
                 Dialogs.error(group.getShell(),
@@ -1760,15 +1711,32 @@ public final class GeneratorPane extends AbstractPane {
         }
     }
 
+    /** The controller's call when its file session ended - user stop, end of
+     *  a file without loop, or a failure on the play thread.  The visuals
+     *  follow the controller state: the stop of a restarted session lands
+     *  after the new one is lit.  UI thread. */
+    void onFilePlayStopped() {
+        syncPlayButtonVisuals();
+        syncFilePlayVisuals();
+        // A file session can fail LONG after the click - a bench that refused
+        // the upload, a device that died mid-file.  This is the only moment
+        // such a failure can be reported, and the claim is once, so the
+        // one-shot check in togglePlayFrom and this cannot both raise it.
+        reportFilePlayFailure();
+    }
+
     /**
      * Puts up the "uploading to the bench" notice - a plain text shell, no
      * progress and no cancel: the pane's own Stop already aborts the session,
-     * and a second control for it would be one more thing to get wrong.
+     * and a second control for it would be one more thing to get wrong.  The
+     * upload to a network bench can take minutes on a slow link; without the
+     * notice the operator has a dead-looking window.  The controller's call,
+     * on the UI thread.
      *
      * <p>NOT modal.  A modal shell would block the Stop the operator needs while
      * a slow upload is running, which is the opposite of helping.
      */
-    private void openUploadNotice() {
+    void openUploadNotice() {
         if (group.isDisposed() || (uploadShell != null && !uploadShell.isDisposed())) {
             return;
         }
@@ -1790,9 +1758,10 @@ public final class GeneratorPane extends AbstractPane {
         uploadShell = s;
     }
 
-    /** Takes the notice down.  Idempotent and disposal-guarded: it is called
-     *  from the finished event, and again from the pane's own teardown. */
-    private void closeUploadNotice() {
+    /** Takes the notice down.  Idempotent and disposal-guarded: the
+     *  controller calls it when the upload ended, and the pane's own teardown
+     *  calls it again. */
+    void closeUploadNotice() {
         Shell s = uploadShell;
         uploadShell = null;
         if (s != null && !s.isDisposed()) {

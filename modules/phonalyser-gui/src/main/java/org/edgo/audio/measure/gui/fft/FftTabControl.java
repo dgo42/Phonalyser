@@ -165,10 +165,6 @@ public final class FftTabControl extends AbstractCalibrationTabControl<FftPane> 
      *  analyser lifecycle); constructor-injected by {@link FftPane}. */
     private final FftController controller;
 
-    /** The offscreen screenshot copy's control: it neither publishes nor
-     *  subscribes on the bus. */
-    private final boolean offScreen;
-
     // Tab-header tile rendering: the shared TileTabFolder (held by
     // AbstractTabControl as toolbarTabs) owns the renderer, spacer images,
     // collapse, hover tooltips and tile painting; this control only feeds it
@@ -216,7 +212,6 @@ public final class FftTabControl extends AbstractCalibrationTabControl<FftPane> 
                 CALIBRATION_KEY_PREFIX, true);
         this.view = view;
         this.controller = controller;
-        this.offScreen = offScreen;
         int lengthCap = Runtime.getRuntime().maxMemory() < SMALL_HEAP_BYTES
                 ? SMALL_HEAP_MAX_FFT_LENGTH : Integer.MAX_VALUE;
         int offered = 0;
@@ -389,14 +384,6 @@ public final class FftTabControl extends AbstractCalibrationTabControl<FftPane> 
         // resetStatistics is driven by the view subscribing to the same pref.
         Bindings.onChange(toolbarTabs, prefs.fftLengthProperty(),
                 v -> toolbarTabs.refreshTab(TAB_FFT_SETTINGS));
-        // Generator's bin snap is anchored to fftLength via sampleRate /
-        // fftLength - broadcast the change so the generator pane can re-snap its
-        // running tone onto a fresh bin.  The new length is already in
-        // Preferences; subscribers read it from there.
-        if (!offScreen) {
-            Bindings.onChange(toolbarTabs, prefs.fftLengthProperty(),
-                    v -> MessageBus.instance().publish(Events.FFT_LENGTH_CHANGED));
-        }
 
         addLabel(g, "fft.settings.window");
         windowCombo = new Combo(g, SWT.READ_ONLY);

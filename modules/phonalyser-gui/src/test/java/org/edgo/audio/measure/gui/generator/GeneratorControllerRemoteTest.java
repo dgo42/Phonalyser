@@ -196,7 +196,7 @@ class GeneratorControllerRemoteTest {
     @Test
     void everySettingReachesTheServerAndTheAnalyzersGridGoesLast() {
         Preferences.instance().setGenSignalForm(GenSignalForm.SINE);
-        controller = new GeneratorController();
+        controller = new GeneratorController(null);
 
         controller.start();
 
@@ -241,7 +241,7 @@ class GeneratorControllerRemoteTest {
     void switchingIntoADualToneWhilePlayingRestartsOnTheNewWaveform() {
         Preferences prefs = Preferences.instance();
         prefs.setGenSignalForm(GenSignalForm.SINE);
-        controller = new GeneratorController();
+        controller = new GeneratorController(null);
         controller.start();
         assertTrue(controller.isRunning());
         int mark = server.commands().size();
@@ -264,7 +264,7 @@ class GeneratorControllerRemoteTest {
     void switchingOutOfADualToneWhilePlayingRestartsOnTheSingleTone() {
         Preferences prefs = Preferences.instance();
         prefs.setGenSignalForm(GenSignalForm.DUAL_TONE);
-        controller = new GeneratorController();
+        controller = new GeneratorController(null);
         controller.start();
         assertTrue(controller.isRunning());
         int mark = server.commands().size();
@@ -295,7 +295,7 @@ class GeneratorControllerRemoteTest {
     @Test
     void aPilotRequestOverTheBusStopsAtTheLaneAndAnnouncesNothing() {
         Preferences.instance().setGenSignalForm(GenSignalForm.SINE);
-        controller = new GeneratorController();
+        controller = new GeneratorController(null);
         controller.start();
         // No stub reset: a reset also parks the stub's tone in IDLE, and an
         // announcement, were there one, is made only while the tone plays.
@@ -325,7 +325,7 @@ class GeneratorControllerRemoteTest {
         Preferences prefs = Preferences.instance();
         prefs.setGenSignalForm(GenSignalForm.SINE_COMP);
         prefs.setGenDpd(GenSignalForm.SINE_COMP, writeHarmonicDpd().toString());
-        controller = new GeneratorController();
+        controller = new GeneratorController(null);
 
         controller.start();
 
@@ -343,7 +343,7 @@ class GeneratorControllerRemoteTest {
         Preferences prefs = Preferences.instance();
         prefs.setGenSignalForm(GenSignalForm.SINE_COMP);
         prefs.setGenDpd(GenSignalForm.SINE_COMP, "");
-        controller = new GeneratorController();
+        controller = new GeneratorController(null);
 
         controller.start();
 
@@ -371,7 +371,7 @@ class GeneratorControllerRemoteTest {
         prefs.setGenSignalForm(GenSignalForm.SINE_COMP);
         String missing = tempDir.resolve("moved-away.dpd").toString();
         prefs.setGenDpd(GenSignalForm.SINE_COMP, missing);
-        controller = new GeneratorController();
+        controller = new GeneratorController(null);
 
         controller.start();
 
@@ -399,7 +399,7 @@ class GeneratorControllerRemoteTest {
         Preferences.instance().setGenSignalForm(GenSignalForm.SINE);
         server.setRefuseOpen(true);
         remoteUi.setLockedBy(HOLDER);
-        controller = new GeneratorController();
+        controller = new GeneratorController(null);
 
         controller.start();
 
@@ -419,7 +419,7 @@ class GeneratorControllerRemoteTest {
     void aRefusedDacWithNoHolderNamedStillSaysItIsInUse() {
         Preferences.instance().setGenSignalForm(GenSignalForm.SINE);
         server.setRefuseOpen(true);
-        controller = new GeneratorController();
+        controller = new GeneratorController(null);
 
         controller.start();
 
@@ -434,7 +434,7 @@ class GeneratorControllerRemoteTest {
         Preferences prefs = Preferences.instance();
         prefs.setGenSignalForm(GenSignalForm.LINEAR_SWEEP);
         prefs.setGenSweepDurationSec(SWEEP_SECONDS);
-        controller = new GeneratorController();
+        controller = new GeneratorController(null);
 
         controller.start();
 
@@ -447,7 +447,7 @@ class GeneratorControllerRemoteTest {
     @Test
     void aServerThatStoppedByItselfCanBeStartedAgain() {
         Preferences.instance().setGenSignalForm(GenSignalForm.SINE);
-        controller = new GeneratorController();
+        controller = new GeneratorController(null);
         controller.start();
         assertTrue(controller.isRunning());
 
@@ -466,7 +466,7 @@ class GeneratorControllerRemoteTest {
     @Test
     void stoppingEndsTheToneBeforeItGivesTheLaneBack() {
         Preferences.instance().setGenSignalForm(GenSignalForm.SINE);
-        controller = new GeneratorController();
+        controller = new GeneratorController(null);
         controller.start();
 
         controller.stop();
@@ -488,7 +488,7 @@ class GeneratorControllerRemoteTest {
         // The bench bug: only the TONE's start ever opened a
         // generator session, so playing a file first was refused before a byte
         // left this machine - no upload, no server activity, no dialog.
-        controller = new GeneratorController();
+        controller = new GeneratorController(null);
         server.setFileState(new RemoteGenerator.FileState(true, false));
         assertFalse(server.isGeneratorOpen(), "no tone was started, so no lane is open");
 
@@ -509,7 +509,7 @@ class GeneratorControllerRemoteTest {
         // releases the remote session), so the file path must re-take it - the
         // invariant is not "opened once" but "open at the moment gen.playFile
         // is sent", which is the thing the bench refused on.
-        controller = new GeneratorController();
+        controller = new GeneratorController(null);
         server.setFileState(new RemoteGenerator.FileState(true, false));
         controller.start();                       // a tone is playing on the lane
 
@@ -525,7 +525,7 @@ class GeneratorControllerRemoteTest {
 
     @Test
     void aFileIsUploadedToTheServerInsteadOfBeingRefused() throws IOException {
-        controller = new GeneratorController();
+        controller = new GeneratorController(null);
         File file = writePlayableFile();
         server.setFileState(new RemoteGenerator.FileState(true, false));
 
@@ -545,7 +545,7 @@ class GeneratorControllerRemoteTest {
 
     @Test
     void theDeclaredTypeFollowsThePickedFilesExtension() throws IOException {
-        controller = new GeneratorController();
+        controller = new GeneratorController(null);
         server.setFileState(new RemoteGenerator.FileState(true, false));
 
         controller.startFilePlayback(writePlayableFile("clip.flac"), false);
@@ -558,7 +558,7 @@ class GeneratorControllerRemoteTest {
 
     @Test
     void stoppingAFileOnTheServerCommandsTheFarEnd() throws IOException {
-        controller = new GeneratorController();
+        controller = new GeneratorController(null);
         server.setFileState(new RemoteGenerator.FileState(true, false));
         controller.startFilePlayback(writePlayableFile(), false);
         assertTrue(awaitServerCommand("playFile"), "playing on the bench first");
@@ -571,7 +571,7 @@ class GeneratorControllerRemoteTest {
 
     @Test
     void aFileThatRunsOutOnTheServerClearsThePlayingFlag() throws IOException {
-        controller = new GeneratorController();
+        controller = new GeneratorController(null);
         server.setFileState(new RemoteGenerator.FileState(true, false));
         controller.startFilePlayback(writePlayableFile(), false);
         assertTrue(awaitServerCommand("playFile"), "playing on the bench first");
@@ -590,7 +590,7 @@ class GeneratorControllerRemoteTest {
 
     @Test
     void aServerThatRefusesTheFileLeavesTheControllerStoppedAndSaysWhy() throws IOException {
-        controller = new GeneratorController();
+        controller = new GeneratorController(null);
         server.setRefuseFile(new IllegalStateException("the bench's store is full"));
 
         controller.startFilePlayback(writePlayableFile(), false);
@@ -604,32 +604,24 @@ class GeneratorControllerRemoteTest {
     }
 
     @Test
-    void anAsyncFailureIsAnnouncedAndTheMessageIsClaimableExactlyOnce() throws IOException {
-        controller = new GeneratorController();
+    void anAsyncFailureIsClaimableExactlyOnce() throws IOException {
+        controller = new GeneratorController(null);
         server.setRefuseFile(new IllegalStateException("the bench's store is full"));
-        List<Void> stopped = new ArrayList<>();
-        Consumer<Void> listener = stopped::add;
-        MessageBus.instance().subscribe(Events.FILE_PLAY_STOPPED, listener);
-        try {
-            controller.startFilePlayback(writePlayableFile(), false);
 
-            // The failure lands on the play thread, long after the click returned:
-            // FILE_PLAY_STOPPED is the ONLY route by which it can reach a dialog.
-            assertTrue(awaitTrue(() -> !stopped.isEmpty()),
-                    "the remote path announces its end exactly as the local one does");
-            String first = controller.takeFilePlayErrorForReport();
-            assertNotNull(first, "and the message is there to be claimed");
-            assertNull(controller.takeFilePlayErrorForReport(),
-                    "claimed ONCE - a later re-sync must not repeat a dialog the "
-                            + "operator has already dismissed");
-        } finally {
-            MessageBus.instance().unsubscribe(Events.FILE_PLAY_STOPPED, listener);
-        }
+        controller.startFilePlayback(writePlayableFile(), false);
+
+        // The failure lands on the play thread, long after the click returned.
+        assertTrue(awaitStopped(), "the refused session ends");
+        String first = controller.takeFilePlayErrorForReport();
+        assertNotNull(first, "and the message is there to be claimed");
+        assertNull(controller.takeFilePlayErrorForReport(),
+                "claimed ONCE - a later re-sync must not repeat a dialog the "
+                        + "operator has already dismissed");
     }
 
     @Test
     void anOversizeFileIsReportedWithItsSizeAndTheServersLimit() throws IOException {
-        controller = new GeneratorController();
+        controller = new GeneratorController(null);
         server.setRefuseFile(new RemoteGenerator.FileTooLargeException(
                 "too big", OVERSIZE_BYTES, STUBBED_LIMIT_BYTES));
 
@@ -649,7 +641,7 @@ class GeneratorControllerRemoteTest {
     @Test
     void stoppingDuringAnUploadNeverStartsPlayingAndBlocksNothing()
             throws IOException, InterruptedException {
-        controller = new GeneratorController();
+        controller = new GeneratorController(null);
         server.setPlayFileDelayMs(SLOW_UPLOAD_MS);
 
         long startedAt = System.nanoTime();
@@ -676,39 +668,8 @@ class GeneratorControllerRemoteTest {
     }
 
     @Test
-    void theUploadNoticeIsRaisedAndAlwaysTakenDownAgain() throws IOException {
-        controller = new GeneratorController();
-        server.setFileState(new RemoteGenerator.FileState(true, false));
-        List<String> notices = new ArrayList<>();
-        Consumer<Void> up = ignored -> notices.add("started");
-        Consumer<Void> down = ignored -> notices.add("finished");
-        MessageBus.instance().subscribe(Events.FILE_UPLOAD_STARTED, up);
-        MessageBus.instance().subscribe(Events.FILE_UPLOAD_FINISHED, down);
-        try {
-            controller.startFilePlayback(writePlayableFile(), false);
-            assertTrue(awaitTrue(() -> notices.size() >= 2), "both ends announced");
-            assertEquals(List.of("started", "finished"), notices,
-                    "the notice goes up before the transfer and comes down after it");
-
-            // And on the FAILURE path too - a notice that outlives its transfer
-            // is worse than none at all.
-            notices.clear();
-            server.setRefuseFile(new IllegalStateException("the bench's store is full"));
-            controller.stopFilePlayback();
-            controller.startFilePlayback(writePlayableFile(), false);
-
-            assertTrue(awaitTrue(() -> notices.size() >= 2),
-                    "a refused upload still takes its notice down");
-            assertEquals(List.of("started", "finished"), notices);
-        } finally {
-            MessageBus.instance().unsubscribe(Events.FILE_UPLOAD_STARTED, up);
-            MessageBus.instance().unsubscribe(Events.FILE_UPLOAD_FINISHED, down);
-        }
-    }
-
-    @Test
     void togglingLoopMidPlayReachesTheServer() throws IOException {
-        controller = new GeneratorController();
+        controller = new GeneratorController(null);
         server.setFileState(new RemoteGenerator.FileState(true, false));
         controller.startFilePlayback(writePlayableFile(), false);
         assertTrue(awaitServerCommand("playFile"), "playing on the bench first");
@@ -728,69 +689,18 @@ class GeneratorControllerRemoteTest {
     }
 
     @Test
-    void theNoticeCoversTheLaneOpenWaitNotJustTheTransfer() throws Exception {
-        // The bench case: on a LAN the HTTP transfer is a blink, while opening an
-        // exclusive device takes seconds.  A notice that spanned only the put
-        // appeared and vanished AFTER the wait it was meant to explain, so the
-        // operator saw five seconds of nothing.
-        controller = new GeneratorController();
-        server.setFileState(new RemoteGenerator.FileState(true, false));
-        List<String> notices = new ArrayList<>();
-        Consumer<Void> up = ignored -> notices.add("started");
-        Consumer<Void> down = ignored -> notices.add("finished");
-        CountDownLatch open = new CountDownLatch(1);
-        server.setOpenGate(open);
-        MessageBus.instance().subscribe(Events.FILE_UPLOAD_STARTED, up);
-        MessageBus.instance().subscribe(Events.FILE_UPLOAD_FINISHED, down);
-        try {
-            controller.startFilePlayback(writePlayableFile(), false);
-            assertTrue(server.getOpenEntered().await(AWAIT_STOP_MS, TimeUnit.MILLISECONDS),
-                    "the lane open really started");
-
-            // The load-bearing assertion: the notice is ALREADY up while the open
-            // is still blocked, so it covers the wait rather than following it.
-            assertTrue(awaitTrue(() -> notices.contains("started")),
-                    "the notice is on screen during the lane-open wait");
-            assertFalse(notices.contains("finished"),
-                    "and has not come down yet - the open has not returned");
-
-            open.countDown();
-
-            assertTrue(awaitServerCommand("playFile"), "the file is commanded");
-            assertTrue(awaitTrue(() -> notices.contains("finished")),
-                    "and the notice comes down once playback is commanded");
-            assertEquals(List.of("started", "finished"), notices,
-                    "exactly one notice, spanning prepare-and-upload");
-        } finally {
-            MessageBus.instance().unsubscribe(Events.FILE_UPLOAD_STARTED, up);
-            MessageBus.instance().unsubscribe(Events.FILE_UPLOAD_FINISHED, down);
-        }
-    }
-
-    @Test
-    void aRefusedLaneOpenStillTakesTheNoticeDown() throws Exception {
-        // The earliest exit of the new span: the open itself is refused, before
-        // any byte is read.  A notice left up here would sit over a dead session.
-        controller = new GeneratorController();
+    void aRefusedLaneOpenUploadsNothing() throws Exception {
+        // The earliest exit of the session: the open itself is refused, before
+        // any byte is read.
+        controller = new GeneratorController(null);
         server.setRefuseOpen(true);
-        List<String> notices = new ArrayList<>();
-        Consumer<Void> up = ignored -> notices.add("started");
-        Consumer<Void> down = ignored -> notices.add("finished");
-        MessageBus.instance().subscribe(Events.FILE_UPLOAD_STARTED, up);
-        MessageBus.instance().subscribe(Events.FILE_UPLOAD_FINISHED, down);
-        try {
-            controller.startFilePlayback(writePlayableFile(), false);
 
-            assertTrue(awaitTrue(() -> notices.size() >= 2), "both ends announced");
-            assertEquals(List.of("started", "finished"), notices,
-                    "a refused open takes the notice down with it");
-            assertTrue(server.names().contains("openGenerator"), "the open was tried");
-            assertFalse(server.names().contains("playFile"),
-                    "and nothing was uploaded - there was no lane to play on");
-        } finally {
-            MessageBus.instance().unsubscribe(Events.FILE_UPLOAD_STARTED, up);
-            MessageBus.instance().unsubscribe(Events.FILE_UPLOAD_FINISHED, down);
-        }
+        controller.startFilePlayback(writePlayableFile(), false);
+
+        assertTrue(awaitStopped(), "a refused open ends the session");
+        assertTrue(server.names().contains("openGenerator"), "the open was tried");
+        assertFalse(server.names().contains("playFile"),
+                "and nothing was uploaded - there was no lane to play on");
     }
 
     @Test
@@ -800,7 +710,7 @@ class GeneratorControllerRemoteTest {
         // up.  Until this was fixed the tick was dropped at BOTH ends - the value
         // captured at the click won here, and the live push reached a bench that
         // had no file session yet, which ignores it by design.
-        controller = new GeneratorController();
+        controller = new GeneratorController(null);
         Preferences.instance().setGenPlayFromLoop(false);
         server.setFileState(new RemoteGenerator.FileState(true, false));
         CountDownLatch upload = new CountDownLatch(1);
@@ -882,7 +792,7 @@ class GeneratorControllerRemoteTest {
     @Test
     void theWizardsApplyReachesTheServer() throws IOException {
         Preferences.instance().setGenSignalForm(GenSignalForm.SINE);
-        controller = new GeneratorController();
+        controller = new GeneratorController(null);
         controller.start();
         server.reset();
 
@@ -900,7 +810,7 @@ class GeneratorControllerRemoteTest {
     void aDpdFileForThePlayingCompensatedFormIsAnnounced() throws IOException {
         Preferences prefs = Preferences.instance();
         prefs.setGenSignalForm(GenSignalForm.SINE);
-        controller = new GeneratorController();
+        controller = new GeneratorController(null);
         controller.start();
         int[] announced = { 0 };
         Consumer<Object> onChanged = ignored -> announced[0]++;
@@ -925,7 +835,7 @@ class GeneratorControllerRemoteTest {
     void editingTheRightLaneReachesTheServerWhileTheToneIsPlaying() {
         Preferences prefs = Preferences.instance();
         prefs.setGenSignalForm(GenSignalForm.SINE);
-        controller = new GeneratorController();
+        controller = new GeneratorController(null);
         controller.start();
         server.reset();
 

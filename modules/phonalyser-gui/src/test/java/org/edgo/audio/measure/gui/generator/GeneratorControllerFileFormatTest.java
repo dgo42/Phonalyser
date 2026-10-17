@@ -73,7 +73,7 @@ class GeneratorControllerFileFormatTest {
         BackendPrefs output = prefs.current();
         output.setOutputSampleRate(CONFIGURED_RATE);
         output.setOutputBitDepth(CONFIGURED_BITS);
-        controller = new GeneratorController();
+        controller = new GeneratorController(null);
     }
 
     @AfterEach

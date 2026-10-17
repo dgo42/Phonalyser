@@ -134,7 +134,7 @@ class LaneDeathTest {
      */
     @Test
     void anOutputLaneThatDiesClearsTheRunningStateAndRecordsWhy() {
-        controller = new GeneratorController();
+        controller = new GeneratorController(null);
         controller.start();
         assertNull(controller.getLastStartError());
         assertTrue(controller.isRunning(), "the tone is up before the device is pulled");
@@ -167,7 +167,7 @@ class LaneDeathTest {
      */
     @Test
     void aWedgedPlaybackThreadStopsRefusingEveryLaterStart() {
-        controller = new GeneratorController();
+        controller = new GeneratorController(null);
         controller.start();
         assertNull(controller.getLastStartError());
         assertTrue(controller.isRunning(), "the tone is up before the lane wedges");
@@ -194,7 +194,7 @@ class LaneDeathTest {
      */
     @Test
     void anAbandonedLaneCannotSilenceTheToneStartedOverIt() {
-        controller = new GeneratorController();
+        controller = new GeneratorController(null);
         controller.start();
         assertTrue(controller.isRunning());
         int abandoned = stub.openedPlaybacks() - 1;

@@ -183,8 +183,6 @@ public final class ServerGeneratorStub implements AudioDeviceManager, RemoteGene
         fileSession = false;
         uploadGate = null;
         uploadEntered = new CountDownLatch(1);
-        openGate = null;
-        openEntered = new CountDownLatch(1);
     }
 
     /** Waits until {@code name} has reached this bench, so a test that drives a
@@ -229,17 +227,6 @@ public final class ServerGeneratorStub implements AudioDeviceManager, RemoteGene
     public int openGenerator(DeviceRef device, int sampleRate, int bitDepth,
             double ditherBitsLeft, double ditherBitsRight, OutputChannels channels) {
         record("openGenerator", sampleRate, bitDepth, ditherBitsLeft, ditherBitsRight, channels);
-        openEntered.countDown();
-        CountDownLatch gate = openGate;
-        if (gate != null) {
-            // Opening an exclusive device on a real bench takes seconds - the
-            // wait the upload notice has to cover.  A latch, not a sleep.
-            try {
-                gate.await(GATE_TIMEOUT_MS, TimeUnit.MILLISECONDS);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
-        }
         if (refuseOpen) {
             throw new StubRefusal(REFUSED, DeviceFailureReason.DEVICE_IN_USE);
         }
@@ -371,13 +358,6 @@ public final class ServerGeneratorStub implements AudioDeviceManager, RemoteGene
     @Getter
     private volatile String playedFileMimeType;
 
-    /** Held closed by a test that has to act WHILE the lane is being opened -
-     *  the seconds-long wait on a real exclusive device. */
-    @Setter
-    private volatile CountDownLatch openGate;
-    /** Counted down the moment {@code openGenerator} is entered. */
-    @Getter
-    private volatile CountDownLatch openEntered = new CountDownLatch(1);
     /** Held closed by a test that has to act WHILE the upload is in flight - a
      *  latch, not a sleep, so the ordering is deterministic. */
     @Setter
