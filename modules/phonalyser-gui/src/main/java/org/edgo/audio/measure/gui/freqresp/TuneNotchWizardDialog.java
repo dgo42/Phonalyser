@@ -631,6 +631,7 @@ public final class TuneNotchWizardDialog {
         if (out == null || in == null) {
             running = false;
             GuiUtil.marshal(() -> {
+                if (dialog.isDisposed()) return;
                 Dialogs.error(dialog, I18n.t("tuneNotch.title"),
                         I18n.t("freqResp.error.noDevice"));
             });
@@ -742,6 +743,7 @@ public final class TuneNotchWizardDialog {
             // in their language; the technical detail stays in the log above.
             String text = sweepFailureText(ex);
             GuiUtil.marshal(() -> {
+                if (dialog.isDisposed()) return;
                 setStatus(text);
                 Dialogs.error(dialog, I18n.t("tuneNotch.title"), text);
             });
