@@ -276,7 +276,7 @@ class NumericStepModelTest {
 
     @Test
     void fixed_distinctWheelAndArrowSteps() {
-        // Multitone detect threshold: wheel ±10 dB, arrows ±1 dB, 10-140.
+        // Wheel +/-10 dB, arrows +/-1 dB, range 10-140.
         NumericStepModel m = new NumericStepModel(UnitFamily.DECIBEL, 10, 140, 10, 1, 1);
         m.setValue(100);
         m.wheel(+1);

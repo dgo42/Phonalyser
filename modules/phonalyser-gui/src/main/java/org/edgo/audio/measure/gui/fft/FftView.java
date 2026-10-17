@@ -792,10 +792,6 @@ public final class FftView extends AbstractFreqDomainView {
         Bindings.onChange(this, viewPrefs.fftLengthProperty(),           v -> resetStatistics());
         // Coherent ↔ incoherent changes the accumulator semantics - restart.
         Bindings.onChange(this, viewPrefs.fftCoherentAveragingProperty(), v -> resetStatistics());
-        // Multi-tone detect threshold reshapes which peaks count as tones, i.e.
-        // how the coherent average is de-rotated - the accumulated frames used the
-        // old grid, so restart averaging when it changes.
-        Bindings.onChange(this, viewPrefs.fftStrongToneRelDbProperty(),   v -> resetStatistics());
         // ADC re-calibration rescales every measured voltage; DAC re-calibration
         // changes the generated (loopback) signal level - either invalidates the
         // accumulated spectrum, so restart averaging on a calibration change of

@@ -503,12 +503,6 @@ public final class Preferences {
     private final Property<Boolean> fftDistMaxEnabled    = bound(false);
     private final Property<Integer> fftThdMaxHarmonic    = bound(9);
     private final Property<Integer> fftCalcMaxHarmonic   = bound(9);
-    /** A spectral peak counts as a separate TONE (-> multi-tone averaging path)
-     *  only if it is within this many dB of the strongest peak.  A clean tone's
-     *  harmonics sit far below and are excluded, so a THD/cal signal stays on
-     *  the single-reference phase-lock path; real dual-tone / IMD partners are
-     *  comparable in level and survive. */
-    private final Property<Double>  fftStrongToneRelDb   = bound(100.0);
     /** Level of the two pilot lines the pilot-tone phase alignment puts on
      *  the generator, dBV.  Low enough to stay out of every product that
      *  matters, high enough to stand well clear of the floor around them. */
@@ -984,7 +978,6 @@ public final class Preferences {
         c.useGpuAcceleration.set(useGpuAcceleration.get());
         c.uiFontNormal.set(uiFontNormal.get());
         c.uiFontBold.set(uiFontBold.get());
-        c.fftStrongToneRelDb.set(fftStrongToneRelDb.get());
         c.fftPilotLevelDbv.set(fftPilotLevelDbv.get());
         c.fftPilotMarginDb.set(fftPilotMarginDb.get());
         c.freqRespNyquistFraction.set(freqRespNyquistFraction.get());
@@ -1085,7 +1078,6 @@ public final class Preferences {
         setUseGpuAcceleration(edit.useGpuAcceleration.get());
         setUiFontNormal(edit.uiFontNormal.get());
         setUiFontBold(edit.uiFontBold.get());
-        setFftStrongToneRelDb(edit.fftStrongToneRelDb.get());
         setFftPilotLevelDbv(edit.fftPilotLevelDbv.get());
         setFftPilotMarginDb(edit.fftPilotMarginDb.get());
         setFreqRespCompareSmoothWindow(edit.freqRespCompareSmoothWindow.get());
@@ -1458,10 +1450,6 @@ public final class Preferences {
     public int getFftCalcMaxHarmonic()         { return fftCalcMaxHarmonic.get(); }
     public void setFftCalcMaxHarmonic(int v)   { fftCalcMaxHarmonic.set(v); }
     public Property<Integer> fftCalcMaxHarmonicProperty() { return fftCalcMaxHarmonic; }
-
-    public double getFftStrongToneRelDb()      { return fftStrongToneRelDb.get(); }
-    public void setFftStrongToneRelDb(double v) { fftStrongToneRelDb.set(v); }
-    public Property<Double> fftStrongToneRelDbProperty() { return fftStrongToneRelDb; }
 
     public double getFftPilotLevelDbv()        { return fftPilotLevelDbv.get(); }
     public void setFftPilotLevelDbv(double v)  { fftPilotLevelDbv.set(v); }
@@ -2358,7 +2346,6 @@ public final class Preferences {
         root.put("fftDistMaxEnabled",         fftDistMaxEnabled.get());
         root.put("fftThdMaxHarmonic",         fftThdMaxHarmonic.get());
         root.put("fftCalcMaxHarmonic",        fftCalcMaxHarmonic.get());
-        root.put("fftStrongToneRelDb",        fftStrongToneRelDb.get());
         root.put("fftPilotLevelDbv",          fftPilotLevelDbv.get());
         root.put("fftPilotMarginDb",          fftPilotMarginDb.get());
         root.put("fftManualFundVrms",         fftManualFundVrms.get());
@@ -2753,7 +2740,6 @@ public final class Preferences {
         if (root.get("fftDistMaxEnabled")         instanceof Boolean b) fftDistMaxEnabled.set(b);
         if (root.get("fftThdMaxHarmonic")         instanceof Number  n) fftThdMaxHarmonic.set(n.intValue());
         if (root.get("fftCalcMaxHarmonic")        instanceof Number  n) fftCalcMaxHarmonic.set(n.intValue());
-        if (root.get("fftStrongToneRelDb")        instanceof Number  n) fftStrongToneRelDb.set(n.doubleValue());
         if (root.get("fftPilotLevelDbv")          instanceof Number  n) fftPilotLevelDbv.set(n.doubleValue());
         if (root.get("fftPilotMarginDb")          instanceof Number  n) fftPilotMarginDb.set(n.doubleValue());
         if (root.get("fftManualFundVrms")         instanceof Number  n) fftManualFundVrms.set(n.doubleValue());

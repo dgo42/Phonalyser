@@ -183,10 +183,6 @@ public final class PreferencesDialog {
      *  a taller state scrolls inside the Audio tab's own V-scroll (see
      *  {@link #audioScroll}) instead of growing the window. */
     private static final int    SHELL_OUTER_HEIGHT_PX = 480;
-    /** Multi-tone detect threshold (dB): wheel ±10 dB, arrows ±1 dB. */
-    private static final double STRONG_TONE_MIN_DB   = 10;
-    private static final double STRONG_TONE_MAX_DB   = 140;
-    private static final double STRONG_TONE_WHEEL_DB = 10;
     /** Pilot-line level (dBV): wheel ±10 dB, arrows ±1 dB.  The range runs
      *  from lines far under any converter's floor to lines loud enough to
      *  start mixing into the measured products. */
@@ -666,18 +662,6 @@ public final class PreferencesDialog {
         fftDotDiameterSel.setLayoutData(comboData());
         fftDotDiameterSel.setToolTipText(I18n.t("preferences.fft.dotDiameter.tooltip"));
         Bindings.stepFieldInt(fftDotDiameterSel, edit.fftHarmonicDotDiameterProperty());
-
-        // Multi-tone detect threshold (dB below the strongest peak): for
-        // cross-cycle coherent averaging a spectral peak is treated as a separate
-        // tone only if within this many dB of the strongest.  Lower it so a
-        // tone's harmonics / IMD products aren't taken as independent tones
-        // (which would route the average onto the per-tone multi-tone path).
-        gridLabel(fftTab,I18n.t("preferences.fft.strongToneRelDb"));
-        NumericStepField fftStrongToneRelDbField = new NumericStepField(fftTab, UnitFamily.DECIBEL,
-                STRONG_TONE_MIN_DB, STRONG_TONE_MAX_DB, STRONG_TONE_WHEEL_DB, 1, 1, 90);
-        fftStrongToneRelDbField.setLayoutData(comboData());
-        fftStrongToneRelDbField.setToolTipText(I18n.t("preferences.fft.strongToneRelDb.tooltip"));
-        Bindings.stepField(fftStrongToneRelDbField, edit.fftStrongToneRelDbProperty());
 
         // Pilot-tone phase alignment: the level of the two pilot lines and the
         // margin a line must hold over its local floor to count as present.
