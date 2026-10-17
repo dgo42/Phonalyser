@@ -112,10 +112,6 @@ public final class NetServerUi implements RemoteBackendUi, NetFaultListener {
      *  names on somebody else's screen. */
     private static final String CLIENT_APP = "Phonalyser";
     private static final String KEEPALIVE_THREAD = "net-client-keepalive";
-    /** The i18n key of the warning the analyzers show for a server-side loss
-     *  (spec 5's GAP), carried as the payload of {@link Events#FFT_CAPTURE_RESYNC}
-     *  exactly as the FFT's own re-sync reasons are. */
-    private static final String GAP_BANNER_KEY = "fft.warning.netGap";
 
     /** Held as a field, not as a method reference at the call site: the same
      *  object has to be handed back to take the subscription away again. */
@@ -1040,26 +1036,6 @@ public final class NetServerUi implements RemoteBackendUi, NetFaultListener {
     // -------------------------------------------------------------------------
     // What goes wrong on the bench
     // -------------------------------------------------------------------------
-
-    /**
-     * Spec 5: the server admitted to a loss.  The stream carries on, so this is
-     * not a device error - but it is not nothing either: the samples on either
-     * side of the gap are not adjacent in time, and an analyzer that averages
-     * across the splice reports a noise floor and a phase that never existed.
-     *
-     * <p>So the analyzers are TOLD, on the seam they already use for a capture
-     * that had to re-sync ({@link Events#FFT_CAPTURE_RESYNC}) - the operator gets
-     * the same blinking confession an overrun raises, which is the whole point of
-     * the GAP frame ("an explicit confession - the client resets averaging
-     * instead of silently splicing").
-     */
-    @Override
-    public void gap(long lostFrames) {
-        if (log.isWarnEnabled()) {
-            log.warn("net bench: the server lost {} stereo frame(s)", lostFrames);
-        }
-        bus.publish(Events.FFT_CAPTURE_RESYNC, GAP_BANNER_KEY);
-    }
 
     /** Spec 4.3: the bench says a lane died.  Log-only here: an input-lane
      *  failure also reaches the open capture stream itself, which finishes the

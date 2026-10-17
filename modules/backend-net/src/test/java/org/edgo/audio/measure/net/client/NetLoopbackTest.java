@@ -797,15 +797,12 @@ class NetLoopbackTest {
         MockServer.Capture stream = server.getLastCapture();
 
         stream.gap(LOST_FRAMES);
-        awaitTrue(() -> faults.lost.get() == LOST_FRAMES,
-                "spec 5: a GAP is the server's explicit confession, so the client can "
-                        + "reset its averaging instead of silently splicing");
-        assertNull(faults.detail.get(), "a GAP is the HONEST path, not a stream failure");
-
         stream.feed(ONE_FRAME_PCM);
         awaitTrue(() -> dispatched.get() == 1,
                 "spec 5 counts a GAP as a frame of its own, so the PCM after it is in "
-                        + "sequence and the stream carries on");
+                        + "sequence and the stream carries on, spliced - the analyzers "
+                        + "re-sync on the time discontinuity in the audio");
+        assertNull(faults.detail.get(), "a GAP is the HONEST path, not a stream failure");
         assertTrue(capture.isRecording());
 
         capture.close();
@@ -1012,19 +1009,17 @@ class NetLoopbackTest {
     }
 
     /**
-     * The other half of what a record assembler has to hear: a GAP goes to it AS
-     * WELL as to the bench's fault hub, and the two are different questions.
+     * The other half of what a record assembler has to hear: a GAP goes to it.
      *
-     * <p>The hub surfaces the loss and has the running analyzers reset their
-     * averaging, which is what a stream that carries on needs.  A sweep record
-     * being cut out of that same stream cannot carry on - spliced across a hole
-     * it deconvolves into a response nothing has - so it is told at the byte
+     * <p>The running analyzers need no word: the stream carries on spliced, and
+     * they re-sync on the time discontinuity in the audio.  A sweep record being
+     * cut out of that same stream cannot carry on - spliced across a hole it
+     * deconvolves into a response nothing has - so it is told at the byte
      * position the hole falls on and fails its own measurement.
      */
     @Test
-    void aGapReachesTheRecordAssemblerAndTheFaultHubBoth() {
+    void aGapReachesTheRecordAssembler() {
         NetDeviceManager manager = connect(CLIENT_NAME);
-        Faults faults = subscribe(manager);
         NetPcmCapture capture = openFirstInput(manager);
         capture.setPcmBatchListener((pcm, validBytes) -> { });
         Marks marks = new Marks();
@@ -1039,9 +1034,6 @@ class NetLoopbackTest {
         assertEquals(ONE_FRAME_PCM.length, marks.at.get(),
                 "at the byte boundary the hole falls on, in the same bytes the batches "
                         + "carry");
-        awaitTrue(() -> faults.lost.get() == LOST_FRAMES,
-                "and the hub still hears it: a scope on the same stream resets its "
-                        + "averaging rather than splicing");
         assertTrue(capture.isRecording(), "a GAP is the honest path, not a broken stream");
 
         capture.close();
@@ -1809,19 +1801,12 @@ class NetLoopbackTest {
      */
     private static final class Faults implements NetFaultListener {
 
-        /** How many stereo frames the last GAP confessed; -1 = no GAP yet. */
-        private final AtomicLong lost = new AtomicLong(-1);
         private final AtomicReference<String> direction = new AtomicReference<>();
         private final AtomicReference<String> detail = new AtomicReference<>();
         /** Every device reported as having left the bench while this client held
          *  it, in order.  A LIST and not a last-one: what a wrong implementation
          *  gets wrong is reporting devices it should not have. */
         private final List<String> gone = new CopyOnWriteArrayList<>();
-
-        @Override
-        public void gap(long lostFrames) {
-            lost.set(lostFrames);
-        }
 
         @Override
         public void deviceError(String direction, String detail) {

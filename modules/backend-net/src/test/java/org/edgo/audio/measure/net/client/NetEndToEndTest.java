@@ -40,6 +40,7 @@ import org.edgo.audio.measure.net.proto.NetMessage;
 import org.edgo.audio.measure.net.proto.NetProto;
 import org.edgo.audio.measure.sound.DeviceCalibration;
 import org.edgo.audio.measure.sound.DeviceRef;
+import org.edgo.audio.measure.sound.MarkedCapture;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -212,9 +213,18 @@ class NetEndToEndTest {
         });
         AtomicLong markedAt = new AtomicLong(-1);
         CountDownLatch marked = new CountDownLatch(1);
-        capture.setMarkerListener((kind, pcmBytes) -> {
-            markedAt.set(pcmBytes);
-            marked.countDown();
+        AtomicInteger gaps = new AtomicInteger();
+        capture.setMarkerListener(new MarkedCapture.Listener() {
+            @Override
+            public void marker(int kind, long pcmBytes) {
+                markedAt.set(pcmBytes);
+                marked.countDown();
+            }
+
+            @Override
+            public void gap(long lostFrames, long pcmBytes) {
+                gaps.incrementAndGet();
+            }
         });
 
         capture.open();
@@ -397,7 +407,7 @@ class NetEndToEndTest {
                 "and the device is takeable: nothing this session did left the bench "
                         + "holding anything");
 
-        assertEquals(0, faults.gaps.get(),
+        assertEquals(0, gaps.get(),
                 "and nothing was ever lost on the way: the bench confessed no gap");
     }
 
@@ -510,13 +520,7 @@ class NetEndToEndTest {
      *  whole client's faults arrive on (spec 4.1, 4.3 and 5). */
     private static final class Faults implements NetFaultListener {
 
-        private final AtomicInteger gaps = new AtomicInteger();
         private final AtomicReference<String> detail = new AtomicReference<>();
-
-        @Override
-        public void gap(long lostFrames) {
-            gaps.incrementAndGet();
-        }
 
         @Override
         public void deviceError(String direction, String detail) {

@@ -34,6 +34,7 @@ import org.edgo.audio.measure.net.proto.MessageType;
 import org.edgo.audio.measure.net.proto.NetFields;
 import org.edgo.audio.measure.net.proto.NetMessage;
 import org.edgo.audio.measure.sound.DeviceRef;
+import org.edgo.audio.measure.sound.MarkedCapture;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -140,9 +141,9 @@ class NetHighRateStreamTest {
     @Test
     void everyByteOfTheStreamArrivesExactlyAndInOrder() throws Exception {
         NetDeviceManager manager = connect();
-        Faults faults = new Faults();
-        manager.setFaultListener(faults);
         NetPcmCapture capture = openInput(manager);
+        Faults faults = new Faults();
+        capture.setMarkerListener(faults);
 
         AtomicLong receivedBytes = new AtomicLong();
         AtomicLong mismatch = new AtomicLong(-1);
@@ -183,9 +184,9 @@ class NetHighRateStreamTest {
     @Test
     void aConsumerHiccupCostsTimeAndNothingElse() throws Exception {
         NetDeviceManager manager = connect();
-        Faults faults = new Faults();
-        manager.setFaultListener(faults);
         NetPcmCapture capture = openInput(manager);
+        Faults faults = new Faults();
+        capture.setMarkerListener(faults);
 
         AtomicLong receivedBytes = new AtomicLong();
         AtomicLong mismatch = new AtomicLong(-1);
@@ -236,9 +237,9 @@ class NetHighRateStreamTest {
     @Test
     void aConsumerHoldingAFullSizedRecordStillGetsEveryByteExactly() throws Exception {
         NetDeviceManager manager = connect();
-        Faults faults = new Faults();
-        manager.setFaultListener(faults);
         NetPcmCapture capture = openInput(manager);
+        Faults faults = new Faults();
+        capture.setMarkerListener(faults);
 
         // What a 2M-FFT sweep allocates: two lanes of the whole record, live for
         // the measurement's duration.
@@ -294,9 +295,9 @@ class NetHighRateStreamTest {
     @Test
     void aLongExposureIsJustALongerCaptureAndStaysExact() throws Exception {
         NetDeviceManager manager = connect();
-        Faults faults = new Faults();
-        manager.setFaultListener(faults);
         NetPcmCapture capture = openInput(manager);
+        Faults faults = new Faults();
+        capture.setMarkerListener(faults);
 
         AtomicLong receivedBytes = new AtomicLong();
         AtomicLong mismatch = new AtomicLong(-1);
@@ -333,9 +334,9 @@ class NetHighRateStreamTest {
     @Test
     void aConfessedLossIsHeardEvenAtThisRate() throws Exception {
         NetDeviceManager manager = connect();
-        Faults faults = new Faults();
-        manager.setFaultListener(faults);
         NetPcmCapture capture = openInput(manager);
+        Faults faults = new Faults();
+        capture.setMarkerListener(faults);
 
         CountDownLatch released = new CountDownLatch(1);
         CountDownLatch reading = new CountDownLatch(1);
@@ -487,26 +488,21 @@ class NetHighRateStreamTest {
         return (byte) position;
     }
 
-    /** What the bench confessed, if anything. */
-    private static final class Faults implements NetFaultListener {
+    /** What the bench confessed, if anything - heard on the stream's in-band
+     *  seam, which is where a GAP goes. */
+    private static final class Faults implements MarkedCapture.Listener {
 
         /** Stereo frames the last GAP confessed; -1 = no GAP at all. */
         private final AtomicLong lost = new AtomicLong(-1);
 
         @Override
-        public void gap(long lostFrames) {
+        public void marker(int markerKind, long pcmBytesDelivered) {
+            // No sweep runs in this file.
+        }
+
+        @Override
+        public void gap(long lostFrames, long pcmBytesDelivered) {
             lost.set(lostFrames);
-        }
-
-        @Override
-        public void deviceError(String direction, String detail) {
-            // Not what this test is about; the stream failing outright shows up
-            // as bytes that never arrive.
-        }
-
-        @Override
-        public void deviceGone(DeviceRef device) {
-            // Nor this one: the bench keeps its devices for the whole run.
         }
     }
 }

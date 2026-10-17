@@ -67,9 +67,9 @@ import lombok.extern.log4j.Log4j2;
  * stream's ordinary teardown as the bench dying.
  *
  * <p><b>Two kinds of loss, told apart.</b>  A GAP frame is the server's honest
- * confession that it dropped capture data (spec 5); it is forwarded to the
- * {@link NetFaultListener} the manager handed in, so the analyzers reset their
- * averaging instead of splicing across it.  A jump in the packet counter is
+ * confession that it dropped capture data (spec 5); the stream carries on
+ * spliced, and the analyzers re-sync on the time discontinuity in the audio, as
+ * they do on a local device's dropout.  A jump in the packet counter is
  * something else entirely: intact TCP cannot lose or reorder, so the stream is
  * broken - the error is surfaced and the stream stops, exactly as a device error
  * would.
@@ -95,13 +95,13 @@ public final class NetPcmCapture extends AbstractPcmCapture implements MarkedCap
 
     private final NetConnection connection;
     private final NetDeviceRef device;
-    /** The manager that opened this stream: where a gap and a failure go - it is
-     *  the one place the client's faults can be subscribed to (see
+    /** The manager that opened this stream: where a failure goes - it is the one
+     *  place the client's faults can be subscribed to (see
      *  {@link NetFaultListener}) - and where this stream's device lock is
      *  registered, because the whole client has to agree on which devices it
      *  holds (see {@link NetDeviceManager#withDeviceLock}).  Injected, never set
-     *  later: a stream whose losses had nowhere to go would splice across them in
-     *  silence, and a lock nobody knew about would be released underneath it. */
+     *  later: a stream whose failures had nowhere to go would stop in silence,
+     *  and a lock nobody knew about would be released underneath it. */
     private final NetDeviceManager owner;
     /** Held as fields, not as method references at the call site: the same
      *  objects have to be handed back to unsubscribe. */
@@ -446,12 +446,12 @@ public final class NetPcmCapture extends AbstractPcmCapture implements MarkedCap
      * "an explicit confession - the client resets averaging instead of silently
      * splicing".
      *
-     * <p>It goes BOTH ways, and the two are different questions.  The manager is
-     * the whole client's fault hub: it surfaces the loss to the operator and has
-     * the running analyzers reset their averaging, which is what a stream that
-     * carries on needs.  A record being assembled out of this same stream cannot
+     * <p>The stream carries on, spliced: the PCM after the hole follows the PCM
+     * before it, so a running analyzer meets the loss as a time discontinuity in
+     * the audio it reads - exactly as it meets a local device's dropout - and
+     * re-syncs on it.  A record being assembled out of this same stream cannot
      * carry on - a sweep with a hole in it deconvolves into a result that looks
-     * like a measurement - so the assembler is told too, at the byte position the
+     * like a measurement - so the assembler is told, at the byte position the
      * hole falls on, and fails its own measurement honestly.
      */
     private void gap(long lostFrames) {
@@ -472,13 +472,6 @@ public final class NetPcmCapture extends AbstractPcmCapture implements MarkedCap
                                 + "(continuing)", captureId, e);
                     }
                 }
-            }
-        }
-        try {
-            owner.gap(lostFrames);
-        } catch (RuntimeException e) {
-            if (log.isErrorEnabled()) {
-                log.error("net capture {}: gap listener failed (continuing)", captureId, e);
             }
         }
     }

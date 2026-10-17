@@ -21,10 +21,11 @@ package org.edgo.audio.measure.net.client;
 import org.edgo.audio.measure.sound.DeviceRef;
 
 /**
- * What goes wrong on a remote bench, in the two shapes the spec tells apart: a
- * loss the server admits to (spec 5) and a failure that ends the measurement
- * (spec 4.3's {@code ev.device.error}, spec 4.1's dead session, spec 5's jumped
- * packet counter).
+ * What goes wrong on a remote bench and ends the measurement: spec 4.3's
+ * {@code ev.device.error}, spec 4.1's dead session, spec 5's jumped packet
+ * counter.  A loss the server admits to (spec 5's GAP) is not among them: the
+ * stream carries on spliced, and the analyzers re-sync on the time
+ * discontinuity in the audio, as they do on a local device's dropout.
  *
  * <p><b>Why the seam lives on the manager.</b>  A module holds its capture as an
  * {@code AudioCapture} and never sees this backend's own types, so a listener
@@ -39,15 +40,6 @@ import org.edgo.audio.measure.sound.DeviceRef;
  * blocking - see {@link NetConnection}'s threading note.
  */
 public interface NetFaultListener {
-
-    /**
-     * Spec 5: the server dropped {@code lostFrames} stereo frames and said so.
-     *
-     * <p>Not a failure - the stream carries on.  What must not happen is the
-     * silent splice: whoever is averaging across the seam has to reset instead
-     * of treating the two sides as one continuous record.
-     */
-    void gap(long lostFrames);
 
     /**
      * A failure the operator must be told about and the affected modules must

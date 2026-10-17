@@ -94,9 +94,9 @@ import lombok.extern.log4j.Log4j2;
  * connected answers empty lists rather than throwing, because a backend combo
  * being empty is a state the application already knows how to show.
  *
- * <p><b>It is also the bench's fault hub.</b>  Spec 4.3's {@code ev.device.error},
- * spec 4.1's dead session and spec 5's losses all reach the operator through the
- * one {@link NetFaultListener} set here - the manager is the only net type the
+ * <p><b>It is also the bench's fault hub.</b>  Spec 4.3's {@code ev.device.error}
+ * and spec 4.1's dead session reach the operator through the one
+ * {@link NetFaultListener} set here - the manager is the only net type the
  * glue holds (connecting it to a server is what the server-list dialog does), so
  * a seam anywhere else could not be subscribed to at all.
  *
@@ -455,22 +455,6 @@ public final class NetDeviceManager implements AudioDeviceManager, NetFaultListe
     public DeviceFailureReason classifyFailure(Throwable failure) {
         return (failure instanceof NetConnection.Refusal refused)
                 ? refused.getReason() : DeviceFailureReason.UNKNOWN;
-    }
-
-    /** Spec 5: a stream's server-side loss, passed on so the averaging is reset.
-     *  A gap nobody hears is exactly the silent splice the spec forbids, which is
-     *  why the unsubscribed case is a log line and not a no-op. */
-    @Override
-    public void gap(long lostFrames) {
-        NetFaultListener listener = faultListener;
-        if (listener == null) {
-            if (log.isWarnEnabled()) {
-                log.warn("net backend: the bench lost {} stereo frame(s) and nothing is "
-                        + "subscribed to say so", lostFrames);
-            }
-            return;
-        }
-        listener.gap(lostFrames);
     }
 
     /** Spec 4.3: "the client surfaces it exactly like a local device error
