@@ -95,8 +95,8 @@ import lombok.extern.log4j.Log4j2;
  * {@link FftResult} for paint to read.  The owning
  * {@link FftPane} drives the lifecycle ({@link #start} / {@link #stop} /
  * {@link #resetStatistics}) and feeds settings via {@code Preferences}.
- * View -> pane communication is purely via {@link MessageBus} broadcasts
- * ({@link Events#FFT_RANGE_CHANGED}, {@link Events#FFT_RECORDING_AUTO_STOPPED}).
+ * The view calls its pane directly (the scrollbar re-sync after a pan /
+ * zoom).
  */
 @Log4j2
 public final class FftView extends AbstractFreqDomainView {
@@ -189,10 +189,13 @@ public final class FftView extends AbstractFreqDomainView {
      *  loops) and the IMD analysis - the view issues commands / queries and
      *  renders.
      *  Assigned exactly once in the constructor; NOT {@code final} because
-     *  the field-initializer lambdas below ({@code onGenChangeForFll},
-     *  {@code onResultReady}) read it and javac's definite-assignment
-     *  analysis rejects blank-final reads in initializers. */
+     *  the field-initializer lambda below ({@code onGenChangeForFll}) reads
+     *  it and javac's definite-assignment analysis rejects blank-final reads
+     *  in initializers. */
     private FftController controller;
+    /** The pane that owns this view: the scrollbar re-sync after a pan /
+     *  zoom. */
+    private final FftPane pane;
 
     /** Snapshot overrides for the averages count and fill %.  An offscreen
      *  screenshot clone has its OWN idle controller, so without these it would
@@ -297,19 +300,15 @@ public final class FftView extends AbstractFreqDomainView {
      *  recording - so the response is dropped here and built by that frame. */
     private final Consumer<Object> onAudioFormatChanged = ignored -> this.calInv = null;
 
-    /** Subscription handler held as a field so the same instance is
-     *  passed to both {@code subscribe} and {@code unsubscribe} - the
-     *  bus removes by reference equality.  The {@code slot} payload is
-     *  already a deep-copied snapshot (produced on the worker thread
-     *  inside {@code publishResult}); we just store the reference and
-     *  redraw - paint code reads {@link #lastResult} directly. */
-    private final Consumer<FftResult> onResultReady = slot -> {
+    /** A finished analysis from the worker, handed over by the pane on the
+     *  UI thread.  The {@code slot} stays the worker's: it goes back to the
+     *  pool after this call, so what the view keeps is copied into
+     *  {@link #lastResult}, which paint reads directly. */
+    void onResultReady(FftResult slot) {
         if (isDisposed()) return;
         // Every result that arrives here belongs to the current collection: a
         // slot parked across a reset or a change of the generated signal is
-        // dropped by the worker at its hand-off, not published.
-        // this-qualified controller reads throughout this initializer
-        // lambda - see onGenChangeForFll.
+        // dropped by the worker at its hand-off, not handed over.
         this.controller.resultConsumed();
         if (isRunning()) {
             // Stage-3 timing starts with the arrival: the post-average pipeline
@@ -357,47 +356,38 @@ public final class FftView extends AbstractFreqDomainView {
             // so scope and FFT share one cadence and neither starves the other.
             fftDirty = true;
         }
-    };
+    }
 
     /** Capture re-sync notification.  Payload is the i18n message-key, so one
-     *  event presents distinct warnings - a ring overrun
-     *  ({@code fft.warning.overrun}), a signal discontinuity
-     *  ({@code fft.warning.discontinuity}) or a remote bench's own confessed loss
-     *  ({@code fft.warning.netGap}).  Raises a PERSISTENT blinking banner
+     *  message presents distinct warnings - a ring overrun
+     *  ({@code fft.warning.overrun}) or a signal discontinuity
+     *  ({@code fft.warning.discontinuity}).  Raises a PERSISTENT blinking banner
      *  (no fixed timer): the worker emits no result on a re-sync analysis cycle
      *  and re-anchors, so the next FFT result is the first fully-reloaded window -
      *  whereupon {@link #onResultReady}'s {@link #clearBannerIfStale()} drops it.
-     *  Also cleared on a statistics reset and on Record stop.
-     *
-     *  <p>Marshalled: the worker publishes on the UI thread, but a bench across
-     *  the network confesses on its connection's reader thread, and the banner is
-     *  a widget.  An {@code asyncExec} from the UI thread simply queues, so the
-     *  worker's path is unchanged in effect. */
-    private final Consumer<String> onCaptureResync = messageKey -> {
-        if (messageKey == null) return;
-        GuiUtil.marshal(() -> {
-            if (isDisposed() || !isRunning()) return;
-            setBanner(() -> I18n.t(messageKey), () -> I18n.t(messageKey + ".tip"),
-                    ColorRole.WARNING_LIT, ColorRole.WARNING_DIM, 0L);
-            redraw();
-        });
-    };
+     *  Also cleared on a statistics reset and on Record stop.  UI thread: the
+     *  worker's warning arrives through the controller and the pane. */
+    void showCaptureResync(String messageKey) {
+        if (messageKey == null || isDisposed() || !isRunning()) return;
+        setBanner(() -> I18n.t(messageKey), () -> I18n.t(messageKey + ".tip"),
+                ColorRole.WARNING_LIT, ColorRole.WARNING_DIM, 0L);
+        redraw();
+    }
 
-    /** Subscriber for {@link Events#FFT_ALIGN_MAG_DRIFT}: the fundamental
-     *  level(s) moved by more than the analyser worker's drift threshold while
-     *  the frequency lock pulled the generator onto the bin grid - the
-     *  running average still contains pre-alignment frames, so hint at a
-     *  statistics reset with a 20 s blinking banner.  Payload: the largest
-     *  per-tone delta in dB. */
-    private final Consumer<Double> onAlignMagDrift = deltaDb -> {
-        if (isDisposed() || !isRunning() || deltaDb == null) return;
+    /** The fundamental level(s) moved by more than the analyser worker's
+     *  drift threshold while the frequency lock pulled the generator onto the
+     *  bin grid - the running average still contains pre-alignment frames, so
+     *  hint at a statistics reset with a 20 s blinking banner.  {@code deltaDb}
+     *  is the largest per-tone delta. */
+    void onAlignMagDrift(double deltaDb) {
+        if (isDisposed() || !isRunning()) return;
         String delta = String.format(Locale.US, "%.1f", deltaDb);
         setBanner(() -> I18n.t("fft.warning.alignDrift"),
                 () -> I18n.t("fft.warning.alignDrift.tip", delta),
                 ColorRole.WARNING_LIT, ColorRole.WARNING_DIM,
                 System.nanoTime() + ALIGN_DRIFT_WARN_NANOS);
         redraw();
-    };
+    }
 
     // ─── Mouse / crosshair tracking ──────────────────────────────────────
     private int crossX = -1, crossY = -1;
@@ -496,7 +486,7 @@ public final class FftView extends AbstractFreqDomainView {
      *                   publishes nor subscribes on the bus and does not react
      *                   to preference changes - it only draws the snapshot it
      *                   is given */
-    public FftView(Composite parent, FftController controller, boolean offScreen) {
+    public FftView(Composite parent, FftPane pane, FftController controller, boolean offScreen) {
         // Pass prefs-driven BACKGROUND + SPECTRUM through the override
         // map so the base allocates the right colour once; everything
         // else uses the light-theme defaults from AbstractMeasurementView.
@@ -509,6 +499,7 @@ public final class FftView extends AbstractFreqDomainView {
                 // L/R channel buttons share the scope's channel colours (cyan/yellow).
                 ColorRole.LEFT_BTN_CHAN,  Preferences.instance().getOscLeftChannelColor(),
                 ColorRole.RIGHT_BTN_CHAN, Preferences.instance().getOscRightChannelColor()));
+        this.pane            = pane;
         this.controller      = controller;
         this.correctionStore = controller.getCorrectionStore();
         this.offScreen       = offScreen;
@@ -778,22 +769,12 @@ public final class FftView extends AbstractFreqDomainView {
     /** The live view's bus subscriptions and preference reactions - the
      *  offscreen screenshot copy wires none of them. */
     private void subscribeLive() {
-        // Paint-on-result: subscribe to FFT_RESULT_AVAILABLE (published
-        // by the worker on the UI thread after each analysis) and force
-        // the paint to fire synchronously rather than letting SWT
-        // coalesce multiple per-cycle redraws into one delayed paint.
-        // At typical analysis cadences (1-5 analysis cycles per second) the
-        // per-cycle paint cost is well under the hop interval, so
-        // blocking the UI thread for this paint is negligible.
         MessageBus bus = MessageBus.instance();
-        bus.subscribe(Events.FFT_RESULT_AVAILABLE, onResultReady);
-        bus.subscribe(Events.FFT_CAPTURE_RESYNC, onCaptureResync);
         // The bus is UI-only - every publisher of this event is on the display
         // thread - so a plain subscription is correct; unsubscribed on dispose.
         bus.subscribe(Events.GENERATOR_SIGNAL_CHANGED, onGenChangeForFll);
         addDisposeListener(e ->
                 bus.unsubscribe(Events.GENERATOR_SIGNAL_CHANGED, onGenChangeForFll));
-        bus.subscribe(Events.FFT_ALIGN_MAG_DRIFT, onAlignMagDrift);
         bus.subscribe(Events.AUDIO_FORMAT_CHANGED, onAudioFormatChanged);
         // Window-function changes reset the running statistics - the control
         // writes the pref, the view reacts to the pref, neither calls the other.
@@ -862,9 +843,6 @@ public final class FftView extends AbstractFreqDomainView {
 
     private void disposeResources() {
         MessageBus bus = MessageBus.instance();
-        bus.unsubscribe(Events.FFT_RESULT_AVAILABLE, onResultReady);
-        bus.unsubscribe(Events.FFT_CAPTURE_RESYNC, onCaptureResync);
-        bus.unsubscribe(Events.FFT_ALIGN_MAG_DRIFT, onAlignMagDrift);
         bus.unsubscribe(Events.AUDIO_FORMAT_CHANGED, onAudioFormatChanged);
         disposePalette();
         // monoFont / monoBoldFont / chanButtonFont are shared instances
@@ -1347,13 +1325,12 @@ public final class FftView extends AbstractFreqDomainView {
         });
     }
 
-    /** Publishes {@link Events#FFT_RANGE_CHANGED} so the owning pane's
-     *  scrollbars re-align to the (just-mutated) freq / mag window in
-     *  {@code Preferences}.  Called after every view-internal pan /
-     *  zoom and from {@link #autoSetup()} / {@link #maximize()}. */
+    /** Re-aligns the owning pane's scrollbars to the (just-mutated) freq /
+     *  mag window in {@code Preferences}.  Called after every view-internal
+     *  pan / zoom and from {@link #autoSetup()} / {@link #maximize()}. */
     private void fireRangeChanged() {
         if (offScreen) return;
-        MessageBus.instance().publish(Events.FFT_RANGE_CHANGED);
+        pane.syncFftPan();
     }
 
     /** Sets the freq range to one decade either side of the detected
@@ -1726,7 +1703,7 @@ public final class FftView extends AbstractFreqDomainView {
     }
 
     /** Applies through the canonical range-change protocol; the pane's
-     *  FFT_RANGE_CHANGED subscriber clamps to [binSize, Nyquist] ×
+     *  scrollbar re-sync clamps to [binSize, Nyquist] ×
      *  [floor, ceiling] and realigns the scrollbars. */
     @Override
     protected boolean applyZoomState(ZoomState s) {

@@ -583,7 +583,7 @@ public final class TuneNotchWizardDialog {
             OutputChannels inForce = e.getLoopChannels();
             String detail = ex.getMessage() != null ? ex.getMessage()
                     : ex.getClass().getSimpleName();
-            GuiUtil.marshal(dialog, () -> onOutputLaneRefused(inForce, detail));
+            GuiUtil.marshal(() -> onOutputLaneRefused(inForce, detail));
         }
     }
 
@@ -630,8 +630,7 @@ public final class TuneNotchWizardDialog {
         DeviceRef in  = AudioBackend.instance().getActiveInputDevice();
         if (out == null || in == null) {
             running = false;
-            GuiUtil.marshal(dialog, () -> {
-                if (dialog.isDisposed()) return;
+            GuiUtil.marshal(() -> {
                 Dialogs.error(dialog, I18n.t("tuneNotch.title"),
                         I18n.t("freqResp.error.noDevice"));
             });
@@ -646,7 +645,7 @@ public final class TuneNotchWizardDialog {
         AudioBackend audio = AudioBackend.instance();
         DeviceCalibration dac = audio.calibrationOrDefault(false);
         DeviceCalibration adc = audio.calibrationOrDefault(true);
-        GuiUtil.marshal(dialog, () -> {
+        GuiUtil.marshal(() -> {
             ampField.setMax(dac.fsRms(Channel.L));
             ampField.seedPair(prefs.getTuneNotchAmplitude());
         });
@@ -721,7 +720,7 @@ public final class TuneNotchWizardDialog {
                     continue;
                 }
                 long grabMs = (System.nanoTime() - grabStart) / 1_000_000L;
-                GuiUtil.marshal(dialog, () -> sweepCount++);
+                GuiUtil.marshal(() -> sweepCount++);
 
                 double[] sweepRef = engine.sweepRef();
                 // Hand the deconvolution to the worker and immediately loop back;
@@ -742,8 +741,7 @@ public final class TuneNotchWizardDialog {
             // OPEN_FAILED, say) lands in the log alone - tell the operator,
             // in their language; the technical detail stays in the log above.
             String text = sweepFailureText(ex);
-            GuiUtil.marshal(dialog, () -> {
-                if (dialog.isDisposed()) return;
+            GuiUtil.marshal(() -> {
                 setStatus(text);
                 Dialogs.error(dialog, I18n.t("tuneNotch.title"), text);
             });
@@ -775,7 +773,7 @@ public final class TuneNotchWizardDialog {
         while (running && engine.availableSamples() < sweepSamples) {
             long avail = engine.availableSamples();
             int pct = (int) Math.min(PERCENT_FULL, avail * PERCENT_FULL / sweepSamples);
-            GuiUtil.marshal(dialog, () -> setStatus(pct + "%"));
+            GuiUtil.marshal(() -> setStatus(pct + "%"));
             Thread.sleep(SETTLE_POLL_MS);
         }
     }
@@ -788,7 +786,7 @@ public final class TuneNotchWizardDialog {
         long elapsed = 0;
         while (running && elapsed < loopPeriodMs) {
             int pct = (int) Math.min(PERCENT_FULL, elapsed * PERCENT_FULL / Math.max(1, loopPeriodMs));
-            GuiUtil.marshal(dialog, () -> setStatus(pct + "%"));
+            GuiUtil.marshal(() -> setStatus(pct + "%"));
             Thread.sleep(Math.min(STATUS_TICK_MS, loopPeriodMs - elapsed));
             elapsed = System.currentTimeMillis() - start;
         }
@@ -844,7 +842,7 @@ public final class TuneNotchWizardDialog {
                     Channel.R,
                     captureRate, calR.freqs, calR.magLin, calR.phaseRad, params, null, false);
             if (!running) return;
-            GuiUtil.marshal(dialog, () -> onSweepResult(left, right));
+            GuiUtil.marshal(() -> onSweepResult(left, right));
         } catch (Exception ex) {
             log.error("TuneNotch deconvolution failed", ex);
         }

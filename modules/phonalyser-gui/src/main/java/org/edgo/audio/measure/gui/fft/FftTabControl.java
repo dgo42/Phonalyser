@@ -77,16 +77,15 @@ import lombok.extern.log4j.Log4j2;
  * machinery, {@code .frc} calibration rows and {@code .fft} save / load.
  *
  * <p>The host {@link FftPane} keeps only the chart, scrollbars and Record
- * button; everything tab-related lives here.  The few cross-pane concerns are
- * routed through {@link MessageBus} so this control needs no back-reference to
- * the pane:
+ * button; everything tab-related lives here.  What the pane owns, this control
+ * asks its owner pane for directly:
  * <ul>
- *   <li>{@link Events#FFT_SCREENSHOT_REQUESTED} - the Utility tab's camera
- *       button; the pane owns the screenshot dialog (it clones itself
- *       offscreen) and subscribes.</li>
- *   <li>{@link Events#FFT_RECORDING_STOP_REQUESTED} - loading a spectrum file
- *       must stop live recording so the static trace isn't overwritten; the
- *       pane owns the Record button and subscribes.</li>
+ *   <li>the screenshot dialog - the Utility tab's camera button; the pane
+ *       owns it because it clones itself offscreen;</li>
+ *   <li>stopping a live recording - loading a spectrum file must stop it so
+ *       the static trace isn't overwritten; the pane owns the Record
+ *       button;</li>
+ *   <li>the scrollbar re-sync after a preset apply.</li>
  * </ul>
  * The {@link FftView} is shared with the pane and passed in at construction.
  */
@@ -858,15 +857,13 @@ public final class FftTabControl extends AbstractCalibrationTabControl<FftPane> 
         prefs.setFftManualFundEnabled(p.isManualFundEnabled());
         prefs.save();
         // A preset writes the freq / mag window like any other writer of those
-        // four prefs, so it announces it like any other writer: the pane's
-        // FFT_RANGE_CHANGED subscriber clamps to [binSize, Nyquist] × [floor,
-        // ceiling] and re-aligns the scrollbars.  Without this publish a preset
-        // was the ONE path that reached the axis unclamped - a stored file with
+        // four prefs, so it re-syncs like any other writer: the pane's
+        // scrollbar re-sync clamps to [binSize, Nyquist] × [floor, ceiling]
+        // and re-aligns the scrollbars.  Without this call a preset was the
+        // ONE path that reached the axis unclamped - a stored file with
         // magTop == magBottom (or an inverted or out-of-range pair) went
-        // straight to the mapping and blanked the plot.  syncFftPan's own
-        // javadoc has always listed "preset apply" among its callers; this is
-        // the line that finally makes that true.
-        MessageBus.instance().publish(Events.FFT_RANGE_CHANGED);
+        // straight to the mapping and blanked the plot.
+        getOwner().syncFftPan();
         // Every settings / THD widget is two-way bound to these prefs, so the
         // setters above already pushed the preset into the live widgets (companion
         // field enable-states ride along on their own pref listeners).  Only the
@@ -894,8 +891,8 @@ public final class FftTabControl extends AbstractCalibrationTabControl<FftPane> 
         shotBtn.setLayoutData(shotGd);
         Bindings.text(shotBtn, "fft.utility.screenshot.tooltip", shotBtn::setToolTipText);
         // The screenshot dialog clones the whole pane offscreen, so the pane
-        // owns it; ask it to open via the bus.
-        shotBtn.addListener(SWT.Selection, e -> MessageBus.instance().publish(Events.FFT_SCREENSHOT_REQUESTED));
+        // owns it.
+        shotBtn.addListener(SWT.Selection, e -> getOwner().openScreenshotDialog());
 
         Button calBtn = new Button(g, SWT.PUSH);
         calBtn.setImage(crosshairIcon);
@@ -1139,9 +1136,8 @@ public final class FftTabControl extends AbstractCalibrationTabControl<FftPane> 
             return;
         }
         // Stop live capture so the loaded spectrum isn't overwritten - the pane
-        // owns the Record button and shared capture, so request the stop on the
-        // bus instead of reaching into it.
-        MessageBus.instance().publish(Events.FFT_RECORDING_STOP_REQUESTED);
+        // owns the Record button and shared capture.
+        getOwner().stopRecordingForLoad();
         view.displayLoadedResult(loaded.result());
         view.setSourceFilePath(path);
     }

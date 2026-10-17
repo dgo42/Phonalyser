@@ -36,23 +36,25 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * {@link GuiUtil}'s two ways onto the UI thread and their gate on the main
- * shell: {@link GuiUtil#marshal(Runnable)} runs in place on the UI thread and
- * counts what it queues from another thread; {@link GuiUtil#post} always
- * queues - on the UI thread too, behind everything queued before, whichever
- * thread queued it - and every post is counted.  Without a live main shell neither
- * does anything, and a runnable queued before the main shell is disposed is
- * skipped.
+ * {@link GuiUtil}'s ways onto the UI thread and their gate on the main shell:
+ * {@link GuiUtil#marshal(Runnable)} runs in place on the UI thread and, from
+ * another thread, queues - counted, in the order queued;
+ * {@link GuiUtil#marshalAndWake} does the same and then wakes the display;
+ * {@link GuiUtil#postAsync} always queues - on the UI thread too, behind
+ * everything queued before, whichever thread queued it - and is counted.
+ * Without a live main shell none of them does anything, and a runnable queued
+ * before the main shell is disposed is skipped.
  *
- * <p>The test thread is the display's thread, so a runnable queued there runs
- * only when the test drains the display's queue.  A host without a display
- * skips the cases that need one.
+ * <p>The test thread is the display's thread, so a queued runnable runs only
+ * when the test drains the display's queue.  A host without a display skips
+ * the cases that need one.
  */
 class GuiUtilTest {
 
     /** How long the helper thread may take to queue its runnable, ms. */
     private static final long   JOIN_MS = 5_000L;
-    private static final String WORKER  = "worker";
+    private static final String FIRST   = "first";
+    private static final String SECOND  = "second";
     private static final String UI      = "ui";
 
     private Display display;
@@ -106,43 +108,53 @@ class GuiUtilTest {
         AtomicInteger runs = new AtomicInteger();
         assertTrue(GuiUtil.isHeadless());
         assertFalse(GuiUtil.marshal(runs::incrementAndGet));
-        assertFalse(GuiUtil.marshal(null, runs::incrementAndGet));
-        assertFalse(GuiUtil.post(runs::incrementAndGet));
-        GuiUtil.wake();
+        assertFalse(GuiUtil.marshalAndWake(runs::incrementAndGet));
+        assertFalse(GuiUtil.postAsync(runs::incrementAndGet));
         assertEquals(0, runs.get());
     }
 
     @Test
-    void aMarshalOnTheUiThreadRunsInPlace() {
+    void onTheUiThreadBothRunInPlace() {
         liveMainShell();
         List<String> order = new ArrayList<>();
         assertFalse(GuiUtil.isHeadless());
         assertTrue(GuiUtil.marshal(() -> order.add(UI)));
-        assertEquals(List.of(UI), order, "ran before any drain");
+        assertTrue(GuiUtil.marshalAndWake(() -> order.add(UI)));
+        assertEquals(List.of(UI, UI), order, "both ran before any drain");
     }
 
     @Test
-    void aPostOnTheUiThreadQueuesInsteadOfRunningInPlace() {
+    void fromAnotherThreadBothQueueInTheOrderTheyWereHandedOver() throws InterruptedException {
         liveMainShell();
         List<String> order = new ArrayList<>();
-        assertTrue(GuiUtil.post(() -> order.add(UI)));
+        Throwable thrown = onAnotherThread(() -> {
+            assertTrue(GuiUtil.marshalAndWake(() -> order.add(FIRST)));
+            assertTrue(GuiUtil.marshal(() -> order.add(SECOND)));
+        });
+        assertNull(thrown, "both are callable off the UI thread and queue");
+        assertTrue(order.isEmpty(), "nothing ran before the drain");
+        drain();
+        assertEquals(List.of(FIRST, SECOND), order);
+    }
+
+    @Test
+    void aPostAsyncOnTheUiThreadQueuesInsteadOfRunningInPlace() {
+        liveMainShell();
+        List<String> order = new ArrayList<>();
+        assertTrue(GuiUtil.postAsync(() -> order.add(UI)));
         assertTrue(order.isEmpty(), "not run in place");
         drain();
         assertEquals(List.of(UI), order);
     }
 
     @Test
-    void aPostOnTheUiThreadRunsBehindWhatAnotherThreadPostedBefore() throws InterruptedException {
+    void aPostAsyncOnTheUiThreadRunsBehindWhatAnotherThreadQueuedBefore() throws InterruptedException {
         liveMainShell();
         List<String> order = new ArrayList<>();
-        Throwable thrown = onAnotherThread(() -> {
-            GuiUtil.post(() -> order.add(WORKER));
-            GuiUtil.wake();
-        });
-        assertNull(thrown, "post and wake are callable off the UI thread");
-        GuiUtil.post(() -> order.add(UI));
+        assertNull(onAnotherThread(() -> assertTrue(GuiUtil.marshalAndWake(() -> order.add(FIRST)))));
+        assertTrue(GuiUtil.postAsync(() -> order.add(SECOND)));
         drain();
-        assertEquals(List.of(WORKER, UI), order);
+        assertEquals(List.of(FIRST, SECOND), order);
     }
 
     @Test
@@ -150,13 +162,14 @@ class GuiUtilTest {
         liveMainShell();
         int before = GuiUtil.pendingMarshals();
         assertTrue(GuiUtil.marshal(() -> { }));
-        assertEquals(before, GuiUtil.pendingMarshals(), "a marshal on the UI thread runs in place");
+        assertTrue(GuiUtil.marshalAndWake(() -> { }));
+        assertEquals(before, GuiUtil.pendingMarshals(), "on the UI thread both run in place");
         assertNull(onAnotherThread(() -> GuiUtil.marshal(() -> { })));
         assertEquals(before + 1, GuiUtil.pendingMarshals(), "a marshal from another thread waits counted");
-        assertNull(onAnotherThread(() -> GuiUtil.post(() -> { })));
-        assertEquals(before + 2, GuiUtil.pendingMarshals(), "a post from another thread waits counted");
-        assertTrue(GuiUtil.post(() -> { }));
-        assertEquals(before + 3, GuiUtil.pendingMarshals(), "a post on the UI thread waits counted too");
+        assertNull(onAnotherThread(() -> GuiUtil.marshalAndWake(() -> { })));
+        assertEquals(before + 2, GuiUtil.pendingMarshals(), "and so does a marshalAndWake");
+        assertTrue(GuiUtil.postAsync(() -> { }));
+        assertEquals(before + 3, GuiUtil.pendingMarshals(), "a postAsync on the UI thread waits counted");
         drain();
         assertEquals(before, GuiUtil.pendingMarshals(), "and each leaves the count once it ran");
     }
@@ -165,11 +178,13 @@ class GuiUtilTest {
     void whatWasQueuedBeforeTheMainShellIsDisposedIsSkipped() throws InterruptedException {
         liveMainShell();
         AtomicInteger runs = new AtomicInteger();
-        assertTrue(GuiUtil.post(runs::incrementAndGet));
         assertNull(onAnotherThread(() -> GuiUtil.marshal(runs::incrementAndGet)));
+        assertNull(onAnotherThread(() -> GuiUtil.marshalAndWake(runs::incrementAndGet)));
+        assertTrue(GuiUtil.postAsync(runs::incrementAndGet));
         mainShell.dispose();
         assertTrue(GuiUtil.isHeadless());
-        assertFalse(GuiUtil.post(runs::incrementAndGet));
+        assertFalse(GuiUtil.marshalAndWake(runs::incrementAndGet));
+        assertFalse(GuiUtil.postAsync(runs::incrementAndGet));
         drain();
         assertEquals(0, runs.get());
     }

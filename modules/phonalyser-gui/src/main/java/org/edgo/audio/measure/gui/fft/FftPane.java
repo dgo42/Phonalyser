@@ -75,10 +75,10 @@ public final class FftPane extends AbstractPane {
     @Getter
     private FftView         view;
     /** Controller owning the analyser worker, the frequency-lock loops and
-     *  the .fft file round-trip; injected into the view + tab control.
-     *  The live pane receives the app-lifetime instance (built in
-     *  {@code UIEngines}); the offscreen screenshot clone builds its own
-     *  idle instance. */
+     *  the .fft file round-trip.  Built by this pane, with this pane - the
+     *  receiver of the worker's messages - and injected into the view + tab
+     *  control.  The offscreen screenshot clone's controller is never
+     *  started. */
     private final FftController controller;
 
     private FlatScrollbar   freqScrollbar;
@@ -99,25 +99,6 @@ public final class FftPane extends AbstractPane {
      *  only the chart, scrollbars and Record button. */
     private FftTabControl toolbarTabs;
 
-    /** Subscriber for {@link Events#FFT_RANGE_CHANGED}, stored as a
-     *  field so the dispose listener can unsubscribe the SAME instance
-     *  (method references compare by identity). */
-    private Consumer<Void> rangeChangedListener;
-    /** Subscriber for {@link Events#FFT_RECORDING_AUTO_STOPPED} - fires
-     *  when the analyser's stop-after-N counter trips, or when its reader
-     *  answered terminally (the capture device died), so the pane can flip
-     *  Record back off and release the shared capture.  The two cases are
-     *  told apart by the worker's recorded capture-end reason. */
-    private Consumer<Void> autoStoppedListener;
-    /** Subscriber for {@link Events#FFT_RECORDING_STOP_REQUESTED} - the
-     *  {@link FftTabControl} asks the pane to stop live recording when a
-     *  static spectrum is loaded (the pane owns the Record button + shared
-     *  capture reference). */
-    private Consumer<Void> recordStopRequestedListener;
-    /** Subscriber for {@link Events#FFT_SCREENSHOT_REQUESTED} - the
-     *  {@link FftTabControl}'s Utility-tab camera button; the pane owns the
-     *  screenshot dialog because it clones the whole pane offscreen. */
-    private Consumer<Void> screenshotRequestedListener;
     /** Subscriber for {@link Events#FREQRESP_MEASUREMENT_STARTED} - the
      *  Frequency Response pane is about to drive the capture device
      *  exclusively, so this pane must stop any running recording and
@@ -126,35 +107,11 @@ public final class FftPane extends AbstractPane {
     /** Counterpart to {@link #freqRespStartedListener} - re-enables the
      *  Record button once the sweep finishes (or aborts). */
     private Consumer<Void> freqRespStoppedListener;
-    /** Subscriber for {@link Events#FFT_PHASE_ALIGN_REFUSED} - the analyser
-     *  qualified the reference feed at the start of the average and found no
-     *  fundamental on it, so the run continues unaligned; the operator is told
-     *  once, with the three numbers the worker measured. */
-    private Consumer<FftAnalyzerWorker.PhaseAlignRefusal> phaseAlignRefusedListener;
-    /** Subscriber for {@link Events#FFT_PHASE_ALIGN_PILOT_LOST} - the pilot
-     *  lines the alignment measures its time base from stayed unreadable, so
-     *  the analyser is ending the recording; the operator is told on which
-     *  signal it happened. */
-    private Consumer<FftAnalyzerWorker.PilotLost> phaseAlignPilotLostListener;
 
-    /**
-     * Constructs the live pane around the injected app-lifetime engine -
-     * the Record toggle drives {@code controller}; when it is already
-     * recording the Record LED lights up and the view simply picks up the
-     * worker's next published result.
-     */
-    public FftPane(Composite parent, FftController controller) {
-        this(parent, false, controller);
-    }
-
-    /**
-     * Offscreen screenshot variant: builds its own idle controller (worker
-     * never started, no audio device opened) and renders from that controller's
-     * store.  Silent: neither it nor anything it owns publishes or subscribes
-     * on the bus, so the copy never reaches the live pane.
-     */
+    /** Constructs the live pane: it builds its controller, which owns the
+     *  analyser worker, and the Record toggle drives it. */
     public FftPane(Composite parent) {
-        this(parent, true, null);
+        this(parent, false);
     }
 
     /** Builds + shows the DAC-predistortion wizard for a help capture and
@@ -185,7 +142,12 @@ public final class FftPane extends AbstractPane {
         return toolbarTabs == null ? null : toolbarTabs.openAdcCalibrationForCapture();
     }
 
-    private FftPane(Composite parent, boolean offScreen, FftController controller) {
+    /** @param offScreen the offscreen screenshot variant: its controller is
+     *                   never started (no audio device opened) and it renders
+     *                   from that controller's store.  Silent: neither it nor
+     *                   anything it owns publishes or subscribes on the bus,
+     *                   so the copy never reaches the live pane. */
+    private FftPane(Composite parent, boolean offScreen) {
         super(parent);
         // FFT-length changes, capture acquire / release, and the
         // generator-running query all flow through the MessageBus - no
@@ -212,15 +174,12 @@ public final class FftPane extends AbstractPane {
         plotRow.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
         plotRow.setLayout(new FormLayout());
 
-        // The live pane receives the app-lifetime controller (built in
-        // UIEngines), which owns the correction store.  The offscreen
-        // screenshot clone (offScreen) builds its own idle controller (worker
-        // never started) and takes that controller's own store.
-        if (offScreen) {
-            controller = new FftController();
-        }
-        this.controller = controller;
-        view = new FftView(plotRow, controller, offScreen);
+        // The pane builds its controller, which owns the correction store and
+        // the analyser worker, with this pane as the receiver of the worker's
+        // messages.  The offscreen screenshot clone's controller is never
+        // started.
+        this.controller = new FftController(this);
+        view = new FftView(plotRow, this, controller, offScreen);
         magScrollbar = new FlatScrollbar(plotRow, SWT.VERTICAL);
         magScrollbar.setMinimum(0);
         magScrollbar.setMaximum(SCROLL_RANGE);
@@ -280,9 +239,9 @@ public final class FftPane extends AbstractPane {
 
         // The tile-tab folder + every settings / presets / calibration /
         // save-load tab live in a self-contained control; the pane keeps only
-        // the chart, scrollbars and Record button.  Cross-pane concerns (stop
-        // recording on file load, open the screenshot dialog) are routed back
-        // here over the MessageBus.
+        // the chart, scrollbars and Record button.  The control calls its
+        // owner - this pane - for what the pane owns (stop recording on file
+        // load, the screenshot dialog, the scrollbar re-sync).
         // Collapsing the tab body (strip double-click / Enter, or the
         // screenshot path) frees vertical space - the control's owner (this
         // pane) re-flows so the chart above reclaims it.
@@ -305,41 +264,17 @@ public final class FftPane extends AbstractPane {
         Bindings.text(recordButton, "fft.record.tooltip", recordButton::setToolTipText);
 
         // ---- Wiring.  The analyser runs in the controller's worker; the
-        // pane drives its recording through the Record button.
-        //
-        // MessageBus subscriptions back to the pane:
-        //   - FFT_RANGE_CHANGED: the view publishes after pan / zoom and
-        //     auto-setup / maximize, the tab control after a preset is
-        //     applied -> realign the scrollbars.
-        //   - FFT_RECORDING_AUTO_STOPPED: the worker publishes when the
-        //     stop-after-N count is reached, the capture ended from below
-        //     (device lost / delivery stalled), the pilot lines stayed
-        //     unreadable, or the predistortion run settled -> release the
-        //     record state.
-        //   - FFT_RECORDING_STOP_REQUESTED / FFT_SCREENSHOT_REQUESTED:
-        //     the FftTabControl publishes these for the pane to service.
-        rangeChangedListener        = ignored -> syncFftPan();
-        autoStoppedListener         = ignored -> disengageRecord();
-        recordStopRequestedListener = ignored -> {
-            if (recordButton != null && !recordButton.isDisposed() && recordButton.getSelection()) {
-                recordOff();
-            }
-        };
-        screenshotRequestedListener = ignored -> openScreenshotDialog();
+        // pane drives its recording through the Record button.  The worker's
+        // messages arrive through the controller (onResultAvailable ...
+        // disengageRecord); the view and the tab control call the pane
+        // directly.  Only the FreqResp sweep, another module, reaches the
+        // pane over the bus.
         freqRespStartedListener     = ignored -> onFreqRespMeasurementStarted();
         freqRespStoppedListener     = ignored -> onFreqRespMeasurementStopped();
-        phaseAlignRefusedListener   = this::onPhaseAlignRefused;
-        phaseAlignPilotLostListener = this::onPhaseAlignPilotLost;
         if (!offScreen) {
             MessageBus bus = MessageBus.instance();
-            bus.subscribe(Events.FFT_RANGE_CHANGED,             rangeChangedListener);
-            bus.subscribe(Events.FFT_RECORDING_AUTO_STOPPED,    autoStoppedListener);
-            bus.subscribe(Events.FFT_RECORDING_STOP_REQUESTED,  recordStopRequestedListener);
-            bus.subscribe(Events.FFT_SCREENSHOT_REQUESTED,      screenshotRequestedListener);
             bus.subscribe(Events.FREQRESP_MEASUREMENT_STARTED,  freqRespStartedListener);
             bus.subscribe(Events.FREQRESP_MEASUREMENT_STOPPED,  freqRespStoppedListener);
-            bus.subscribe(Events.FFT_PHASE_ALIGN_REFUSED,       phaseAlignRefusedListener);
-            bus.subscribe(Events.FFT_PHASE_ALIGN_PILOT_LOST,    phaseAlignPilotLostListener);
         }
 
         recordButton.addListener(SWT.Selection, e -> {
@@ -349,31 +284,16 @@ public final class FftPane extends AbstractPane {
                 recordOff();
             }
         });
-
-        // The injected controller survives content rebuilds - when this is
-        // a rebuilt pane the analyser may already be recording: light the
-        // Record LED; the averaging accumulator keeps counting and the view
-        // picks up the worker's next published result.
-        if (this.controller.isRecording()) {
-            recordButton.setSelection(true);
-            recordButton.setImage(recordLit);
-        }
         updateWizardEnabled();
 
-        // The controller deliberately keeps running across a pane teardown
-        // (a content rebuild must not stop the analyser or wipe its
-        // accumulator); UIEngines shuts it down at application exit.  The
-        // offscreen clone's own controller was never started.
+        // The pane owns its controller, so the live pane stops it with
+        // itself.  The offscreen clone's controller was never started, and a
+        // stop of it would still reset the generator's frequency trim.
         group.addDisposeListener(e -> {
             MessageBus bus2 = MessageBus.instance();
-            bus2.unsubscribe(Events.FFT_RANGE_CHANGED,             rangeChangedListener);
-            bus2.unsubscribe(Events.FFT_RECORDING_AUTO_STOPPED,    autoStoppedListener);
-            bus2.unsubscribe(Events.FFT_RECORDING_STOP_REQUESTED,  recordStopRequestedListener);
-            bus2.unsubscribe(Events.FFT_SCREENSHOT_REQUESTED,      screenshotRequestedListener);
             bus2.unsubscribe(Events.FREQRESP_MEASUREMENT_STARTED,  freqRespStartedListener);
             bus2.unsubscribe(Events.FREQRESP_MEASUREMENT_STOPPED,  freqRespStoppedListener);
-            bus2.unsubscribe(Events.FFT_PHASE_ALIGN_REFUSED,       phaseAlignRefusedListener);
-            bus2.unsubscribe(Events.FFT_PHASE_ALIGN_PILOT_LOST,    phaseAlignPilotLostListener);
+            if (!offScreen) controller.shutdown();
         });
 
         // Re-layout once the event loop spins up.  At constructor exit
@@ -443,15 +363,16 @@ public final class FftPane extends AbstractPane {
         }
     }
 
-    /** Invoked on the UI thread when the analyser stopped on its own -
-     *  the stop-after-N counter fired, or the capture ended from below
-     *  (device lost / delivery stalled).  Disengages record mode so the
-     *  user sees the Record button switch off and the shared capture
-     *  refcount drops (which lets the audio device close if no other
-     *  pane is holding it).  When the worker recorded a capture-end
-     *  reason, this pane owns the failed operation, so this pane tells
-     *  the operator ONCE, in their language. */
-    private void disengageRecord() {
+    /** The controller's call on the UI thread when the analyser stopped on
+     *  its own - the stop-after-N counter fired, the capture ended from below
+     *  (device lost / delivery stalled), the pilot lines stayed unreadable or
+     *  the predistortion run settled.  Disengages record mode so the user
+     *  sees the Record button switch off and the shared capture refcount
+     *  drops (which lets the audio device close if no other pane is holding
+     *  it).  When the worker recorded a capture-end reason, this pane owns
+     *  the failed operation, so this pane tells the operator ONCE, in their
+     *  language. */
+    void disengageRecord() {
         CaptureEndReason reason = controller.captureEndReason();
         recordOff();
         if (reason != null) {
@@ -480,14 +401,13 @@ public final class FftPane extends AbstractPane {
         recordButton.setEnabled(true);
     }
 
-    /** {@link Events#FFT_PHASE_ALIGN_REFUSED} handler: the reference feed did
-     *  not qualify when the average started, so the analyser is running it
-     *  without alignment.  The recording is NOT stopped - an unaligned deep
+    /** The controller's call when the reference feed did not qualify when the
+     *  average started, so the analyser is running it without alignment.  The recording is NOT stopped - an unaligned deep
      *  average is still a valid measurement - the operator is simply told what
      *  the feed measured, so they can fix the wiring or its level and record
      *  again.  The worker sends one refusal per collection; the numbers are
      *  formatted here because the message is the pane's. */
-    private void onPhaseAlignRefused(FftAnalyzerWorker.PhaseAlignRefusal refusal) {
+    void onPhaseAlignRefused(FftAnalyzerWorker.PhaseAlignRefusal refusal) {
         if (refusal == null || group.isDisposed()) return;
         Dialogs.error(group.getShell(), I18n.t("fft.phaseAlign.refused.title"),
                 I18n.t("fft.phaseAlign.refused.message",
@@ -496,19 +416,46 @@ public final class FftPane extends AbstractPane {
                         String.format("%.1f", refusal.marginDb())));
     }
 
-    /** {@link Events#FFT_PHASE_ALIGN_PILOT_LOST} handler: the pilot lines the
-     *  alignment measures the elapsed samples between FFT frames from stayed
+    /** The controller's call when the pilot lines the alignment measures the
+     *  elapsed samples between FFT frames from stayed
      *  unreadable, so the coherent average has no time base left and the
      *  analyser is ending the recording on its own auto-stop path.  Nothing is
      *  stopped or cleared here - the Record button follows that path as it does
      *  for every auto-stop; this handler only tells the operator, with the
      *  frequency the collection was running at.  The number is formatted here
      *  because the message is the pane's. */
-    private void onPhaseAlignPilotLost(FftAnalyzerWorker.PilotLost lost) {
+    void onPhaseAlignPilotLost(FftAnalyzerWorker.PilotLost lost) {
         if (lost == null || group.isDisposed()) return;
         Dialogs.error(group.getShell(), I18n.t("fft.phaseAlign.pilotLost.title"),
                 I18n.t("fft.phaseAlign.pilotLost.message",
                         String.format("%.2f", lost.fundamentalHz())));
+    }
+
+    /** The controller's call with a finished analysis - the view shows it
+     *  and copies what it keeps during this call. */
+    void onResultAvailable(FftResult slot) {
+        view.onResultReady(slot);
+    }
+
+    /** The controller's call with a capture re-sync warning, for the view's
+     *  banner. */
+    void onCaptureResync(String messageKey) {
+        view.showCaptureResync(messageKey);
+    }
+
+    /** The controller's call when the fundamental level drifted while the
+     *  frequency lock aligned the generator - the view's banner hints at a
+     *  statistics reset. */
+    void onAlignMagDrift(double deltaDb) {
+        view.onAlignMagDrift(deltaDb);
+    }
+
+    /** Stops a live recording before a static spectrum is loaded - the tab
+     *  control's file load; the pane owns the Record button. */
+    void stopRecordingForLoad() {
+        if (recordButton != null && !recordButton.isDisposed() && recordButton.getSelection()) {
+            recordOff();
+        }
     }
 
     /** Turns the Record button ON - starts the analyser worker, which acquires
@@ -628,7 +575,7 @@ public final class FftPane extends AbstractPane {
      *  live render snapshot copied in, tab body collapsed, pan re-synced. */
     @Override
     protected AbstractPane createSnapshotClone(Composite parent) {
-        FftPane clone = new FftPane(parent);
+        FftPane clone = new FftPane(parent, true);
         clone.copySnapshotFrom(this);
         clone.refreshFromPrefs();
         return clone;
@@ -702,9 +649,9 @@ public final class FftPane extends AbstractPane {
      *  user gets immediate visual feedback on how much of the spectrum
      *  is hidden; selection positions the visible slice inside the full
      *  range.  Called whenever the pan window can have shifted -
-     *  preset apply, autosetup, maximize, range-change from the FFT
-     *  view, FFT length change, and after a fresh analysis. */
-    private void syncFftPan() {
+     *  preset apply (the tab control), autosetup, maximize and pan / zoom
+     *  (the view), FFT length change, and after a fresh analysis. */
+    void syncFftPan() {
         if (freqScrollbar == null || freqScrollbar.isDisposed()) return;
         if (magScrollbar  == null || magScrollbar .isDisposed()) return;
         clampRangesAndSave();

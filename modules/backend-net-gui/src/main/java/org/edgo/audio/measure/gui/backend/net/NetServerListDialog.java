@@ -435,7 +435,7 @@ public final class NetServerListDialog {
     private void startDiscovery() {
         Display display = dialog.getDisplay();
         discovery = new BeaconListener(server.getCodec(), (beacon, host) ->
-                GuiUtil.marshal(dialog, () -> {
+                GuiUtil.marshal(() -> {
                     // On the UI thread on purpose: the model writes into the
                     // settings block the rest of this dialog reads.
                     servers.heard(beacon, host, System.currentTimeMillis());
@@ -447,8 +447,7 @@ public final class NetServerListDialog {
         // unicast GET /info instead.  Same UI-thread marshal as the beacons - the
         // stamp lands in the model the widgets read, and the 500 ms tick repaints.
         prober = new ServerProber(server.getCodec(), serverId ->
-                GuiUtil.marshal(dialog,
-                        () -> servers.alive(serverId, System.currentTimeMillis())));
+                GuiUtil.marshal(() -> servers.alive(serverId, System.currentTimeMillis())));
         prober.setTargets(manualRows());
         // The proxy BEFORE the thread starts, beside the targets: the first
         // round begins the moment start() returns, and refresh() only reaches

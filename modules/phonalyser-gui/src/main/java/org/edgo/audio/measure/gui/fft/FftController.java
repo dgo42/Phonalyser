@@ -50,8 +50,10 @@ import lombok.Getter;
  * <p>The controller builds its worker and owns it; the controller itself
  * never imports SWT.  The dual-tone IMD products
  * travel on the result itself ({@link FftResult#imd}), filled by the
- * statistics recompute of the finalized frame; the controller never
- * references the view - everything it emits goes over the bus.
+ * statistics recompute of the finalized frame.  The pane that owns this
+ * controller builds it and passes itself in; the worker's messages reach that
+ * pane through the {@code on...} methods below, and the generator events go
+ * over the bus.
  */
 public final class FftController {
 
@@ -66,6 +68,9 @@ public final class FftController {
      *  and re-derives the view itself after every fill. */
     @Getter
     private final CorrectionStore correctionStore;
+    /** The pane that owns this controller: the receiver of the worker's
+     *  messages. */
+    private final FftPane pane;
 
     /** A loaded {@code .fft} spectrum: the reconstructed result, carrying the
      *  re-measured IMD products in {@link FftResult#imd} when the file was
@@ -73,9 +78,47 @@ public final class FftController {
      *  THD mode). */
     public record LoadedSpectrum(FftResult result) {}
 
-    public FftController() {
-        this.worker          = new FftAnalyzerWorker();
+    public FftController(FftPane pane) {
+        this.pane            = pane;
+        this.worker          = new FftAnalyzerWorker(this);
         this.correctionStore = new CorrectionStore("FFT");
+    }
+
+    // -------------------------------------------------------------------------
+    // Worker messages (UI thread) - forwarded to the owning pane
+    // -------------------------------------------------------------------------
+
+    /** A finished analysis, still owned by the worker's pool - the view copies
+     *  what it keeps during this call. */
+    void onResultAvailable(FftResult slot) {
+        pane.onResultAvailable(slot);
+    }
+
+    /** A capture re-sync warning; {@code messageKey} is its i18n key. */
+    void onCaptureResync(String messageKey) {
+        pane.onCaptureResync(messageKey);
+    }
+
+    /** The fundamental level moved by {@code deltaDb} while the frequency lock
+     *  pulled the generator onto the bin grid. */
+    void onAlignMagDrift(double deltaDb) {
+        pane.onAlignMagDrift(deltaDb);
+    }
+
+    /** The reference feed did not qualify at the start of the average. */
+    void onPhaseAlignRefused(FftAnalyzerWorker.PhaseAlignRefusal refusal) {
+        pane.onPhaseAlignRefused(refusal);
+    }
+
+    /** The pilot lines stayed unreadable; the recording is ending. */
+    void onPhaseAlignPilotLost(FftAnalyzerWorker.PilotLost lost) {
+        pane.onPhaseAlignPilotLost(lost);
+    }
+
+    /** The analyser stopped on its own: stop-after-N, the capture ending from
+     *  below, the pilot lost, or the predistortion run settled. */
+    void onRecordingAutoStopped() {
+        pane.disengageRecord();
     }
 
     // -------------------------------------------------------------------------
@@ -186,7 +229,7 @@ public final class FftController {
         worker.unregisterPredistortionEngine();
     }
 
-    /** Stops the worker - called by {@code UIEngines} at application exit. */
+    /** Stops the worker - called from the owning pane's dispose listener. */
     public void shutdown() {
         worker.stop();
     }

@@ -322,11 +322,10 @@ public final class FreqRespPane extends AbstractPane {
         // during the sweep takes effect at once.
         Preferences prefs = Preferences.instance();
         int sr = Math.max(1, prefs.current().getInputSampleRate());
-        Shell paneShell = group.getShell();
         StereoCaptureProgress progress = (totalSamples, rmsLeft, rmsRight) -> {
             double rmsLin = prefs.isFreqRespLeftVisible() ? rmsLeft : rmsRight;
             double tSec = totalSamples / (double) sr;
-            GuiUtil.marshal(paneShell, () -> {
+            GuiUtil.marshal(() -> {
                 if (progressMeter != null && !progressMeter.isDisposed()) {
                     progressMeter.appendSample(tSec, rmsLin);
                 }

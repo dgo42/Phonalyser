@@ -67,19 +67,18 @@ import lombok.extern.log4j.Log4j2;
 
 /**
  * Background analyser worker that owns the FFT compute thread and its
- * {@link FftAnalyzer} instance.  Holds none of the view's state - the
- * worker thread is fully decoupled from {@link FftView} via the bus:
- * each completed analysis is {@linkplain FftResult#deepCopy
- * deep-copied} and published on
- * {@link Events#FFT_RESULT_AVAILABLE}; subscribers (typically
- * {@link FftView}) keep the snapshot and paint from it without
- * touching anything the worker owns.
+ * {@link FftAnalyzer} instance.  Holds none of the view's state: each
+ * completed analysis is handed to the owning {@link FftController} on the
+ * UI thread, which passes it through the pane to the {@link FftView}; the
+ * view copies what it keeps and paints from that, without touching anything
+ * the worker owns.
  *
  * <p>Lifecycle is owner-driven: {@link FftController} constructs its worker
  * and drives {@link #start} / {@link #stop}; the application's controller
- * lives for the application lifetime (it survives content rebuilds, keeping
- * the averaging accumulator).  Everything bound for the UI thread is queued
- * through {@link GuiUtil#post}, in the order it was handed over.
+ * lives for the application lifetime, keeping the averaging accumulator.
+ * Everything bound for the UI thread is queued in the order it was handed
+ * over: the messages to the controller through {@link GuiUtil#marshalAndWake},
+ * the generator events on the bus through {@link GuiUtil#postAsync}.
  */
 @Log4j2
 public final class FftAnalyzerWorker {
@@ -111,6 +110,10 @@ public final class FftAnalyzerWorker {
     private static final int MIN_CALC_MAX_HARMONIC = 9;
     private long lastShowNanos;
 
+    /** The owner this worker reports to - every message is posted onto the UI
+     *  thread first.  {@code null} in headless tests, which post nothing (no
+     *  main shell). */
+    private final FftController controller;
     private final FftAnalyzer analyzer = new FftAnalyzer();
     /** The cross-cycle average: the sums of the frames since the collection's
      *  first, each turned back to that first frame, and the fundamental's
@@ -564,14 +567,14 @@ public final class FftAnalyzerWorker {
     /** Why the reference-channel alignment refused to run, in the three
      *  numbers the operator's message states: the fundamental's frequency, the
      *  reference bin's level and its margin over the reference channel's local
-     *  floor.  Payload of {@link Events#FFT_PHASE_ALIGN_REFUSED}. */
+     *  floor.  Handed to the controller, whose pane opens the dialog. */
     public record PhaseAlignRefusal(double fundamentalHz, double levelDbFs, double marginDb) {}
 
     /** Why the pilot-tone alignment ended the recording, in the one number
      *  the operator's message states: the fundamental's frequency.  A pilot
      *  line failed its level test on three frames in a row, which leaves the
-     *  coherent average with no time base at all.  Payload of
-     *  {@link Events#FFT_PHASE_ALIGN_PILOT_LOST}. */
+     *  coherent average with no time base at all.  Handed to the controller,
+     *  whose pane opens the dialog. */
     public record PilotLost(double fundamentalHz) {}
 
     /** How long {@link #stop()} waits for the worker thread to leave its
@@ -881,6 +884,10 @@ public final class FftAnalyzerWorker {
     private double  alignWatchBaseF1Db;
     private double  alignWatchBaseF2Db;
 
+    FftAnalyzerWorker(FftController controller) {
+        this.controller = controller;
+    }
+
     /** Returns the mains comb, (re)building it when the sample rate
      *  changes.  Worker-thread only. */
     private MainsCombFilter mainsComb(int sampleRate) {
@@ -962,22 +969,15 @@ public final class FftAnalyzerWorker {
     }
 
     /** Posts a capture re-sync warning to the view on the UI thread, carrying the
-     *  i18n message-key as the payload - so ONE event presents the distinct
-     *  "overrun" vs "discontinuity" messages depending on the caller. */
+     *  i18n message-key - so ONE message presents the distinct "overrun" vs
+     *  "discontinuity" warnings depending on the caller. */
     private void publishCaptureBanner(String messageKey) {
         // While the alignment has nothing settled, nothing is being averaged,
         // and that is what the operator needs to read.  A re-sync notice put
         // up in that state replaces it with a message about an event that is
         // already over, so it is not shown at all until averaging resumes.
         if (phaseAlignUnsettled && !PHASE_ALIGNING_BANNER.equals(messageKey)) return;
-        GuiUtil.post(() -> {
-            try {
-                MessageBus.instance().publish(Events.FFT_CAPTURE_RESYNC, messageKey);
-            } catch (Exception e) {
-                if (log.isErrorEnabled()) log.error("Can't dispatch {}", Events.FFT_CAPTURE_RESYNC, e);
-            }
-        });
-        GuiUtil.wake();
+        GuiUtil.marshalAndWake(() -> controller.onCaptureResync(messageKey));
     }
 
     /** Guard skipped after a discontinuity re-sync, ahead of the first fresh
@@ -1979,11 +1979,11 @@ public final class FftAnalyzerWorker {
                 log.warn("FFT phase alignment: no pilot line on {} frames in a row - the coherent "
                         + "average has no time base and the recording is ending", pilotMissingFrames);
             }
-            publishOnUiThread(Events.FFT_PHASE_ALIGN_PILOT_LOST,
-                    new PilotLost(r.fundamentalHzRefined));
+            PilotLost lost = new PilotLost(r.fundamentalHzRefined);
+            GuiUtil.marshalAndWake(() -> controller.onPhaseAlignPilotLost(lost));
         }
         paused.set(true);
-        GuiUtil.post(() -> MessageBus.instance().publish(Events.FFT_RECORDING_AUTO_STOPPED));
+        GuiUtil.marshalAndWake(() -> controller.onRecordingAutoStopped());
     }
 
     /** This cycle's time on the capture's own clock, seconds: the window's
@@ -2471,7 +2471,7 @@ public final class FftAnalyzerWorker {
         pendingFllReading = null;       // read before the reset: not the fresh loops' to act on
         clearFllAverages();
         republishTrims();
-        publishOnUiThread(Events.GENERATOR_FREQ_TRIM_RESET, null);
+        publishAsync(Events.GENERATOR_FREQ_TRIM_RESET, null);
     }
 
     /** Makes the next update of each loop publish its trim whatever its
@@ -2588,7 +2588,7 @@ public final class FftAnalyzerWorker {
                 if (moved1) {
                     fllPublishedCorrection = fll.getCorrection();
                     if (heldEmittedHz != null) heldEmittedHz[0] = pub1;
-                    publishOnUiThread(Events.GENERATOR_FREQ_TRIM, pub1);
+                    publishAsync(Events.GENERATOR_FREQ_TRIM, pub1);
                 }
             } else if (DebugSwitches.TRACE_FLL && log.isWarnEnabled()) {
                 log.warn("FLL t1 GATED: target={} meas={}",
@@ -2609,7 +2609,7 @@ public final class FftAnalyzerWorker {
                 if (moved2) {
                     fll2PublishedCorrection = fll2.getCorrection();
                     if (heldEmittedHz != null && heldEmittedHz.length > 1) heldEmittedHz[1] = pub2;
-                    publishOnUiThread(Events.GENERATOR_FREQ_TRIM_2, pub2);
+                    publishAsync(Events.GENERATOR_FREQ_TRIM_2, pub2);
                 }
             } else if (DebugSwitches.TRACE_FLL && log.isWarnEnabled()) {
                 log.warn("FLL t2 GATED: target={} meas={}",
@@ -2642,7 +2642,7 @@ public final class FftAnalyzerWorker {
             if (fll.getCorrection() != fllPublishedCorrection) {
                 fllPublishedCorrection = fll.getCorrection();
                 if (heldEmittedHz != null) heldEmittedHz[0] = target + fllPublishedCorrection;
-                publishOnUiThread(Events.GENERATOR_FREQ_TRIM, target + fllPublishedCorrection);
+                publishAsync(Events.GENERATOR_FREQ_TRIM, target + fllPublishedCorrection);
             }
             boolean aligned = Math.abs(measured - target)
                     <= target * ALIGN_DONE_PPM * Constants.PPM;
@@ -2748,7 +2748,8 @@ public final class FftAnalyzerWorker {
             delta = Math.max(delta, Math.abs(f2Db - alignWatchBaseF2Db));
         }
         if (delta > ALIGN_DRIFT_DB) {
-            publishOnUiThread(Events.FFT_ALIGN_MAG_DRIFT, delta);
+            double driftDb = delta;
+            GuiUtil.marshalAndWake(() -> controller.onAlignMagDrift(driftDb));
         }
     }
 
@@ -2815,36 +2816,35 @@ public final class FftAnalyzerWorker {
         publishPhaseAlignRefusal(new PhaseAlignRefusal(r.fundamentalHzRefined, levelDbFs, marginDb));
     }
 
-    /** Hands one refusal to the UI thread - the bus dispatches synchronously on
-     *  the publishing thread, and the subscriber opens a dialog - and only the
-     *  first one of a collection, so a run that restarts its accumulator does
-     *  not raise the same dialog again. */
+    /** Hands one refusal to the UI thread - the pane opens a dialog for it -
+     *  and only the first one of a collection, so a run that restarts its
+     *  accumulator does not raise the same dialog again. */
     private void publishPhaseAlignRefusal(PhaseAlignRefusal refusal) {
         if (phaseAlignRefusalPublished) return;
         phaseAlignRefusalPublished = true;
-        publishOnUiThread(Events.FFT_PHASE_ALIGN_REFUSED, refusal);
+        GuiUtil.marshalAndWake(() -> controller.onPhaseAlignRefused(refusal));
     }
 
-    /** Hands one message of the alignment to the UI thread: the bus
-     *  dispatches synchronously on the publishing thread, and the
-     *  subscribers of these messages open a dialog or - for the pilot the
-     *  generator is asked for and released - announce a changed signal,
-     *  whose own subscribers touch widgets.  Neither may happen on the
-     *  worker thread.  Messages keep the order they were handed over in, so
-     *  two pilot messages of one analysis cycle reach the generator in the
-     *  order that cycle produced them, and a message handed over ON the UI
-     *  thread (the stop's pilot take-down and trim reset) still queues behind
-     *  everything the worker posted before it.  Nothing is sent before the
-     *  main shell exists (headless runs). */
-    private void publishOnUiThread(String event, Object payload) {
-        GuiUtil.post(() -> {
+    /** Hands one generator event to the UI thread: the bus dispatches
+     *  synchronously on the publishing thread, and the subscribers of these
+     *  events - the trim, and the pilot the generator is asked for and
+     *  released - announce a changed signal, whose own subscribers touch
+     *  widgets.  Neither may happen on the worker thread.  Events keep the
+     *  order they were handed over in - also relative to the messages to the
+     *  controller, which use the same queue - so two pilot messages of one
+     *  analysis cycle reach the generator in the order that cycle produced
+     *  them, and an event handed over ON the UI thread (the stop's pilot
+     *  take-down and trim reset) still queues behind everything the worker
+     *  posted before it.  Nothing is sent before the main shell exists
+     *  (headless runs). */
+    private void publishAsync(String event, Object payload) {
+        GuiUtil.postAsync(() -> {
             try {
                 MessageBus.instance().publish(event, payload);
             } catch (Exception e) {
                 if (log.isErrorEnabled()) log.error("Can't dispatch {}", event, e);
             }
         });
-        GuiUtil.wake();
     }
 
     /** The alignment afresh, in every aligning mode: the reference channel's
@@ -2983,7 +2983,7 @@ public final class FftAnalyzerWorker {
                     elected.bin1(), String.format("%.6f", elected.hz1()),
                     String.format("%.1f", levelDbv), elected.reason());
         }
-        publishOnUiThread(Events.GENERATOR_PILOT_ON, request);
+        publishAsync(Events.GENERATOR_PILOT_ON, request);
     }
 
     /** The generator's emitted pair for this collection - {@link #heldEmittedHz},
@@ -3031,7 +3031,7 @@ public final class FftAnalyzerWorker {
         pilotReader2 = null;
         pilotPair    = null;
         analyzer.setPilotBins(-1, -1);
-        publishOnUiThread(Events.GENERATOR_PILOT_OFF, null);
+        publishAsync(Events.GENERATOR_PILOT_OFF, null);
     }
 
     /** The FORK: the per-cycle tracking correction (in samples) pooled from
@@ -3426,7 +3426,7 @@ public final class FftAnalyzerWorker {
     // ─── Worker loop ────────────────────────────────────────────────────────
 
     /** Worker-thread body.  Runs analysis on a background thread, posts
-     *  the redraw via {@link GuiUtil#post} so the SWT thread isn't
+     *  the redraw via {@link GuiUtil#marshalAndWake} so the SWT thread isn't
      *  blocked by the FFT compute. */
     private void workerLoop() {
         while (running) {
@@ -3518,7 +3518,7 @@ public final class FftAnalyzerWorker {
         if (rdr.isFinished()) {
             captureEndReason = rdr.takeFinishedReasonForReport();
             running = false;
-            GuiUtil.post(() -> MessageBus.instance().publish(Events.FFT_RECORDING_AUTO_STOPPED));
+            GuiUtil.marshalAndWake(() -> controller.onRecordingAutoStopped());
             return IDLE_CYCLE_MS;
         }
         int sampleRate = rdr.getSampleRate();
@@ -4128,20 +4128,18 @@ public final class FftAnalyzerWorker {
     }
 
     /** Pauses the analysis after this cycle - the worker loop runs no further
-     *  analysis while the pause flag is set - and announces the auto-stop on
-     *  {@link Events#FFT_RECORDING_AUTO_STOPPED} on the display thread, on
-     *  which the FFT pane flips Record off. */
+     *  analysis while the pause flag is set - and tells the controller of the
+     *  auto-stop on the display thread, on which the FFT pane flips Record
+     *  off. */
     private void pauseAndAnnounceAutoStop() {
         paused.set(true);
-        GuiUtil.post(() -> MessageBus.instance().publish(Events.FFT_RECORDING_AUTO_STOPPED));
+        GuiUtil.marshalAndWake(() -> controller.onRecordingAutoStopped());
     }
 
-    /** Deep-copies {@code newSlot} on the worker thread and publishes
-     *  the snapshot on {@link Events#FFT_RESULT_AVAILABLE} via
-     *  {@link GuiUtil#post} so subscribers receive the payload on
-     *  the UI thread.  The copy decouples the worker (which may keep
-     *  mutating its working {@code r}) from {@link FftView} (which
-     *  paints from the published snapshot for many frames). */
+    /** Parks {@code newSlot} for the UI thread and posts its hand-off to the
+     *  controller.  The slot is the worker's own copy: the worker keeps
+     *  mutating its working {@code r}, and {@link FftView} copies what it
+     *  paints from for many frames. */
     private void publishResult(FftResult newSlot) {
         if (GuiUtil.isHeadless()) {
             resultPool.release(newSlot);
@@ -4162,15 +4160,10 @@ public final class FftAnalyzerWorker {
             resultPool.release(coalesced);
             return;
         }
-        GuiUtil.post(this::drainPendingResult);
-        // Force the SWT main loop to wake from Display.sleep() if it was
-        // dozing.  The post already queues a wake message but on Windows
-        // the message queue can drop wakes under load - wake() is the
-        // belt-and-suspenders nudge.
-        GuiUtil.wake();
+        GuiUtil.marshalAndWake(this::drainPendingResult);
     }
 
-    /** Publishes a parked result to the bus NOW - UI thread only.  The
+    /** Hands a parked result to the controller NOW - UI thread only.  The
      *  asyncExec posted by {@link #publishResult} is the wake-from-idle path,
      *  but SWT dispatches asyncExec work only when the native event queue
      *  drains empty - and a GL scope's swap traffic can keep that queue busy
@@ -4192,12 +4185,12 @@ public final class FftAnalyzerWorker {
             return;
         }
         try {
-            MessageBus.instance().publish(Events.FFT_RESULT_AVAILABLE, slot);
+            controller.onResultAvailable(slot);
         } catch (Exception e) {
-            log.error("Can't dispatch Events.FFT_RESULT_AVAILABLE", e);
+            log.error("Can't hand over an FFT result", e);
         } finally {
-            // Subscribers ran synchronously in publish() above and
-            // deep-copied what they keep - the slot is free again.
+            // The view ran synchronously in the call above and copied what
+            // it keeps - the slot is free again.
             resultPool.release(slot);
         }
     }

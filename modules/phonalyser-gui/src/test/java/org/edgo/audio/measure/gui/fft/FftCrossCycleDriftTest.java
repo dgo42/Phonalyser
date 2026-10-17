@@ -122,7 +122,7 @@ class FftCrossCycleDriftTest {
             double ppbOverRun = driftPpmMin * 1000.0 * (total / (double) SAMPLE_RATE) / 60.0;
 
             FftAnalyzer       analyzer = new FftAnalyzer();
-            FftAnalyzerWorker worker   = new FftAnalyzerWorker();      // headless
+            FftAnalyzerWorker worker   = new FftAnalyzerWorker(null);      // headless
             double[] win = new double[winLen];
 
             LOG.info(String.format("--- drift = %.3f ppm/min  (%.1f ppb over %.1f s) ---",
@@ -194,7 +194,7 @@ class FftCrossCycleDriftTest {
             double[] sig = synthesizeContinuous(SEED, total, driftPerSample);
             Random hopDraw = new Random(SEED);              // reproducible hop sequence
             FftAnalyzer       analyzer = new FftAnalyzer();
-            FftAnalyzerWorker worker   = new FftAnalyzerWorker();   // headless
+            FftAnalyzerWorker worker   = new FftAnalyzerWorker(null);   // headless
             double[] win     = new double[winLen];
             LOG.info(String.format("--- drift = %.3f ppm/min  (random hop) ---", driftPpmMin));
 
@@ -260,7 +260,7 @@ class FftCrossCycleDriftTest {
             double[] sig = synthesizeTones(SEED, total, driftPerSample, freqs, dbfs);
 
             FftAnalyzer       analyzer = new FftAnalyzer();
-            FftAnalyzerWorker worker   = new FftAnalyzerWorker();
+            FftAnalyzerWorker worker   = new FftAnalyzerWorker(null);
             double[] win = new double[winLen];
             LOG.info(String.format("--- drift = %.3f ppm/min ---", driftPpmMin));
 
@@ -332,7 +332,7 @@ class FftCrossCycleDriftTest {
             double driftPerSample = driftPpmMin * 1e-6 / 60.0 / SAMPLE_RATE;
             double[] sig = synthesizeTones(SEED, total, driftPerSample, freqs, dbfs);
             FftAnalyzer       analyzer = new FftAnalyzer();
-            FftAnalyzerWorker worker   = new FftAnalyzerWorker();
+            FftAnalyzerWorker worker   = new FftAnalyzerWorker(null);
             double[] win = new double[winLen];
             LOG.info(String.format("--- drift = %.3f ppm/min ---", driftPpmMin));
             long base = 0;
@@ -463,7 +463,7 @@ class FftCrossCycleDriftTest {
         for (double wobblePpm : new double[]{0.0, 0.05, 0.5}) {
             double[] sig = synthesizeWobble(SEED, total, wobblePpm * 1e-6, tau, freqs, dbfs);
             FftAnalyzer       analyzer = new FftAnalyzer();
-            FftAnalyzerWorker worker   = new FftAnalyzerWorker();
+            FftAnalyzerWorker worker   = new FftAnalyzerWorker(null);
             double[] win = new double[winLen];
             double[] early = new double[freqs.length], late = new double[freqs.length];
             long base = 0;
@@ -512,7 +512,7 @@ class FftCrossCycleDriftTest {
         double[] sig = synthesizeTones(SEED, total, 0.0, freqs, dbfs);
 
         FftAnalyzer       analyzer = new FftAnalyzer();
-        FftAnalyzerWorker worker   = new FftAnalyzerWorker();
+        FftAnalyzerWorker worker   = new FftAnalyzerWorker(null);
         double[] win = new double[winLen];
         double fund0 = Double.NaN, line0 = Double.NaN, fundLate = Double.NaN, lineLate = Double.NaN;
         long base = 0;

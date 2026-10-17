@@ -116,7 +116,7 @@ public class UpdateChecker {
         Thread t = new Thread(() -> {
             int count = StoreUpdate.availableUpdateCount();
             log.info("Store update check: availableUpdateCount={}", count);
-            GuiUtil.marshal(parent, () -> {
+            GuiUtil.marshal(() -> {
                 if (count == 0) {
                     showUpToDate(parent, Versions.appVersion());
                 } else {
@@ -146,7 +146,7 @@ public class UpdateChecker {
                 log.warn("Update check failed: {}", ex.toString());
                 if (!silentIfUpToDate) {
                     final String reason = ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName();
-                    GuiUtil.marshal(parent, () -> showError(parent, reason));
+                    GuiUtil.marshal(() -> showError(parent, reason));
                 }
                 return;
             }
@@ -158,7 +158,7 @@ public class UpdateChecker {
             if (!includeBeta && info.preRelease) {
                 log.info("Latest release {} is a pre-release; skipping (includeBeta=false)", info.tag);
                 if (!silentIfUpToDate) {
-                    GuiUtil.marshal(parent, () -> showUpToDate(parent, current));
+                    GuiUtil.marshal(() -> showUpToDate(parent, current));
                 }
                 return;
             }
@@ -166,9 +166,9 @@ public class UpdateChecker {
             log.info("Update check: latest={}, current={}, cmp={}", info.tag, current, cmp);
             if (cmp > 0) {
                 final ReleaseInfo found = info;
-                GuiUtil.marshal(parent, () -> showNewer(parent, found, current));
+                GuiUtil.marshal(() -> showNewer(parent, found, current));
             } else if (!silentIfUpToDate) {
-                GuiUtil.marshal(parent, () -> showUpToDate(parent, current));
+                GuiUtil.marshal(() -> showUpToDate(parent, current));
             }
         }, "update-check");
         t.setDaemon(true);

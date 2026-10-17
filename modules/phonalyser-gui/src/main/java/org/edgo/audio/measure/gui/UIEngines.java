@@ -22,7 +22,6 @@ import org.edgo.audio.measure.gui.fft.FftController;
 import org.edgo.audio.measure.gui.generator.GeneratorController;
 import org.edgo.audio.measure.gui.scope.ScopeController;
 import org.edgo.audio.measure.gui.sound.DeviceCatalog;
-import org.edgo.audio.measure.gui.sound.SharedCapture;
 import org.edgo.audio.measure.sound.AudioBackend;
 
 import lombok.Getter;
@@ -42,18 +41,12 @@ public final class UIEngines {
 
     @Getter private final GeneratorController generatorController;
     @Getter private final ScopeController     scopeController;
-    @Getter private final FftController       fftController;
     /** The app-lifetime device-list snapshot the Preferences dialog is served
      *  from - primed once in the background at start-up.  Lives here with the
      *  engines because it shares their lifetime and their consumers. */
     @Getter private final DeviceCatalog       deviceCatalog;
 
     public UIEngines() {
-        // Eager init of the SharedCapture singleton so its MessageBus
-        // responder is registered BEFORE any pane fires a CAPTURE_ACQUIRE
-        // request - otherwise the request returns null and the user
-        // thinks the device failed to open.
-        SharedCapture.instance();
         // THE ORDER IS A CONTRACT, not tidiness.  The generator's constructor
         // registers the GENERATOR_RUNNING and GENERATOR_EMITTED_HZ responders,
         // and both analyzers below ask them - the emitted tones in particular
@@ -64,7 +57,6 @@ public final class UIEngines {
         // around at the asking end.
         generatorController = new GeneratorController();
         scopeController     = new ScopeController();
-        fftController       = new FftController();
         deviceCatalog       = new DeviceCatalog(AudioBackend.instance());
     }
 
@@ -72,7 +64,6 @@ public final class UIEngines {
      *  Mirror of the construction order: the analyzers stop asking BEFORE the
      *  generator unregisters the responders they ask. */
     public void shutdown() {
-        fftController.shutdown();
         scopeController.shutdown();
         generatorController.shutdown();
     }

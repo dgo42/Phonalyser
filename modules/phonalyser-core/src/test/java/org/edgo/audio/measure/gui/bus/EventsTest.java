@@ -58,8 +58,6 @@ class EventsTest {
         String[] all = {
                 Events.FFT_LENGTH_CHANGED,
                 Events.GENERATOR_RUNNING,
-                Events.FFT_RANGE_CHANGED,
-                Events.FFT_RECORDING_AUTO_STOPPED,
                 Events.FILE_PLAY_STOPPED,
                 Events.SCOPE_AUTO_SETUP,
         };

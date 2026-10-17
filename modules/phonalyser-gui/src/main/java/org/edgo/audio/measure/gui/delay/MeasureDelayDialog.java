@@ -84,7 +84,7 @@ public final class MeasureDelayDialog implements MeasureDelayController.Listener
         GridLayout layout = new GridLayout(1, false);
         layout.marginWidth = 12; layout.marginHeight = 12; layout.verticalSpacing = 10;
         dialog.setLayout(layout);
-        controller = new MeasureDelayController(dialog, this);
+        controller = new MeasureDelayController(this);
 
         Label intro = new Label(dialog, SWT.WRAP);
         intro.setText(I18n.t("measureDelay.intro"));

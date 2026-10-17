@@ -502,7 +502,7 @@ public final class PreferencesDialog {
         // dropped on dispose so the bus retains no widgets.
         MessageBus remoteBus = MessageBus.instance();
         Consumer<Void> remoteBackendsListener = ignored ->
-                GuiUtil.marshal(dialog, this::refreshBackendCombo);
+                GuiUtil.marshal(this::refreshBackendCombo);
         remoteBus.subscribe(Events.REMOTE_BACKENDS_CHANGED, remoteBackendsListener);
         dialog.addDisposeListener(e ->
                 remoteBus.unsubscribe(Events.REMOTE_BACKENDS_CHANGED, remoteBackendsListener));

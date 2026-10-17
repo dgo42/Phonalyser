@@ -57,6 +57,7 @@ import org.edgo.audio.measure.gui.helpviewer.HelpViewer;
 import org.edgo.audio.measure.gui.helpviewer.UpdateChecker;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.scope.gl.GpuSupport;
+import org.edgo.audio.measure.gui.sound.SharedCapture;
 import org.edgo.audio.measure.gui.tips.TipOfTheDayDialog;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.gui.preferences.PreferencesDialog;
@@ -123,6 +124,12 @@ public final class MainWindow {
         // Hook the icon cache to this shell so every Image loaded via
         // IconUtils is disposed automatically on shell teardown.
         IconUtils.registerShell(shell);
+
+        // Eager init of the SharedCapture singleton so its MessageBus
+        // responder is registered BEFORE any pane fires a CAPTURE_ACQUIRE
+        // request - otherwise the request returns null and the user
+        // thinks the device failed to open.
+        SharedCapture.instance();
 
         this.engines = new UIEngines();
         shell.addDisposeListener(e -> engines.shutdown());

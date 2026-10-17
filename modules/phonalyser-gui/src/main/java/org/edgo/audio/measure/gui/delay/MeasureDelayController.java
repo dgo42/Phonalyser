@@ -18,7 +18,6 @@
 
 package org.edgo.audio.measure.gui.delay;
 
-import org.eclipse.swt.widgets.Shell;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.OutputChannels;
 import org.edgo.audio.measure.gui.bus.Events;
@@ -55,15 +54,13 @@ public final class MeasureDelayController {
     /** How long a running measurement is given to end on close. */
     private static final long THREAD_JOIN_TIMEOUT_MS = 3_000;
 
-    private final Shell shell;
     private final Listener listener;
     private Thread thread;
     /** Whether the exclusive-measurement start has been announced and its
      *  stop is still owed. */
     private boolean exclusive;
 
-    public MeasureDelayController(Shell shell, Listener listener) {
-        this.shell    = shell;
+    public MeasureDelayController(Listener listener) {
         this.listener = listener;
     }
 
@@ -76,7 +73,7 @@ public final class MeasureDelayController {
                 new MeasureDelayWorker.Listener() {
                     @Override
                     public void measured(double delayMs) {
-                        GuiUtil.marshal(shell, () -> {
+                        GuiUtil.marshal(() -> {
                             releaseExclusive();
                             listener.measured(delayMs);
                         });
@@ -84,7 +81,7 @@ public final class MeasureDelayController {
 
                     @Override
                     public void failed(Failure failure) {
-                        GuiUtil.marshal(shell, () -> {
+                        GuiUtil.marshal(() -> {
                             releaseExclusive();
                             listener.failed(failure);
                         });

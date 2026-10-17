@@ -270,7 +270,7 @@ public final class ScopeTabControl extends AbstractTabControl<ScopePane> {
         if (liveCapture) {
             genChangeListener = cause -> {
                 if (isDisposed()) return;
-                GuiUtil.marshal(getShell(), () -> {
+                GuiUtil.marshal(() -> {
                     if (isDisposed()) return;
                     syncReconstructedBeatEnabled();
                     // A real generator change (not a sub-mHz FLL trim) invalidates the
@@ -300,7 +300,7 @@ public final class ScopeTabControl extends AbstractTabControl<ScopePane> {
             };
             MessageBus.instance().subscribe(Events.GENERATOR_SIGNAL_CHANGED, genChangeListener);
             singleDisarmedListener = ignored -> {
-                if (!isDisposed()) GuiUtil.marshal(getShell(), () -> {
+                if (!isDisposed()) GuiUtil.marshal(() -> {
                     if (triggerStartBtn != null && !triggerStartBtn.isDisposed()) {
                         triggerStartBtn.setSelection(false);
                     }
@@ -1453,7 +1453,7 @@ public final class ScopeTabControl extends AbstractTabControl<ScopePane> {
                 StereoPcmIo.saveStreaming(reader, new File(path), sampleRate, bitDepth, totalFrames,
                         combinedMaster, cancelled::get,
                         written -> {
-                            GuiUtil.marshal(dlg, () -> {
+                            GuiUtil.marshal(() -> {
                                 if (bar.isDisposed()) return;
                                 bar.setSelection((int) Math.min(1000L, 1000L * written / totalFrames));
                                 lbl.setText(I18n.t("scope.save.recording.progress",

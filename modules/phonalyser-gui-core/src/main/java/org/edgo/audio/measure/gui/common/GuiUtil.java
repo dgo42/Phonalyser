@@ -40,12 +40,12 @@ public class GuiUtil {
     @Setter
     private volatile Shell mainShell;
 
-    /** Runnables {@link #marshal} and {@link #post} queued on the UI thread
-     *  that have not started yet. */
+    /** Runnables {@link #marshal} and {@link #postAsync} queued on the UI
+     *  thread that have not started yet. */
     private final AtomicInteger pending = new AtomicInteger();
 
-    /** The count of runnables {@link #marshal} and {@link #post} queued on
-     *  the UI thread that have not started yet.  SWT runs queued runnables
+    /** The count of runnables {@link #marshal} and {@link #postAsync} queued
+     *  on the UI thread that have not started yet.  SWT runs queued runnables
      *  only once the native event queue is empty; the main loop's render tick
      *  reads this to leave it empty while any is waiting. */
     public int pendingMarshals() {
@@ -57,8 +57,8 @@ public class GuiUtil {
      * nothing runs when the widget is already disposed - at submit time or by
      * the time the display gets to it.  Already on the UI thread, no
      * marshalling is necessary and {@code r} runs in place - a deliberate
-     * SAME-thread deferral is not a marshal and stays on
-     * {@code Display.asyncExec} directly.
+     * SAME-thread deferral is not a marshal and goes through
+     * {@link #postAsync}.
      *
      * @return {@code true} when {@code r} ran in place or was queued;
      *         {@code false} when {@code context} was missing or already
@@ -66,7 +66,7 @@ public class GuiUtil {
      *         {@code r} can still be skipped later, when {@code context} is
      *         disposed by the time the display gets to it.
      */
-    public boolean marshal(Shell context, Runnable r) {
+    private boolean marshal(Shell context, Runnable r) {
         if (context == null || context.isDisposed()) return false;
         Display display = context.getDisplay();
         if (display.getThread() == Thread.currentThread()) {
@@ -102,36 +102,29 @@ public class GuiUtil {
     }
 
     /**
-     * Queues {@code r} on the UI thread from any thread - the UI thread
-     * included, where it runs behind everything already queued instead of in
-     * place - gated on the application's {@link #mainShell} like
-     * {@link #marshal(Runnable)}: nothing runs before MainWindow published it
-     * (headless runs) or once it is disposed, at submit time or by the time
-     * the display gets to it.  Counted in {@link #pendingMarshals} like a
-     * queued marshal, so the render heartbeat gives way until it has run.
+     * {@link #marshal(Runnable)}, then wakes the UI thread from
+     * {@code Display.sleep()}: a queued runnable already wakes it, but on
+     * Windows the message queue can drop that wake under load.  For a worker
+     * handing the UI thread something it waits for.
      *
-     * @return {@code true} when {@code r} was queued; {@code false} when
-     *         there was no live main shell at submit time ({@link #isHeadless})
-     *         and nothing was queued.  A queued {@code r} can still be skipped
-     *         later, when the main shell is disposed by the time the display
-     *         gets to it.
+     * @return {@code true} when {@code r} ran in place or was queued;
+     *         {@code false} when there was no live main shell at submit time
+     *         ({@link #isHeadless}) and nothing was done.  A queued {@code r}
+     *         can still be skipped later, when the main shell is disposed by
+     *         the time the display gets to it.
      */
-    public boolean post(Runnable r) {
+    public boolean marshalAndWake(Runnable r) {
+        boolean scheduled = marshal(r);
         Shell context = mainShell;
         if (context == null || context.isDisposed()) return false;
-        pending.incrementAndGet();
-        context.getDisplay().asyncExec(() -> {
-            pending.decrementAndGet();
-            if (context.isDisposed()) return;
-            r.run();
-        });
-        return true;
+        context.getDisplay().wake();
+        return scheduled;
     }
 
     /** Whether no live main shell exists - before MainWindow published it
      *  (headless runs: tests, a worker never wired to a window) or once it is
-     *  disposed.  While this holds, {@link #marshal(Runnable)} and
-     *  {@link #post} do nothing and {@link #wake} is a no-op, so a caller
+     *  disposed.  While this holds, {@link #marshal(Runnable)},
+     *  {@link #marshalAndWake} and {@link #postAsync} do nothing, so a caller
      *  holding a resource for the UI thread releases it itself instead of
      *  handing it over.  Any thread; the answer can change right after it is
      *  given, when the main shell is disposed. */
@@ -140,14 +133,39 @@ public class GuiUtil {
         return (context == null || context.isDisposed());
     }
 
-    /** Wakes the UI thread from {@code Display.sleep()} - any thread; a no-op
-     *  without the application's {@link #mainShell}.  A posted runnable
-     *  already wakes it, but on Windows the message queue can drop that wake
-     *  under load. */
-    public void wake() {
-        Shell context = mainShell;
-        if (context == null || context.isDisposed()) return;
-        context.getDisplay().wake();
+    /** {@link #postAsync(Runnable)}, gated on {@code context}. */
+    private boolean postAsync(Shell context, Runnable r) {
+        if (context == null || context.isDisposed()) return false;
+        Display display = context.getDisplay();
+        pending.incrementAndGet();
+        display.asyncExec(() -> {
+            pending.decrementAndGet();
+            if (context.isDisposed()) return;
+            r.run();
+        });
+        return true;
     }
+
+    /**
+     * Queues {@code r} on the UI thread from any thread - the UI thread
+     * included, where it runs behind everything already queued instead of in
+     * place - gated on the application's {@link #mainShell} like
+     * {@link #marshal(Runnable)}: nothing runs before MainWindow published it
+     * (headless runs) or once it is disposed, at submit time or by the time
+     * the display gets to it.  Counted in {@link #pendingMarshals} like a
+     * queued marshal, so the render heartbeat gives way until it has run.
+     * For a hand-over whose ORDER matters: one made on the UI thread still
+     * runs behind everything another thread queued before it.
+     *
+     * @return {@code true} when {@code r} was queued; {@code false} when
+     *         there was no live main shell at submit time ({@link #isHeadless})
+     *         and nothing was queued.  A queued {@code r} can still be skipped
+     *         later, when the main shell is disposed by the time the display
+     *         gets to it.
+     */
+    public boolean postAsync(Runnable r) {
+        return postAsync(mainShell, r);
+    }
+
 
 }

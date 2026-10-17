@@ -293,7 +293,7 @@ public final class ScopeController {
             // Re-open a window the preference says should be up - persisted from the
             // last run, or carried across a pane rebuild.  Deferred: at attach time the
             // main shell isn't laid out yet, and the window is parked off its bounds.
-            GuiUtil.marshal(view.getShell(), () -> {
+            GuiUtil.marshal(() -> {
                 if (this.view == view && !view.isDisposed()) syncHistogramWindow();
             });
         }

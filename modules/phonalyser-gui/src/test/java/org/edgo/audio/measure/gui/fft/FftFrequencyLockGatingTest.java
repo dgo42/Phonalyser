@@ -157,7 +157,7 @@ class FftFrequencyLockGatingTest {
      */
     @Test
     void theFirstCycleThatWouldFeedTheLoopAfterAReSyncIsSkipped() throws Exception {
-        FftAnalyzerWorker worker = new FftAnalyzerWorker();   // headless
+        FftAnalyzerWorker worker = new FftAnalyzerWorker(null);   // headless
 
         cycle(worker, FIRST_CYCLE);
         FrequencyAligner fll = loop(worker);
@@ -198,7 +198,7 @@ class FftFrequencyLockGatingTest {
      */
     @Test
     void aResetWhileStoppedPostsNothingWhenNoLoopWasEngaged() throws Exception {
-        FftAnalyzerWorker worker = new FftAnalyzerWorker();   // never started: no worker thread
+        FftAnalyzerWorker worker = new FftAnalyzerWorker(null);   // never started: no worker thread
 
         FieldUtils.writeField(worker, PUBLISHED, MARKER_HZ, true);
         worker.resetFrequencyLock();
