@@ -647,7 +647,8 @@ class GeneratorControllerRemoteTest {
     }
 
     @Test
-    void stoppingDuringAnUploadNeverStartsPlayingAndBlocksNothing() throws IOException {
+    void stoppingDuringAnUploadNeverStartsPlayingAndBlocksNothing()
+            throws IOException, InterruptedException {
         controller = new GeneratorController();
         server.setPlayFileDelayMs(SLOW_UPLOAD_MS);
 
@@ -660,6 +661,12 @@ class GeneratorControllerRemoteTest {
         assertTrue(returnedAfterMs < SLOW_UPLOAD_MS / 2,
                 "start returned in " + returnedAfterMs + " ms - the upload must not "
                         + "run on the caller's thread");
+        // DURING the upload, not before it: a stop that lands while the play
+        // thread is still reading the file sends nothing at all - correctly, so
+        // no stopFile either - and on a loaded machine the thread can start late
+        // enough for exactly that to happen.
+        assertTrue(server.getUploadEntered().await(AWAIT_STOP_MS, TimeUnit.MILLISECONDS),
+                "the upload really started before the stop");
 
         controller.stopFilePlayback();   // must not block on the upload either
 
