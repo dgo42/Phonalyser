@@ -29,7 +29,6 @@ import java.util.function.Consumer;
 import org.edgo.audio.measure.common.AppPaths;
 import org.edgo.audio.measure.common.Constants;
 import org.edgo.audio.measure.dsp.FftBinSnap;
-import org.edgo.audio.measure.dsp.MainsCombFilter;
 import org.edgo.audio.measure.dsp.SpectralDiscontinuityDetector;
 import org.edgo.audio.measure.dsp.TimeDiscontinuityDetector;
 import org.edgo.audio.measure.dsp.ToneLobeLift;
@@ -39,9 +38,6 @@ import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.FundamentalPhaseAlignment;
 import org.edgo.audio.measure.enums.GenChangeCause;
 import org.edgo.audio.measure.enums.GenSignalForm;
-import org.edgo.audio.measure.dsp.MainsFilters;
-import org.edgo.audio.measure.dsp.MainsTimeFilter;
-import org.edgo.audio.measure.enums.MainsSuppression;
 import org.edgo.audio.measure.enums.WindowType;
 import org.edgo.audio.measure.fft.CoherentAccumulator;
 import org.edgo.audio.measure.fft.CoherentAccumulator.FrameTurns;
@@ -95,13 +91,6 @@ public final class FftAnalyzerWorker {
      *  {@code DISPLAY_MAX_NANOS} so the view can't freeze. */
     private static final long DISPLAY_MIN_NANOS =  40_000_000L;   // ≤25 Hz refresh when keeping up
     private static final long DISPLAY_MAX_NANOS = 500_000_000L;   // ≥2 Hz even while behind
-    /** Mains-comb re-track cadence in analysis cycles.  The tracker's lock
-     *  is an EWMA with ≈33-detection memory, so tracking every Nth cycle
-     *  changes the smoothed lock negligibly while freeing the ~208
-     *  Goertzel sweeps (30-80 ms at large fftSize) from most cycles -
-     *  budget that 93.75 % overlap at 1 M needs to stay under its 170 ms
-     *  hop. */
-    private static final int MAINS_TRACK_CYCLE_INTERVAL = 5;
     /** Lowest harmonic ORDER the analysis always evaluates, whatever the
      *  preference states: the ladder H2 to H9 the distortion readouts are
      *  built on.  The count handed to the analysis is one less - it counts
@@ -147,7 +136,7 @@ public final class FftAnalyzerWorker {
     private final    AtomicLong         resetEpoch = new AtomicLong();
     /** Set by {@link #resetStatistics()} while the worker runs; consumed at
      *  the top of the next analysis cycle, where the worker itself wipes the
-     *  accumulator / mains tracking.  Those structures are worker-owned and
+     *  accumulator.  Those structures are worker-owned and
      *  not thread-safe - wiping them from the resetting thread mid-cycle can
      *  NPE the accumulate loops or leave the detector half-reset. */
     private final    AtomicBoolean      resetPending = new AtomicBoolean();
@@ -169,9 +158,6 @@ public final class FftAnalyzerWorker {
      *  estimate.  {@code 0} = the wait is time-driven (idle cycle).
      *  Worker-thread only. */
     private int awaitSamplesNext;
-    /** Analysis cycles since the mains comb was last re-tracked (worker-thread
-     *  only); see {@link #MAINS_TRACK_CYCLE_INTERVAL}. */
-    private int  mainsTrackCycle;
     /** Single-slot, coalescing handoff of the latest result to the UI thread.
      *  The worker overwrites it every cycle (newest wins) and posts ONE drain
      *  runnable only on the empty->full transition, so the SWT asyncExec queue
@@ -270,8 +256,7 @@ public final class FftAnalyzerWorker {
      *  {@link #winFill} / {@link #hopFill} - one call fills both arrays to the
      *  same offset - so {@link #invalidateWindow()} invalidates them with the
      *  analysed window.  No analysis copy is needed: the single-bin phasor
-     *  reads the samples without mutating them, and the reference feed is
-     *  deliberately not mains-filtered. */
+     *  reads the samples without mutating them. */
     private double[] refWinBuf;
     private double[] refHopBuf;
     /** The frequency lock's readings: each tone's phase at its bin on the
@@ -307,19 +292,6 @@ public final class FftAnalyzerWorker {
      *  Restarts at 0 with every fresh first window. */
     private int hopStep;
 
-    /** Mains-hum comb, lazily built for the current sample rate.  Used only
-     *  when {@code fftMainsSuppression == IIR_COMB}: it only TRACKS the mains
-     *  frequency here (the rejection is a plot-time spectral correction in
-     *  FftView, leaving the accumulator raw - the samples are not filtered). */
-    private MainsCombFilter mainsComb;
-    private int             mainsCombSampleRate;
-    /** Time-domain mains filter (synchronous subtraction / LMS) applied to the
-     *  captured window IN PLACE before the FFT, for the SYNC_SUBTRACT / LMS
-     *  modes.  The IIR comb stays a plot-time spectral correction instead - see
-     *  {@code mainsF0Hz} / FftView. */
-    private MainsTimeFilter  mainsTimeFilter;
-    private MainsSuppression mainsTimeFilterMode = MainsSuppression.NONE;
-    private int              mainsTimeFilterSampleRate;
     private Thread worker;
 
     // Perf instrumentation for DebugSwitches.SHOW_FFT_ANALYZE_TIME - two
@@ -473,13 +445,6 @@ public final class FftAnalyzerWorker {
     private boolean lastAccumulate;
     private boolean lastForeverMode;
     private int     lastRingN = -1;
-    /** Mains-suppression mode the previous ANALYSED cycle ran under, for spotting
-     *  a mid-run switch; {@code null} only until the first analysed cycle of the
-     *  process.  Nothing clears it on stop / start, so a mode changed while
-     *  stopped is seen as a switch on the first cycle of the next session - where
-     *  it is a no-op, {@link #start} having already invalidated the window and
-     *  cleared the cache.  Worker-thread only. */
-    private MainsSuppression lastMainsMode;
 
     // ─── Fundamental phase alignment ───────────────────────────────────────
     /** The fundamental's phase excess for the NEXT accumulated analysis cycle, in
@@ -739,8 +704,8 @@ public final class FftAnalyzerWorker {
     private double traceMargin2Db = Double.NaN;
     /** The three lines' plain phases on the analysed channel, radians: one
      *  single frame taken at the window's start - the base the pilot turns are
-     *  counted from - with no de-rotation, no summing of the cycle's frames
-     *  and no mains comb, so the trace states what the samples themselves hold
+     *  counted from - with no de-rotation and no summing of the cycle's
+     *  frames, so the trace states what the samples themselves hold
      *  before any step of the alignment.  NaN where the line has no bin on
      *  this frame or the window is not filled. */
     private double traceRawFundRad = Double.NaN;
@@ -886,29 +851,6 @@ public final class FftAnalyzerWorker {
 
     FftAnalyzerWorker(FftController controller) {
         this.controller = controller;
-    }
-
-    /** Returns the mains comb, (re)building it when the sample rate
-     *  changes.  Worker-thread only. */
-    private MainsCombFilter mainsComb(int sampleRate) {
-        if (mainsComb == null || mainsCombSampleRate != sampleRate) {
-            mainsComb = new MainsCombFilter(sampleRate, MainsCombFilter.DEFAULT_NOTCH_BANDWIDTH_HZ);
-            mainsCombSampleRate = sampleRate;
-        }
-        return mainsComb;
-    }
-
-    /** Returns the pre-FFT time-domain mains filter for {@code mode}
-     *  (SYNC_SUBTRACT / LMS), (re)building it when the mode or sample rate
-     *  changes.  Worker-thread only. */
-    private MainsTimeFilter mainsTimeFilter(MainsSuppression mode, int sampleRate) {
-        if (mainsTimeFilter == null || mainsTimeFilterMode != mode
-                || mainsTimeFilterSampleRate != sampleRate) {
-            mainsTimeFilter = MainsFilters.of(mode, sampleRate, MainsCombFilter.DEFAULT_NOTCH_BANDWIDTH_HZ);
-            mainsTimeFilterMode = mode;
-            mainsTimeFilterSampleRate = sampleRate;
-        }
-        return mainsTimeFilter;
     }
 
     /** Drops the cross-cycle accumulator.  Safe to call from any thread -
@@ -1665,8 +1607,8 @@ public final class FftAnalyzerWorker {
      * the window's start.  That start is the base the whole alignment counts
      * from - the advance handed to {@link PairAdvance} is measured between
      * window starts - so these phases stand at the same origin as everything
-     * derived from them, with the cycle's de-rotation and summing, and the
-     * mains comb, left out.  Costs one single-bin transform per line, paid
+     * derived from them, with the cycle's de-rotation and summing left out.
+     * Costs one single-bin transform per line, paid
      * only while {@link DebugSwitches#TRACE_PILOT_PHASE} is on.
      */
     private void takeRawPhases(FftResult r, int k0) {
@@ -2078,7 +2020,7 @@ public final class FftAnalyzerWorker {
      * reference channel, each the plain {@code atan2} of one single frame's
      * bin taken at the window's start - the base the advance is counted
      * between.  Nothing of the alignment has touched them: no de-rotation, no
-     * summing of the cycle's frames, no mains comb, no first-frame zero, no
+     * summing of the cycle's frames, no first-frame zero, no
      * turn resolution, no average.  Everything else on the line is derived
      * from these four, so a collection can be re-read from the trace alone.
      * NaN where a line had nothing to read on this frame: no window, no bin,
@@ -3335,8 +3277,8 @@ public final class FftAnalyzerWorker {
         invalidateWindow();
         reAnchorPending       = true;
         if (running) {
-            // Worker-owned state (accumulator, mains tracking) is wiped by the
-            // worker itself at the next cycle boundary - see resetPending.
+            // Worker-owned state (the accumulator) is wiped by the worker
+            // itself at the next cycle boundary - see resetPending.
             resetPending.set(true);
         } else {
             resetWorkerOwnedState();    // no worker thread to race with
@@ -3372,8 +3314,6 @@ public final class FftAnalyzerWorker {
         resetAccumulator();
         completedAnalyses = 0;          // re-zero: a racing worker-side ++ may have resurrected a stale count
         averagesInWindow  = 0;
-        mainsTrackCycle = 0;            // re-lock mains on the very next cycle
-        if (mainsComb != null) mainsComb.resetTracking();   // re-lock mains from scratch
     }
 
     // ─── Status queries ─────────────────────────────────────────────────────
@@ -3485,7 +3425,7 @@ public final class FftAnalyzerWorker {
         }
         lastGeneratorActive = genActiveNow;
         // Consume a pending foreign reset (or the transition reset just
-        // above): the accumulator / mains-tracking wipe runs HERE, on the
+        // above): the accumulator wipe runs HERE, on the
         // worker thread, so it can never race the accumulate loops.
         if (resetPending.getAndSet(false)) {
             resetWorkerOwnedState();
@@ -3716,21 +3656,14 @@ public final class FftAnalyzerWorker {
         }
         samplesAbsStart = winAbsStart;
 
-        // Per-cycle analysis copy: the comb / FFT window mutate the samples in
-        // place, so the retained sliding window must NOT be handed to analyze.
+        // Per-cycle analysis copy: the FFT window mutates the samples in place,
+        // so the retained sliding window must NOT be handed to analyze.
         if (analyzeBuf.length != winLen) analyzeBuf = new double[winLen];
         System.arraycopy(winBuf, 0, analyzeBuf, 0, winLen);
 
         // Any change to fftLength / window / channel / sampleRate makes the
         // cross-cycle accumulator meaningless (a different geometry or signal
         // under the cumulative spectrum), so it restarts.
-        // The mains-suppression mode is NOT one of them - a change of mode is a
-        // change of what the samples are, not of the spectrum's geometry, so it
-        // is handled on its own below and keeps the collected depth.
-        MainsSuppression mainsMode = prefs.getFftMainsSuppression();
-        boolean mainsSuppress   = mainsMode == MainsSuppression.IIR_COMB;          // plot-time comb
-        boolean mainsTimeDomain = mainsMode == MainsSuppression.SYNC_SUBTRACT
-                               || mainsMode == MainsSuppression.LMS;                // pre-FFT filter
         long cfgFingerprint = fftLength;
         cfgFingerprint = 31 * cfgFingerprint + sampleRate;
         cfgFingerprint = 31 * cfgFingerprint + window.ordinal();
@@ -3739,40 +3672,9 @@ public final class FftAnalyzerWorker {
             resetAccumulator();
             accumConfigFingerprint = cfgFingerprint;
         }
-        // A change of the pre-FFT filter TYPE restarts the window gather.  None
-        // and IIR comb share no pre-FFT filter (the comb is a plot-time
-        // correction), so a switch between those two changes nothing here; any
-        // transition into, out of or between Sync subtract and LMS does: the
-        // retained window is dropped and rebuilt from the reader's current
-        // position.
-        //
-        // What that buys is one window of coverage discarded, and no more.  It
-        // does NOT prevent a mixed frame: every analysis cycle copies the
-        // pristine retained window into analyzeBuf and filters the WHOLE copy
-        // in one processPreservingDc call, so no FFT frame can straddle the
-        // switch with or without the restart.  Nor does it train the new
-        // filter, which mainsTimeFilter rebuilds untrained on a mode change:
-        // the gather cycles return at the incomplete-window wait above, before
-        // this block runs, so the first analysed cycle after the switch is the
-        // first one to train it.
-        //
-        // The accumulator is deliberately left untouched.  Pre-switch and
-        // post-switch frames go on averaging together, and the averages counter
-        // stays consistent with them because nothing resets.  The rebuild needs
-        // no phase re-anchor: it takes the first-window path, which derives
-        // winAbsStart from the reader's own position, and the de-rotation rides
-        // those absolute positions, so the discarded span costs coverage but
-        // never displaces a frame.  No operator-facing re-sync banner belongs
-        // here either - a setting was changed, nothing went wrong.
-        boolean lastTimeDomain = lastMainsMode == MainsSuppression.SYNC_SUBTRACT
-                              || lastMainsMode == MainsSuppression.LMS;
-        if (lastMainsMode != null && lastMainsMode != mainsMode && (mainsTimeDomain || lastTimeDomain)) {
-            invalidateWindow();
-        }
-        lastMainsMode = mainsMode;
 
         // The pristine sliding window was copied into analyzeBuf above; the
-        // comb / FFT window mutate this copy in place, never winBuf.
+        // FFT window mutates this copy in place, never winBuf.
         double[] samples = analyzeBuf;
 
         int    calcMaxH = Math.max(MIN_CALC_MAX_HARMONIC, prefs.getFftCalcMaxHarmonic()) - 1;
@@ -3814,33 +3716,6 @@ public final class FftAnalyzerWorker {
         double expectedFundHz = emitted == null ? Double.NaN
                 : hintHz(dualTone ? Math.min(emitted[0], emitted[1]) : emitted[0]);
 
-        // Mains suppression: only TRACK the live mains fundamental here (a
-        // second of samples gives a mHz-accurate estimate) so the comb stays
-        // locked to 50/60 Hz.  The signal is deliberately NOT filtered in the
-        // time domain - combing each frame convolves the comb's transient/phase
-        // into it, which the coherent average can't undo (drift, worst when a
-        // mains harmonic sits on a measured tone).  Instead the comb's
-        // normalized frequency response is divided out of the AVERAGED spectrum
-        // at plot time (applyMainsCorrection), leaving the accumulator raw -
-        // like the .frc cal, but independent of it.  Input stays pristine, so
-        // the per-frame cache works normally.
-        if (mainsSuppress) {
-            // Re-track every Nth analysis cycle only - see MAINS_TRACK_CYCLE_INTERVAL.
-            if (mainsTrackCycle++ % MAINS_TRACK_CYCLE_INTERVAL == 0) {
-                mainsComb(sampleRate).track(samples, Math.min(samples.length, sampleRate));
-            }
-        } else if (mainsTimeDomain) {
-            // Synchronous-subtraction / LMS: remove the hum from the captured
-            // window IN PLACE before the FFT.  Both leave the test tone's
-            // amplitude and phase intact (they subtract only the additive hum),
-            // so the coherent de-rotation / average is undisturbed.  The window
-            // is filtered in double precision to preserve the measurement floor.
-            MainsTimeFilter mf = mainsTimeFilter(mainsMode, sampleRate);
-            if (mainsTrackCycle++ % MAINS_TRACK_CYCLE_INTERVAL == 0) {
-                mf.track(samples, Math.min(samples.length, sampleRate));
-            }
-            mf.processPreservingDc(samples, samples.length, samplesAbsStart);
-        }
         // Dual-tone: hint the upper tone too, so the analyzer produces an
         // honest sub-bin frequency estimate for it from the frame - the
         // dual-tone readout then reports true frequencies instead of reading
@@ -4086,15 +3961,12 @@ public final class FftAnalyzerWorker {
             stampDacFundamentalPhase(r, alignMode);   // on the SAME spectrum the peaks come from
             r.captureRawPeaks();                // refresh raw F + peak phasors off the averaged re/im
         }
-        // The whole post-average pipeline - mains rejection -> recomputeStats ->
-        // .frc calibration -> dBV lift - now runs in the UI (FftView), ONCE per
-        // DISPLAYED frame (after the display throttle + the coalescing handoff),
-        // so it's not redone on coalesced frames and mains is applied at plot
-        // time.  Here we only hand over the RAW averaged spectrum plus
-        // the state that pipeline needs: tracked mains f0 (NaN => off), the pinned
-        // coherent κ for the cal "before" dots (NaN => single analysis cycle),
-        // the channel.
-        r.mainsF0Hz     = mainsSuppress ? mainsComb(sampleRate).getMainsHz() : Double.NaN;
+        // The whole post-average pipeline - recomputeStats -> .frc calibration
+        // -> dBV lift - runs in the UI (FftView), ONCE per DISPLAYED frame
+        // (after the display throttle + the coalescing handoff), so it's not
+        // redone on coalesced frames.  Here we only hand over the RAW averaged
+        // spectrum plus the state that pipeline needs: the pinned coherent κ
+        // for the cal "before" dots (NaN => single analysis cycle), the channel.
         r.coherentKappa = accumulated
                 ? (accumulator.isStarted() ? accumulator.getKappa()
                                 : (r.freqResolution > 0 ? r.fundamentalHzRefined / r.freqResolution : 0.0))
@@ -4240,7 +4112,7 @@ public final class FftAnalyzerWorker {
      * to the same harmonic frequency); {@link FftResult#harmonicDbFs}, which
      * the same recompute rewrites; {@link FftResult#preCorrectionPeaks},
      * which its calibration sets; and {@link FftResult#amplitudeDbFs}, which
-     * its mains correction and calibration rewrite.  Until the view has run,
+     * its calibration rewrites.  Until the view has run,
      * the pre-correction peaks are null and the harmonic levels hold the
      * analyser's detection on the last single frame, not the average.
      */

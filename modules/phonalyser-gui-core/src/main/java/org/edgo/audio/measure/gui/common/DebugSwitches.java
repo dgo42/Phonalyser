@@ -29,11 +29,6 @@ import lombok.experimental.UtilityClass;
 @UtilityClass
 public final class DebugSwitches {
 
-    /** DEBUG hard switch: Overlay the mains comb's frequency response (red) on the FFT, anchored
-     *  at H2's level, so the notch positions vs the harmonics are visible.
-     *  {@code false} removes the overlay. */
-    public static final boolean SHOW_MAINS_COMB_RESPONSE = Boolean.parseBoolean("false");
-
     /** DEBUG hard switch: overlay the de-embedded calibration filter's response
      *  (the green line) on the FFT, anchored at H2's level, so the loaded
      *  {@code .frc} correction curve is visible against the spectrum.

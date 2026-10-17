@@ -45,7 +45,6 @@ import org.edgo.audio.measure.common.Constants;
 import org.edgo.audio.measure.dsp.FreqRespCalHelper;
 import org.edgo.audio.measure.dsp.FreqRespCalibration;
 import org.edgo.audio.measure.dsp.InverseCascade;
-import org.edgo.audio.measure.dsp.MainsCombFilter;
 import org.edgo.audio.measure.dsp.SpectralDiscontinuityDetector;
 import org.edgo.audio.measure.dsp.ToneLobe;
 import org.edgo.audio.measure.dsp.ToneLobeLift;
@@ -235,20 +234,14 @@ public final class FftView extends AbstractFreqDomainView {
      *  scope and neither view can starve the other behind its events. */
     private boolean fftDirty;
 
-    /** Frequency-domain mains rejection for the DISPLAYED frame - the worker
-     *  only tracks f0, this divides the comb's cached response out of the shown
-     *  spectrum (see {@link MainsCombFilter#applySpectrumCorrection}).  Its OWN
-     *  instance (UI-thread-driven, separate from the worker's comb), created
-     *  lazily on first use with the result's real sample rate. */
-    private MainsCombFilter mainsCorrector;
     /** Shared lobe lift for the manual-fundamental display (same algorithm the
      *  .frc cal uses, so a tone is rescaled identically in both paths). */
     private final ToneLobeLift LOBE = new ToneLobeLift();
     /** Re-derives the measurements (THD / SNR / N / fundamental / harmonics, all
-     *  units + %) from the de-hummed spectrum after {@link #mainsCorrector} runs
-     *  - the same {@code recomputeStats} the worker uses, so every readout
-     *  matches the plot.  Reused so its scratch buffers aren't re-allocated. */
-    private final FftAnalyzer mainsStats = new FftAnalyzer();
+     *  units + %) from the displayed spectrum - the same {@code recomputeStats}
+     *  the worker uses, so every readout matches the plot.  Reused so its
+     *  scratch buffers aren't re-allocated. */
+    private final FftAnalyzer statsAnalyzer = new FftAnalyzer();
 
     /** Sticky table-mode selector - {@code true} draws the IMD table,
      *  {@code false} draws the THD table.  Updated only inside
@@ -317,7 +310,7 @@ public final class FftView extends AbstractFreqDomainView {
             startRender = System.nanoTime();
             renderStepMark = startRender;
             gotFftResult = true;
-            // Post-average pipeline (mains -> recompute -> .frc -> dBV), run ONCE
+            // Post-average pipeline (recompute -> .frc -> dBV), run ONCE
             // here on the DISPLAYED frame (post throttle + coalescing) - before
             // the deep-copy so it holds the finished spectrum + readouts, the
             // dual-tone IMD products among them.
@@ -1031,27 +1024,16 @@ public final class FftView extends AbstractFreqDomainView {
     }
 
     /** Post-average pipeline, run ONCE per DISPLAYED frame (the worker now hands
-     *  over only the RAW averaged spectrum + the state below): mains rejection ->
-     *  the distortion lines' local noise floors -> .frc calibration ->
-     *  recompute every measurement.  So all
-     *  readouts (THD / SNR / N / fundamental / harmonics, every unit + %) and the
-     *  plot derive from one de-hummed, calibrated spectrum, computed only on
-     *  frames the user actually sees. */
+     *  over only the RAW averaged spectrum + the state below): the distortion
+     *  lines' local noise floors -> .frc calibration -> recompute every
+     *  measurement.  So all readouts (THD / SNR / N / fundamental / harmonics,
+     *  every unit + %) and the plot derive from one calibrated spectrum,
+     *  computed only on frames the user actually sees. */
     private void finalizeResult(FftResult r) {
         if (r.amplitudeDbFs == null) return;
         boolean accumulated = !Double.isNaN(r.coherentKappa);
 
-        // 1. Mains rejection - de-hum amplitudeDbFs (dBV is just dBFS + the global
-        //    ADC offset, applied at display time, so nothing extra to correct here).
-        if (r.mainsF0Hz > 0.0 && r.sampleRate > 0) {
-            if (mainsCorrector == null) {
-                mainsCorrector = new MainsCombFilter(r.sampleRate, MainsCombFilter.DEFAULT_NOTCH_BANDWIDTH_HZ);
-            }
-            mainsCorrector.applySpectrumCorrection(r.amplitudeDbFs, null, r.freqResolution, r.mainsF0Hz);
-            logRenderStep("3.1 mains rejection");
-        }
-
-        // 1.5 The local noise floor under every distortion line, measured on
+        // 1. The local noise floor under every distortion line, measured on
         //    the averaged spectrum as the capture holds it - before the
         //    de-embedding, which lifts a tone-only row's lobes but not the bins
         //    around them, so a floor read afterwards would stand a whole
@@ -1060,7 +1042,7 @@ public final class FftView extends AbstractFreqDomainView {
         measureLineFloors(r, lineHz);
 
         // 2. Frequency-response (.frc) calibration - adjusts spectrum + readouts;
-        //    independent of mains, never on the cal (green) line.
+        //    never on the cal (green) line.
         int correctedBins = 0;
         boolean calibrated = !correctionStore.getEntries().isEmpty();
         if (calibrated) {
@@ -1082,10 +1064,10 @@ public final class FftView extends AbstractFreqDomainView {
             carryLineFloorsThroughCal(r, lineHz, accumulated);
         }
         // 3. Measurements - recomputed on every frame: averaging needs it
-        //    (analyze skipped the stats while accumulating), mains and the
-        //    calibration change the spectrum, and the line-floor hold of step
-        //    1.5 lives in the recompute.
-        mainsStats.recomputeStats(r);
+        //    (analyze skipped the stats while accumulating), the calibration
+        //    changes the spectrum, and the line-floor hold of step 1 lives in
+        //    the recompute.
+        statsAnalyzer.recomputeStats(r);
         logRenderStep("3.4 statistics recompute");
         // 4. The BLUE "before-cal" dots of an ACCUMULATED frame, derived here -
         //    after step 3 - because the readouts they start from are the ones
@@ -1851,40 +1833,9 @@ public final class FftView extends AbstractFreqDomainView {
             }
         }
 
-        // DEBUG overlay: mains comb response (red), anchored at H2's level.
-        if (r.harmonicDbFs != null && r.harmonicDbFs.length > 0) {
-            drawMainsResponse(gc, plot, r, r.harmonicDbFs[0], unit,
-                    freqMin, freqMax, magTop, magBot, logFreq);
-        }
         // DEBUG overlay: spectral discontinuity reject gates.
         drawDiscontinuityGates(gc, plot, r, unit,
                 freqMin, freqMax, magTop, magBot, logFreq, binBw);
-    }
-
-    /** DEBUG: draws the mains comb's response as a red curve across the plot,
-     *  with its 0 dB (passband) baseline anchored at {@code anchorDbFs} - so the
-     *  notch positions are visible against the dots.  Reused by the THD path
-     *  (anchored at H2) and the IMD path (anchored at d2L, since H2 isn't marked
-     *  there).  No-op unless mains is locked. */
-    private void drawMainsResponse(GC gc, Rectangle plot, FftResult r, double anchorDbFs,
-                                   MagnitudeUnit unit, double freqMin, double freqMax,
-                                   double magTop, double magBot, boolean logFreq) {
-        if (!DebugSwitches.SHOW_MAINS_COMB_RESPONSE || !(r.mainsF0Hz > 0.0) || mainsCorrector == null
-                || !Double.isFinite(anchorDbFs)) return;
-        // One column per pixel, strokes through the shared sub-pixel polyline: Y
-        // stays fractional so the comb's notches land between rows instead of
-        // stair-stepping.  A column whose frequency is not positive yields NaN,
-        // which the painter reads as a gap - the old loop's "continue".
-        paintPolyline(gc, plot, getDisplay().getSystemColor(SWT.COLOR_RED),
-                SWT.LINE_SOLID, 1, plot.width + 1,
-                i -> (double) (plot.x + i),
-                i -> {
-                    double f = xToFreq(plot.x + i, plot, freqMin, freqMax, logFreq);
-                    if (!(f > 0)) return Double.NaN;
-                    double combDb = mainsCorrector.correctionDb(f);
-                    double v = convertFromDbFs(anchorDbFs + combDb, unit, r.binBwSqrt);
-                    return magToY(v, plot, magTop, magBot, unit);
-                });
     }
 
     /** DEBUG: overlays the spectral discontinuity detector's three reject gates
@@ -2426,11 +2377,6 @@ public final class FftView extends AbstractFreqDomainView {
             plotDotAt(gc, plot, hz[i], dbFs[i],
                     unit, freqMin, freqMax, magTop, magBot, logFreq);
         }
-
-        // DEBUG overlay: mains comb response (red), anchored at d2L's level
-        // (the order-2 lower IMD product - H2 isn't present in IMD mode).
-        drawMainsResponse(gc, plot, r, imd.dnLDbFs[2], unit,
-                freqMin, freqMax, magTop, magBot, logFreq);
 
         // F1 / F2 labels: each anchored just above its own dot, but if
         // the two labels would overlap the lower-dot's label slides up

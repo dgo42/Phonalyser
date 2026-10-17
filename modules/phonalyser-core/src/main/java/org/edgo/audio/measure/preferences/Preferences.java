@@ -487,9 +487,6 @@ public final class Preferences {
     /** {@code FftOverlap} enum name. */
     private final Property<FftOverlap> fftOverlap = bound(FftOverlap.PCT_0);
     private final Property<Boolean> fftCoherentAveraging = bound(true);
-    /** {@code MainsSuppression} enum name - mains-hum filter applied to
-     *  the captured signal before FFT averaging. */
-    private final Property<MainsSuppression> fftMainsSuppression = bound(MainsSuppression.NONE);
     /** {@code FundamentalPhaseAlignment} enum name - time base the coherent
      *  average uses for the fundamental's phase. */
     private final Property<FundamentalPhaseAlignment> fftFundamentalPhaseAlignment =
@@ -1430,10 +1427,6 @@ public final class Preferences {
     public void setFftCoherentAveraging(boolean v) { fftCoherentAveraging.set(v); }
     public Property<Boolean> fftCoherentAveragingProperty() { return fftCoherentAveraging; }
 
-    public MainsSuppression getFftMainsSuppression() { return fftMainsSuppression.get(); }
-    public void setFftMainsSuppression(MainsSuppression v) { fftMainsSuppression.set(v); }
-    public Property<MainsSuppression> fftMainsSuppressionProperty() { return fftMainsSuppression; }
-
     public FundamentalPhaseAlignment getFftFundamentalPhaseAlignment() { return fftFundamentalPhaseAlignment.get(); }
     public void setFftFundamentalPhaseAlignment(FundamentalPhaseAlignment v) { fftFundamentalPhaseAlignment.set(v); }
     public Property<FundamentalPhaseAlignment> fftFundamentalPhaseAlignmentProperty() { return fftFundamentalPhaseAlignment; }
@@ -2357,7 +2350,6 @@ public final class Preferences {
         root.put("fftWindow",                 fftWindow.get().name());
         root.put("fftOverlap",                fftOverlap.get().name());
         root.put("fftCoherentAveraging",      fftCoherentAveraging.get());
-        root.put("fftMainsSuppression",       fftMainsSuppression.get().name());
         root.put("fftFundamentalPhaseAlignment", fftFundamentalPhaseAlignment.get().name());
         root.put("fftAlignGenerator",         fftAlignGenerator.get().name());
         root.put("fftDistMinHz",              fftDistMinHz.get());
@@ -2751,12 +2743,6 @@ public final class Preferences {
         if (root.get("fftWindow")                 instanceof String  s) fftWindow.set(enumOr(WindowType.class, s, fftWindow.get()));
         if (root.get("fftOverlap")                instanceof String  s) fftOverlap.set(enumOr(FftOverlap.class, s, fftOverlap.get()));
         if (root.get("fftCoherentAveraging")      instanceof Boolean b) fftCoherentAveraging.set(b);
-        // The FFT settings tab carries no mains-suppression control any more, so
-        // a stored value could only act on the spectrum with nothing in the UI
-        // to show or undo it: the load pins the preference to NONE whatever the
-        // file holds, while the save keeps writing the key so the file still
-        // round-trips.
-        fftMainsSuppression.set(MainsSuppression.NONE);
         if (root.get("fftFundamentalPhaseAlignment") instanceof String  s) fftFundamentalPhaseAlignment.set(enumOr(FundamentalPhaseAlignment.class, s, fftFundamentalPhaseAlignment.get()));
         if (root.get("fftAlignGenerator")         instanceof String  s) fftAlignGenerator.set(AlignGenerator.fromString(s));
         else if (root.get("fftAlignGenToFreqDiff") instanceof Boolean b)   // migrate the old checkbox

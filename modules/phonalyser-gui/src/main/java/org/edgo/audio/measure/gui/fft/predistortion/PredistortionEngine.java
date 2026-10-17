@@ -30,7 +30,6 @@ import org.edgo.audio.measure.dsp.IntermodCompensation;
 import org.edgo.audio.measure.dsp.IntermodCompensation.ProductPhasors;
 import org.edgo.audio.measure.enums.AlignGenerator;
 import org.edgo.audio.measure.enums.Channel;
-import org.edgo.audio.measure.enums.MainsSuppression;
 import org.edgo.audio.measure.enums.WindowType;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.gui.common.CorrectionStore;
@@ -395,8 +394,8 @@ public final class PredistortionEngine {
         // Predistortion needs a deep, phase-coherent, generator-locked
         // measurement: switch the FFT to INFINITE coherent averaging, take the
         // fundamental from the generator and lock the tone with the FLL.
-        // Window + mains suppression are only RECOMMENDED - the user's choice
-        // is left intact, with a hint logged when it isn't ideal.
+        // The window is only RECOMMENDED - the user's choice is left intact,
+        // with a hint logged when it isn't ideal.
         prefs.setFftCoherentAveraging(true);
         prefs.setFftAverages(Double.POSITIVE_INFINITY);
         prefs.setFftFundFromGenerator(true);
@@ -406,11 +405,6 @@ public final class PredistortionEngine {
             if (window != WindowType.BH7) {
                 log.info("Predistortion: FFT window is {} - BH7 is recommended for the deepest harmonic separation.",
                         window);
-            }
-            MainsSuppression mains = prefs.getFftMainsSuppression();
-            if (mains != MainsSuppression.NONE) {
-                log.info("Predistortion: mains suppression is {} - recommend turning it OFF (it can notch a measured harmonic).",
-                        mains);
             }
         }
         publishReadouts();

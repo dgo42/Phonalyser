@@ -471,8 +471,7 @@ public final class FftTabControl extends AbstractCalibrationTabControl<FftPane> 
         // fundamental's phase decoheres from its harmonics - the selected mode
         // gives the coherent average a drift-free time base.  Items are in
         // FundamentalPhaseAlignment order, which is what Bindings.combo maps
-        // the selection index onto.  (The mains-suppression preference has no
-        // control on this tab; it keeps its stored value.)
+        // the selection index onto.
         addLabel(g, "fft.settings.phaseAlign");
         Combo phaseAlignCombo = new Combo(g, SWT.READ_ONLY);
         Bindings.items(phaseAlignCombo, () -> new String[] {

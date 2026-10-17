@@ -143,12 +143,6 @@ public class FftResult {
     public double fundamentalDbFs;
     public double fundamentalLinear;
 
-    /** Tracked mains fundamental (Hz) for the FFT pane's frequency-domain mains
-     *  rejection, or {@link Double#NaN} when mains suppression is off / unlocked.
-     *  The worker only TRACKS it; the actual notch correction is applied on the
-     *  displayed frame in {@code FftView} (so it runs once per painted frame, not
-     *  per averaging cycle), using a cached per-bin response keyed on this value. */
-    public double mainsF0Hz = Double.NaN;
     /** Pinned coherent fundamental bin (κ) for the plot-time .frc "before-cal"
      *  re-derive, or {@link Double#NaN} for a single (non-averaged) analysis
      *  cycle.  The worker owns the accumulator and sets this; the UI's
@@ -474,7 +468,6 @@ public class FftResult {
         c.fllAveraged2Hz             = src.fllAveraged2Hz;
         c.fundamentalDbFs            = src.fundamentalDbFs;
         c.fundamentalLinear          = src.fundamentalLinear;
-        c.mainsF0Hz                  = src.mainsF0Hz;
         c.coherentKappa              = src.coherentKappa;
         c.channelLeft                = src.channelLeft;
         c.samplesAbsStart            = src.samplesAbsStart;
