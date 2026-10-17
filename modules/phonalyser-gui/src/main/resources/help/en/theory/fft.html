@@ -277,12 +277,6 @@
         Each block's Φ is measured on the fundamental alone, and every
         harmonic lobe is de-rotated by <i>h</i>·Φ - the harmonics inherit a
         reference far stronger than themselves.</li>
-    <li><b>Weak fundamental, or two strong tones:</b> a single weak line
-        would inject its own phase noise into the entire de-rotation. The
-        rotation is then determined from <em>all strong tones together</em> -
-        each detected tone carries its own phase tracking, and their pooled
-        information sets the common clock-drift correction - so the
-        reference noise falls with the combined tone power.</li>
   </ul>
 
   <div class="diagram">
@@ -290,9 +284,6 @@
     <defs>
       <marker id="fb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
         <path d="M 0 0 L 10 5 L 0 10 z" fill="#33a"/>
-      </marker>
-      <marker id="fr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
-        <path d="M 0 0 L 10 5 L 0 10 z" fill="#c33"/>
       </marker>
     </defs>
     <!-- left: strong fundamental -->
@@ -306,37 +297,8 @@
     <text x="56" y="94"  fill="#557">with h·Φ</text>
     <text x="170" y="225" text-anchor="middle" fill="#335">strong fundamental:</text>
     <text x="170" y="241" text-anchor="middle" fill="#335">one clean phase reference</text>
-
-    <!-- right: the fork -->
-    <circle cx="600" cy="110" r="80" fill="none" stroke="#dde"/>
-    <line x1="600" y1="110" x2="616" y2="38"  stroke="#33a" stroke-width="1.6" marker-end="url(#fb)"/>
-    <line x1="600" y1="110" x2="654" y2="58"  stroke="#33a" stroke-width="1.6" marker-end="url(#fb)"/>
-    <line x1="600" y1="110" x2="674" y2="94"  stroke="#33a" stroke-width="1.6" marker-end="url(#fb)"/>
-    <path d="M 614 40 Q 648 48 672 92" fill="none" stroke="#33a" stroke-width="1" stroke-dasharray="4 3"/>
-    <!-- common rotation arc -->
-    <path d="M 600 18 A 92 92 0 0 1 686 76" fill="none" stroke="#c33" stroke-width="1.4" marker-end="url(#fr)"/>
-    <text x="700" y="50" fill="#a33">common rotation</text>
-    <text x="700" y="66" fill="#a33">(clock drift)</text>
-    <text x="488" y="34" fill="#557">tones = tines of</text>
-    <text x="488" y="50" fill="#557">one rigid fork</text>
-    <text x="600" y="225" text-anchor="middle" fill="#335">weak fundamental / two tones: "rotate the fork" -</text>
-    <text x="600" y="241" text-anchor="middle" fill="#335">the common angle is measured from all tines pooled</text>
   </svg>
   </div>
-  <p>The picture to keep: the strong tones form one rigid <b>fork</b> - the
-     signal fixes their phases <em>relative to each other</em>, and only the
-     fork's <em>common</em> rotation (the converters' clock drift) changes
-     from block to block. Measuring that one rotation angle from all tines
-     at once, weighted by their strength, is far quieter than reading it off
-     any single tine - and the whole fork is then rotated back as one.</p>
-  <p>This pooling is not a corner case; it is what a serious THD measurement
-     looks like. To measure THD at 1 kHz near the 10⁻⁸ % level, the
-     fundamental is removed by a <b>1 kHz twin-T notch</b> in front of the
-     ADC - making it up to 80 dB weaker (of order 0.1 mV RMS) so the
-     converter no longer generates its own distortion from a full-scale tone
-     and its dynamic range is spent on the harmonics. The de-rotation then
-     locks onto the pooled tone set and stays locked, which is what makes
-     hours-long complex averaging of the weakest harmonics possible.</p>
 
   <h2 id="rejection">Keeping bad blocks out of the average</h2>
   <p>One corrupted block - a stretch of swallowed samples, a paused
@@ -675,8 +637,7 @@
      link.  Each mechanism in this chapter removes one way a long complex average
      can rot: bin alignment to ±0.05 ppm removes the leakage, exact
      per-block de-rotation removes the phase drift the residual would cause,
-     pooled phase references keep the lock when the fundamental is notched
-     away, and strict block exclusion keeps overruns and discontinuities out
+     and strict block exclusion keeps overruns and discontinuities out
      of the statistics. Together they make the average stable over <b>very
      long runs - 8 to 12 hours of continuous coherent averaging</b> - and
      that endurance is the requirement behind the headline figure: a noise

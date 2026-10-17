@@ -426,8 +426,8 @@ public final class FftAnalyzerWorker {
      *  measure the advance on every frame. */
     private double  accumDroppedSamples;   // cumulative de-rotation correction (sub-sample), driven by the tracking
     private boolean gapRecoverPending;     // a re-sync fired; realign the next frame
-    /** Below this pinned fundamental bin there is no harmonic family to pool
-     *  or to trace: the fork stands down. */
+    /** Below this pinned fundamental bin there is no harmonic family to
+     *  trace. */
     private static final double KAPPA_FAMILY_MIN_BIN = 1.0;
     /** Tracking gain (fraction of the running fundamental mis-alignment
      *  folded into the de-rotation each cycle).  Low enough to average out
@@ -435,10 +435,6 @@ public final class FftAnalyzerWorker {
      *  enough to track the κ-residual ramp.  Raise it if the fundamental still
      *  drifts; lower it if the harmonics get noisy. */
     private static final double PHASE_TRACK_GAIN = 0.10;
-    /** A fork line whose accumulated-vs-fresh phase difference sits within this
-     *  of the ±π wrap is dropped for the cycle - folded to the wrong side it
-     *  would pull the pooled offset instead of refining it. */
-    private static final double FORK_WRAP_GUARD_RAD = Math.PI / 2.0;
     /** Previous analysis cycle's averaging mode, for deciding when to reset
      *  the cross-cycle accumulator: the averaging mode flip, a ring↔infinite
      *  switch, or a smaller ring (a larger ring keeps the depth). */
@@ -612,8 +608,7 @@ public final class FftAnalyzerWorker {
      *  - the companion of {@link #pendingPhiF}.  A notch's phase response at
      *  F2 is not the one it has at F1, so the two tones carry their own
      *  numbers: the (0,1) member of the product grid, F2 itself, turns by
-     *  minus this, and the fork pool takes it out of F2's fresh phasor.
-     *  Zero in single tone and in mode {@link FundamentalPhaseAlignment#NONE}. */
+     *  minus this.  Zero in single tone and in mode {@link FundamentalPhaseAlignment#NONE}. */
     private double pendingPhiF2;
     /** Frames in a row the pilots gave no measurement on: the first is
      *  extrapolated, the second re-syncs the capture, the third ends the
@@ -1047,9 +1042,8 @@ public final class FftAnalyzerWorker {
         // The tones' phase excesses for THIS analysis cycle.  Zero in mode NONE
         // and for as long as the reference feed stands refused; F1's enters at
         // exactly two points - the tracking loop's fundamental phase below, and
-        // the fundamental's hump in the accumulator - and F2's at the two that
-        // answer them for the second tone: its own hump, and the fork pool's
-        // reading of its bin.  Nowhere else.
+        // the fundamental's hump in the accumulator - and F2's at one: its own
+        // hump.  Nowhere else.
         final double phiF  = phaseAlignRefused ? 0.0 : pendingPhiF;
         final double phiF2 = phaseAlignRefused ? 0.0 : pendingPhiF2;
 
@@ -1136,15 +1130,9 @@ public final class FftAnalyzerWorker {
                 // and fold a FRACTION of it back into the de-rotation every
                 // analysis cycle.  PHASE_TRACK_GAIN < 1 is the loop filter: it
                 // averages out the per-cycle phase noise that would otherwise
-                // random-walk if folded whole.  The steady estimate is the
-                // FORK - pooled from every strong family line, not the
-                // fundamental alone (see forkPooledOffset) - so behind a
-                // notch the reference noise falls with the combined power of
-                // the harmonics instead of being set by the weakest line.
-                // On a re-sync the delta jumped, so do a one-shot FULL
-                // realign of THIS frame from the fundamental alone (a big
-                // offset wraps the higher lines' phases, so pooling is not
-                // valid there) and let the loop clean up afterwards.
+                // random-walk if folded whole.  On a re-sync the delta
+                // jumped, so do a one-shot FULL realign of THIS frame and let
+                // the loop clean up afterwards.
                 // Minus the fundamental's phase excess: what the loop sees is
                 // the fundamental with the notch's own drift taken out.
                 double krot = accumulator.fundamentalAngle(delta);
@@ -1165,8 +1153,7 @@ public final class FftAnalyzerWorker {
                                 Math.round(fundOffset), String.format("%.4f", residual));
                     }
                 } else {
-                    accumDroppedSamples += PHASE_TRACK_GAIN
-                            * forkPooledOffset(r, halfSize, delta, k0, fundOffset, phiF2);
+                    accumDroppedSamples += PHASE_TRACK_GAIN * fundOffset;
                 }
             }
             // In the reference mode the second tone's turn is read on the
@@ -2974,98 +2961,6 @@ public final class FftAnalyzerWorker {
         pilotPair    = null;
         analyzer.setPilotBins(-1, -1);
         publishAsync(Events.GENERATOR_PILOT_OFF, null);
-    }
-
-    /** The FORK: the per-cycle tracking correction (in samples) pooled from
-     *  every strong line of the coherent family instead of the fundamental
-     *  alone.  A common sample offset rotates each line proportionally to its
-     *  frequency, so each line's accumulated-vs-fresh phase difference divided
-     *  by its fractional bin is an independent estimate of the SAME offset;
-     *  the estimates are averaged with weights {@code (fractional bin x
-     *  magnitude)^2} - variance-optimal, since a line's phase noise is
-     *  floor/|X| and its offset sensitivity grows with frequency.  Admission:
-     *  a line joins when its fresh level is within the multi-tone threshold
-     *  (Preferences, {@code fftStrongToneRelDb}) below the fundamental's -
-     *  smaller threshold pools fewer lines - and the dual pair's F2 (the
-     *  {@code (0,1)} grid product) always joins; a line within
-     *  {@link #FORK_WRAP_GUARD_RAD} of the ±π wrap is dropped for the cycle.
-     *  Behind a notch the fundamental is the WEAKEST line, and the pooled
-     *  reference noise falls with the combined power of the harmonics - the
-     *  theory chapter's fork.  With nothing else admitted, returns the
-     *  fundamental's own estimate unchanged. */
-    private double forkPooledOffset(FftResult r, int halfSize, double delta, int k0,
-                                    double fundOffset, double phiF2) {
-        double kappa  = accumulator.getKappa();
-        double kappa2 = accumulator.getKappa2();
-        // The ladder below runs h while h·κ < halfSize: bounded by the family,
-        // not by the spectrum, so a sub-bin κ has no ladder to pool - the
-        // fundamental's own estimate stands.
-        if (kappa < KAPPA_FAMILY_MIN_BIN) return fundOffset;
-        double fundPow = r.re[k0] * r.re[k0] + r.im[k0] * r.im[k0];
-        double relDb   = Preferences.instance().getFftStrongToneRelDb();
-        double minPow  = fundPow * Math.pow(10.0, -relDb / 10.0);
-        double sumW    = kappa * kappa * fundPow;
-        double sumWOff = sumW * fundOffset;
-        // The harmonic ladder h·κ, h = 2 and up.  No excess is taken out of
-        // these: the accumulator turns the h = 1 rung alone, so the harmonics'
-        // accumulated bins carry none either and the two sides agree.
-        for (int h = 2; h * kappa < halfSize - 1.0; h++) {
-            double[] est = forkLineOffset(r, halfSize, delta, h * kappa, minPow, false, 0.0);
-            if (est != null) {
-                sumW    += est[0];
-                sumWOff += est[0] * est[1];
-            }
-        }
-        // The published product grid a·κ1 + b·κ2 when a dual pair is pinned;
-        // F2 - the (0,1) entry - is a fundamental and joins unconditionally.
-        int[] pa = r.imdProductA;
-        int[] pb = r.imdProductB;
-        if (kappa2 > 0.0 && pa != null && pb != null) {
-            for (int p = 0; p < pa.length; p++) {
-                double kappaP = pa[p] * kappa + pb[p] * kappa2;
-                if (kappaP < 1.0 || kappaP > halfSize - 1.0) continue;
-                boolean exempt = pa[p] == 0 && pb[p] == 1;
-                // F2's accumulated region carries -phiF2, so its fresh phasor
-                // has to be read with the same excess taken out; without that
-                // the whole excess would come back as a systematic residual
-                // and be folded into the dropped-sample estimate.
-                double[] est = forkLineOffset(r, halfSize, delta, kappaP, minPow, exempt,
-                        exempt ? phiF2 : 0.0);
-                if (est != null) {
-                    sumW    += est[0];
-                    sumWOff += est[0] * est[1];
-                }
-            }
-        }
-        return sumWOff / sumW;
-    }
-
-    /** One fork line's {@code [weight, offset-estimate]} - or {@code null}
-     *  when the line is below the admission level (unless {@code exempt}),
-     *  out of range, or too close to the phase wrap this analysis cycle.  The
-     *  fresh phasor is de-rotated by the line's own family angle and by
-     *  {@code excessRad}, the phase excess the accumulator turned that line's
-     *  region by, exactly as the accumulator rotated its bin - so the two
-     *  phases compare directly and the residual holds the sample offset
-     *  alone. */
-    private double[] forkLineOffset(FftResult r, int halfSize, double delta,
-                                    double kappaL, double minPow, boolean exempt,
-                                    double excessRad) {
-        int k = (int) Math.round(kappaL);
-        if (k <= 1 || k > halfSize) return null;
-        double pow = r.re[k] * r.re[k] + r.im[k] * r.im[k];
-        if (!exempt && pow < minPow) return null;
-        int    fftSize = accumulator.getFftSize();
-        double ang = -2.0 * Math.PI
-                * Math.IEEEremainder(delta * kappaL, fftSize) / fftSize;
-        double c   = Math.cos(ang), s = Math.sin(ang);
-        double obs = Math.atan2(r.re[k] * s + r.im[k] * c,
-                                r.re[k] * c - r.im[k] * s) - excessRad;
-        double accumPhase = Math.atan2(accumulator.getSumIm()[k], accumulator.getSumRe()[k]);
-        double res = Math.IEEEremainder(obs - accumPhase, 2.0 * Math.PI);
-        if (Math.abs(res) > FORK_WRAP_GUARD_RAD) return null;
-        return new double[]{ kappaL * kappaL * pow,
-                             res * fftSize / (2.0 * Math.PI * kappaL) };
     }
 
     /**

@@ -284,12 +284,6 @@
         Das Φ jedes Blocks wird allein am Grundton gemessen, und jede
         Harmonischen-Keule wird um <i>h</i>·Φ de-rotiert - die Harmonischen erben
         eine Referenz, die weit stärker ist als sie selbst.</li>
-    <li><b>Schwacher Grundton oder zwei starke Töne:</b> Eine einzelne schwache
-        Linie würde ihr eigenes Phasenrauschen in die gesamte De-Rotation
-        einspeisen. Die Rotation wird dann aus <em>allen starken Tönen zusammen</em>
-        bestimmt - jeder erkannte Ton trägt seine eigene Phasenverfolgung, und
-        ihre gepoolte Information setzt die gemeinsame Taktdrift-Korrektur -
-        sodass das Referenzrauschen mit der kombinierten Tonleistung fällt.</li>
   </ul>
 
   <div class="diagram">
@@ -297,9 +291,6 @@
     <defs>
       <marker id="fb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
         <path d="M 0 0 L 10 5 L 0 10 z" fill="#33a"/>
-      </marker>
-      <marker id="fr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
-        <path d="M 0 0 L 10 5 L 0 10 z" fill="#c33"/>
       </marker>
     </defs>
     <!-- left: strong fundamental -->
@@ -313,39 +304,8 @@
     <text x="56" y="94"  fill="#557">with h·Φ</text>
     <text x="170" y="225" text-anchor="middle" fill="#335">strong fundamental:</text>
     <text x="170" y="241" text-anchor="middle" fill="#335">one clean phase reference</text>
-
-    <!-- right: the fork -->
-    <circle cx="600" cy="110" r="80" fill="none" stroke="#dde"/>
-    <line x1="600" y1="110" x2="616" y2="38"  stroke="#33a" stroke-width="1.6" marker-end="url(#fb)"/>
-    <line x1="600" y1="110" x2="654" y2="58"  stroke="#33a" stroke-width="1.6" marker-end="url(#fb)"/>
-    <line x1="600" y1="110" x2="674" y2="94"  stroke="#33a" stroke-width="1.6" marker-end="url(#fb)"/>
-    <path d="M 614 40 Q 648 48 672 92" fill="none" stroke="#33a" stroke-width="1" stroke-dasharray="4 3"/>
-    <!-- common rotation arc -->
-    <path d="M 600 18 A 92 92 0 0 1 686 76" fill="none" stroke="#c33" stroke-width="1.4" marker-end="url(#fr)"/>
-    <text x="700" y="50" fill="#a33">common rotation</text>
-    <text x="700" y="66" fill="#a33">(clock drift)</text>
-    <text x="488" y="34" fill="#557">tones = tines of</text>
-    <text x="488" y="50" fill="#557">one rigid fork</text>
-    <text x="600" y="225" text-anchor="middle" fill="#335">weak fundamental / two tones: "rotate the fork" -</text>
-    <text x="600" y="241" text-anchor="middle" fill="#335">the common angle is measured from all tines pooled</text>
   </svg>
   </div>
-  <p>Das Bild, das man sich merken sollte: Die starken Töne bilden eine starre
-     <b>Stimmgabel</b> - das Signal fixiert ihre Phasen <em>relativ zueinander</em>,
-     und nur die <em>gemeinsame</em> Rotation der Gabel (die Taktdrift der Wandler)
-     ändert sich von Block zu Block. Diesen einen Rotationswinkel aus allen Zinken
-     zugleich zu messen, gewichtet nach ihrer Stärke, ist weit leiser als ihn an
-     einer einzelnen Zinke abzulesen - und die ganze Gabel wird dann als eine
-     zurückgedreht.</p>
-  <p>Dieses Pooling ist kein Sonderfall; es ist, wie eine ernsthafte THD-Messung
-     aussieht. Um THD bei 1 kHz nahe dem Niveau von 10⁻⁸ % zu messen, wird der
-     Grundton durch ein <b>1-kHz-Twin-T-Kerbfilter</b> vor dem ADC entfernt - was
-     ihn um bis zu 80 dB schwächer macht (in der Größenordnung von 0,1 mV RMS),
-     sodass der Wandler nicht länger seine eigene Verzerrung aus einem
-     Vollaussteuerungs-Ton erzeugt und sein Dynamikbereich für die Harmonischen
-     verwendet wird. Die De-Rotation rastet dann auf der gepoolten Tonmenge ein
-     und bleibt eingerastet, was stundenlange komplexe Mittelung der schwächsten
-     Harmonischen erst ermöglicht.</p>
 
   <h2 id="rejection">Schlechte Blöcke aus der Mittelung heraushalten</h2>
   <p>Ein einziger korrumpierter Block - eine Strecke verschluckter Abtastwerte,
@@ -708,8 +668,7 @@
      Synchronisationsglied.  Jeder Mechanismus in diesem Kapitel beseitigt einen Weg, auf dem eine lange
      komplexe Mittelung verrotten kann: Bin-Ausrichtung auf ±0,05 ppm beseitigt
      den Leck-Effekt, exakte De-Rotation pro Block beseitigt die Phasendrift, die
-     der Rest verursachen würde, gepoolte Phasenreferenzen halten die Verriegelung,
-     wenn der Grundton weggekerbt ist, und strikter Blockausschluss hält Überläufe
+     der Rest verursachen würde, und strikter Blockausschluss hält Überläufe
      und Diskontinuitäten aus der Statistik. Zusammen machen sie die Mittelung über
      <b>sehr lange Läufe stabil - 8 bis 12 Stunden kontinuierlicher kohärenter
      Mittelung</b> - und diese Ausdauer ist die Anforderung hinter der Kennzahl:
