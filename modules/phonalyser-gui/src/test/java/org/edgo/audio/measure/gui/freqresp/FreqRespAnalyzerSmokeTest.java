@@ -29,6 +29,7 @@ import org.junit.jupiter.api.Test;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -61,6 +62,9 @@ class FreqRespAnalyzerSmokeTest {
      *  the two sides agree. */
     private static final double DAC_FS_VRMS    = 2.79351;
     private static final double ADC_FS_VRMS    = 1.7931;
+    /** A slave input's full scale other than the master's - a combined
+     *  measurement must not depend on it. */
+    private static final double SLAVE_ADC_FS_VRMS = 2.0 * ADC_FS_VRMS;
     /** A 16-bit positive rail on the normalised scale - 32767/32768, the
      *  highest level a 16-bit capture can deliver. */
     private static final double RAIL_16_BIT    = 32767.0 / 32768.0;
@@ -284,6 +288,37 @@ class FreqRespAnalyzerSmokeTest {
         assertFalse(stereo.clipped(), "an offset that stays under the rail is not clipping");
     }
 
+    /**
+     * Combined, the capture delivers the slave's record as zeros: the master's
+     * record alone is deconvolved, against the master's own ADC full scale,
+     * and its response stands for both channels.  Each channel therefore comes
+     * out exactly as the master channel measured separately, whatever the
+     * slave's full scale.
+     */
+    @Test
+    void aCombinedRecordDeconvolvesTheMasterForBothChannels() throws Exception {
+        StereoFreqRespResult separate = new FreqRespAnalyzer(baseConfig()
+                .stereoCaptureProvider(delayLineProvider(DELAY_SAMPLES)).build()).run(null, null);
+
+        for (Channel master : Channel.values()) {
+            boolean leftMaster = master == Channel.L;
+            FreqRespAnalyzerConfig cfg = baseConfig()
+                    .adcFsVoltageRmsLeft(leftMaster ? ADC_FS_VRMS : SLAVE_ADC_FS_VRMS)
+                    .adcFsVoltageRmsRight(leftMaster ? SLAVE_ADC_FS_VRMS : ADC_FS_VRMS)
+                    .combinedMaster(master)
+                    .stereoCaptureProvider(combinedRecordProvider(master)).build();
+            StereoFreqRespResult combined = new FreqRespAnalyzer(cfg).run(null, null);
+
+            double[] expected = (leftMaster ? separate.left() : separate.right()).getMagLin();
+            assertArrayEquals(expected, combined.left().getMagLin(), 1e-9,
+                    master + " as master: the left trace is the master's response");
+            assertArrayEquals(expected, combined.right().getMagLin(), 1e-9,
+                    master + " as master: the right trace is the master's response");
+            assertEquals(Channel.L, combined.left().getChannel());
+            assertEquals(Channel.R, combined.right().getChannel());
+        }
+    }
+
     /** The rail check reads the RAW record: an offset that pushes the chirp
      *  into the rail is real clipping, information is gone there, and the
      *  result must still say so even though the offset itself is removed. */
@@ -433,6 +468,19 @@ class FreqRespAnalyzerSmokeTest {
                 right[i] += rightOffset;
             }
             return new StereoSamples(y, right);
+        };
+    }
+
+    /** The record a combined capture delivers: the delay line on
+     *  {@code master}, zeros on the slave. */
+    private StereoCaptureProvider combinedRecordProvider(Channel master) {
+        StereoCaptureProvider bothChannels = delayLineProvider(DELAY_SAMPLES);
+        return (gen, outDev, inDev, capRate, playRate, playBits, dither, oc, durationSec, cancel) -> {
+            StereoSamples rec = bothChannels.capture(gen, outDev, inDev, capRate, playRate,
+                    playBits, dither, oc, durationSec, cancel);
+            return master == Channel.L
+                    ? new StereoSamples(rec.left(), new double[rec.right().length])
+                    : new StereoSamples(new double[rec.left().length], rec.right());
         };
     }
 
