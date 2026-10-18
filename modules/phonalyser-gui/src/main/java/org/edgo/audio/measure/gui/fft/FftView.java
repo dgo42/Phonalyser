@@ -294,9 +294,11 @@ public final class FftView extends AbstractFreqDomainView {
     private final Consumer<Object> onAudioFormatChanged = ignored -> this.calInv = null;
 
     /** A finished analysis from the worker, handed over by the pane on the
-     *  UI thread.  The {@code slot} stays the worker's: it goes back to the
-     *  pool after this call, so what the view keeps is copied into
-     *  {@link #lastResult}, which paint reads directly. */
+     *  UI thread.  The {@code slot} stays the worker's and is only read here:
+     *  it goes back to the pool after this call, and the worker thread may be
+     *  reading it at the same time.  So it is copied into {@link #lastResult}
+     *  first, and the post-average pipeline runs on that copy, which paint
+     *  reads directly. */
     void onResultReady(FftResult slot) {
         if (isDisposed()) return;
         // Every result that arrives here belongs to the current collection: a
@@ -310,11 +312,6 @@ public final class FftView extends AbstractFreqDomainView {
             startRender = System.nanoTime();
             renderStepMark = startRender;
             gotFftResult = true;
-            // Post-average pipeline (recompute -> .frc -> dBV), run ONCE
-            // here on the DISPLAYED frame (post throttle + coalescing) - before
-            // the deep-copy so it holds the finished spectrum + readouts, the
-            // dual-tone IMD products among them.
-            finalizeResult(slot);
             // In-place refresh of the displayed snapshot: a deepCopy per
             // displayed frame is ~64 MB of garbage at paint rate at fftSize
             // 4 M - copyFrom reuses the existing arrays when sizes match
@@ -324,7 +321,13 @@ public final class FftView extends AbstractFreqDomainView {
             } else {
                 this.lastResult.copyFrom(slot);
             }
-            logRenderStep("3.6 result copy");
+            logRenderStep("3.1 result copy");
+            // Post-average pipeline (recompute -> .frc -> dBV), run ONCE
+            // here on the DISPLAYED frame (post throttle + coalescing), on the
+            // view's own copy, so it holds the finished spectrum + readouts,
+            // the dual-tone IMD products among them, and the worker's result
+            // stays as the worker produced it.
+            finalizeResult(this.lastResult);
             syncDataButtons();
             // Live data clears any stale banner: the loaded-CSV path
             // (persistent) or a warning whose timer has already run out.
