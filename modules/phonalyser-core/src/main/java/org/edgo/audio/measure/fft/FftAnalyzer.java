@@ -185,6 +185,9 @@ public class FftAnalyzer {
      *  {@code analyze} call by the harmonic-detection and noise-floor
      *  paths; never returned. */
     private double[] scratchAmplLinear;
+    /** Half-size scratch for a power average's linear amplitudes - used only
+     *  inside one {@code recomputeStats} call; never returned. */
+    private double[] scratchPowerLinear;
     /** Signal-bin mask scratch for the stats passes - see
      *  {@link #buildSignalBinMask}; never returned. */
     private boolean[] scratchSignalMask;
@@ -587,6 +590,10 @@ public class FftAnalyzer {
         // the per-bin loops below can write into them directly (no
         // per-call allocation for the four halfSize+1-long arrays).
         outResult.ensureArrays(halfSize + 1, harmonicCount);
+        // One frame's power average is the frame itself - its amplitudeDbFs -
+        // so it needs no separate array; a pooled slot's earlier one is not
+        // this frame's.
+        outResult.hasPowerAverage = false;
 
         // --- The frame -------------------------------------------------------
         scratchF0Re = scratchOrAlloc(scratchF0Re, fftSize);
@@ -1316,15 +1323,43 @@ public class FftAnalyzer {
                 r.harmonicBins, harmonicCount, EXCL_BINS, r.windowType,
                 r.pilot1Bin, r.pilot2Bin);
 
+        // --- The spectrum the noise is read from ---------------------------
+        // The power average where the result carries one - the coherent mean
+        // lets noise, and every part of a tone not coherent with it, fall with
+        // the frames held, its power does not - else the spectrum itself,
+        // which then is the power reading.  The mask below is found on this
+        // same spectrum, so what it excludes as signal is what the noise sum
+        // would otherwise count.
+        final double[] noiseLinear;
+        if (r.hasPowerAverage) {
+            noiseLinear = scratchOrAlloc(scratchPowerLinear, halfSize + 1);
+            scratchPowerLinear = noiseLinear;
+            final double[] powDbFs = r.powerAverageDbFs;
+            BinRanges.parallel(halfSize + 1, (lo, hi) -> {
+                for (int k = lo; k < hi; k++) {
+                    noiseLinear[k] = powDbFs[k] > -290.0 ? Math.pow(10.0, powDbFs[k] / 20.0) : 0.0;
+                }
+            });
+        } else {
+            noiseLinear = amplLinear;
+        }
+
         // --- Noise floor + signal-mask extension (shared with analyze()) ---
         // recomputeStats discards dynWidthBins - the
         // Result.fundamentalDynExclusionHz is final and was set on the
         // original analyze() pass; we only need the median noise power.
         double medianNoisePow = computeNoiseFloorAndExtendSignalMask(
-                amplLinear, isSignalBin, halfSize, freqRes, snrLo, snrHi, fundBin, EXCL_BINS,
+                noiseLinear, isSignalBin, halfSize, freqRes, snrLo, snrHi, fundBin, EXCL_BINS,
                 skirtLookAheadBins(r.fftSize, r.overlap != null
                         ? r.overlap.minHopSamples(r.fftSize) : r.stepSamples))
                 .medianNoisePow;
+        // The floor the display is ranged on is the drawn spectrum's: over the
+        // same noise bins, read off the displayed levels.
+        double displayMedianPow = medianNoisePow;
+        if (r.hasPowerAverage) {
+            double displayed = bandMedianPow(amplLinear, isSignalBin, halfSize, freqRes, snrLo, snrHi);
+            if (displayed >= 0.0) displayMedianPow = displayed;
+        }
 
         // --- SNR (signal RMS² / total unweighted noise power) ---------------
         double[] awTable    = aWeightTable(halfSize, freqRes);
@@ -1337,7 +1372,7 @@ public class FftAnalyzer {
             if (freq >= snrLo && freq <= snrHi) {
                 bandBins++;
                 if (!isSignalBin[k]) {
-                    double p = amplLinear[k] * amplLinear[k];
+                    double p = noiseLinear[k] * noiseLinear[k];
                     noisePower   += p;
                     awNoisePower += p * awTable[k];
                     countedBins++;
@@ -1379,8 +1414,8 @@ public class FftAnalyzer {
         r.enobSinadDb = sinadDenom > 0
                 ? -10.0 * Math.log10(sinadDenom)
                 : 300.0;
-        r.avgNoiseFloorDbFs = medianNoisePow > 0
-                ? 20.0 * Math.log10(Math.sqrt(medianNoisePow))
+        r.avgNoiseFloorDbFs = displayMedianPow > 0
+                ? 20.0 * Math.log10(Math.sqrt(displayMedianPow))
                 : fundDbFs - 300.0;
 
         // THD+N is the reciprocal of SINAD: −sinadDb in dB.
@@ -2060,16 +2095,8 @@ public class FftAnalyzer {
                 for (int k = dynLo; k <= dynHi; k++) isSignalBin[k] = true;
 
                 // Pass 2 - refined range-restricted median with updated exclusion
-                candidateCount = 0;
-                for (int k = 1; k <= halfSize; k++) {
-                    double freq = k * freqRes;
-                    if (!isSignalBin[k] && freq >= snrLo && freq <= snrHi) {
-                        candidatePow[candidateCount++] = amplLinear[k] * amplLinear[k];
-                    }
-                }
-                medianNoisePow = candidateCount > 0
-                        ? selectKth(candidatePow, candidateCount, candidateCount / 2)
-                        : medianNoisePow;
+                double refined = bandMedianPow(amplLinear, isSignalBin, halfSize, freqRes, snrLo, snrHi);
+                if (refined >= 0.0) medianNoisePow = refined;
             }
         }
 
@@ -2089,6 +2116,25 @@ public class FftAnalyzer {
             }
         }
         return new NoiseFloor(medianNoisePow, dynWidthBins);
+    }
+
+    /** The median power of the bins of {@code amplLinear} the mask leaves as
+     *  noise inside the SNR band, or -1 when the band holds none. */
+    private double bandMedianPow(double[] amplLinear, boolean[] isSignalBin,
+                                 int halfSize, double freqRes, double snrLo, double snrHi) {
+        if (scratchNoiseCand == null || scratchNoiseCand.length < halfSize) {
+            scratchNoiseCand = new double[halfSize];
+            scratchNoiseGlob = new double[halfSize];
+        }
+        double[] candidatePow = scratchNoiseCand;
+        int candidateCount = 0;
+        for (int k = 1; k <= halfSize; k++) {
+            double freq = k * freqRes;
+            if (!isSignalBin[k] && freq >= snrLo && freq <= snrHi) {
+                candidatePow[candidateCount++] = amplLinear[k] * amplLinear[k];
+            }
+        }
+        return candidateCount > 0 ? selectKth(candidatePow, candidateCount, candidateCount / 2) : -1.0;
     }
 
     /** In-place Hoare quickselect: returns the {@code k}-th smallest element

@@ -21,6 +21,8 @@ package org.edgo.audio.measure.fft;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.Random;
+
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.WindowType;
 import org.junit.jupiter.api.Test;
@@ -34,6 +36,19 @@ class CaptureAverageTest {
 
     private static final int SAMPLE_RATE = 48_000;
     private static final int FFT_SIZE    = 8_192;
+    /** The noise case: frames averaged, the white noise added, its seed. */
+    private static final int    NOISE_FRAMES = 64;
+    private static final double NOISE_STD    = 1e-3;
+    private static final long   NOISE_SEED   = 11L;
+    /** Bins of noise alone, far from the tone at bin 100 and its harmonics'
+     *  leakage. */
+    private static final int    NOISE_LO_BIN = 1_050;
+    private static final int    NOISE_HI_BIN = 1_150;
+    /** Less than the 18 dB the coherent mean of 64 frames takes off noise. */
+    private static final double FLOOR_DROP_DB = 10.0;
+    /** A noise readout of 64 frames against one frame's: both integrate
+     *  thousands of bins, so they agree to a fraction of a dB. */
+    private static final double READOUT_TOLERANCE_DB = 0.5;
 
     private double[] sine(double freqHz, int samples) {
         double[] s = new double[samples];
@@ -64,6 +79,47 @@ class CaptureAverageTest {
         // Identical frames: the window's leakage far from the tone sums to
         // itself as well.
         assertEquals(one.amplitudeDbFs[200], avg.amplitudeDbFs[200], 0.01, "a bin of leakage only");
+    }
+
+    /**
+     * The coherent mean of {@link #NOISE_FRAMES} frames lets the noise fall
+     * about 10 log10(64) = 18 dB, the noise readouts must not: N, SNR, THD+N
+     * and ENOB stand on the power average beside the coherent one, which keeps
+     * the noise's power, and read as the single frame does.
+     */
+    @Test
+    void theNoiseReadoutsOfACoherentAverageStandOnItsPowerAverage() {
+        double freqHz   = (double) SAMPLE_RATE / FFT_SIZE * 100;
+        double[] signal = sine(freqHz, FFT_SIZE * NOISE_FRAMES);
+        Random noise = new Random(NOISE_SEED);
+        for (int n = 0; n < signal.length; n++) {
+            signal[n] += NOISE_STD * noise.nextGaussian();
+        }
+        FftResult one = new FftAnalyzer().analyze(signal, SAMPLE_RATE, FFT_SIZE, 8,
+                WindowType.HANN, FftOverlap.PCT_0, 0.0, 0.0, true, Double.NaN, false, Double.NaN);
+        FftResult avg = captureAverage().analyze(signal, SAMPLE_RATE, FFT_SIZE, 8,
+                WindowType.HANN, FftOverlap.PCT_0, 0.0, 0.0, true, Double.NaN, false, Double.NaN);
+
+        assertEquals(NOISE_FRAMES, avg.frameCount);
+        assertTrue(avg.hasPowerAverage, "the coherent average hands its power average over");
+        assertTrue(meanPowerDb(avg.amplitudeDbFs) < meanPowerDb(one.amplitudeDbFs) - FLOOR_DROP_DB,
+                "the coherent mean let the noise fall, so the readouts below would climb on it");
+        assertEquals(one.snrDb, avg.snrDb, READOUT_TOLERANCE_DB, "SNR");
+        assertEquals(10.0 * Math.log10(one.noisePower), 10.0 * Math.log10(avg.noisePower),
+                READOUT_TOLERANCE_DB, "N");
+        assertEquals(one.thdNDb, avg.thdNDb, READOUT_TOLERANCE_DB, "THD+N");
+        assertEquals(one.enobSinadDb, avg.enobSinadDb, READOUT_TOLERANCE_DB, "the ENOB basis");
+    }
+
+    /** The mean power over the noise bins {@link #NOISE_LO_BIN} ..
+     *  {@link #NOISE_HI_BIN}, dB - one bin's reading scatters, the band's does
+     *  not. */
+    private double meanPowerDb(double[] dbFs) {
+        double sum = 0.0;
+        for (int k = NOISE_LO_BIN; k <= NOISE_HI_BIN; k++) {
+            sum += Math.pow(10.0, dbFs[k] / 10.0);
+        }
+        return 10.0 * Math.log10(sum / (NOISE_HI_BIN - NOISE_LO_BIN + 1));
     }
 
     @Test

@@ -89,7 +89,10 @@ import lombok.extern.log4j.Log4j2;
  * frame's bins and over the average's bins beside the line.  A restart or a
  * reset drops the rows; they are read row by row, in memory.
  *
- * <p>The incoherent average sums each bin's power with no rotation.
+ * <p>The incoherent average sums each bin's power with no rotation.  The
+ * coherent average sums the same power beside its complex sums: noise in the
+ * complex mean falls with the frames held, its power does not, so the noise
+ * readouts of a coherent average are taken from this power average.
  */
 @Log4j2
 public final class CoherentAccumulator {
@@ -180,9 +183,11 @@ public final class CoherentAccumulator {
     private int      pilotBin1;
     private int      pilotBin2;
     private int      lobeHalfBins;
-    /** Per-bin sums over the frames held, bins 0 .. fftSize/2: the complex
-     *  spectrum sum of the coherent average (the power sum null), the power
-     *  sum of the incoherent one (the complex sums null). */
+    /** Per-bin sums over the frames held, bins 0 .. fftSize/2: the power sum
+     *  in both modes - the incoherent average itself, and beside a coherent
+     *  average the power average of the same frames its noise readouts are
+     *  taken from - and the complex spectrum sum of the coherent average (the
+     *  complex sums null for the incoherent one). */
     @Getter
     private double[] sumRe;
     @Getter
@@ -199,8 +204,9 @@ public final class CoherentAccumulator {
     private boolean  started;
     /** Ring of the last {@link #DISCONTINUITY_DROP_CYCLES} accepted cycles'
      *  contributions EXACTLY as added (rotation and weight applied), so a
-     *  gate firing can subtract them back out.  Coherent: re/im; incoherent:
-     *  power.  Sized like the accumulator at restart. */
+     *  gate firing can subtract them back out.  Power in both modes, re/im
+     *  beside it for the coherent average.  Sized like the accumulator at
+     *  restart. */
     private double[][] prevCycleRe, prevCycleIm, prevCyclePow;
     private double[]   prevCycleWeight;
     /** Slots of the ring currently valid (cleared by a subtraction, a restart
@@ -286,10 +292,10 @@ public final class CoherentAccumulator {
         int n = halfSize + 1;
         sumRe  = coherent ? new double[n] : null;
         sumIm  = coherent ? new double[n] : null;
-        sumPow = coherent ? null : new double[n];
+        sumPow = new double[n];
         prevCycleRe     = coherent ? new double[DISCONTINUITY_DROP_CYCLES][n] : null;
         prevCycleIm     = coherent ? new double[DISCONTINUITY_DROP_CYCLES][n] : null;
-        prevCyclePow    = coherent ? null : new double[DISCONTINUITY_DROP_CYCLES][n];
+        prevCyclePow    = new double[DISCONTINUITY_DROP_CYCLES][n];
         prevCycleWeight = new double[DISCONTINUITY_DROP_CYCLES];
         prevCycleCount  = 0;
         prevCyclePos    = 0;
@@ -428,6 +434,8 @@ public final class CoherentAccumulator {
      * for the incoherent average, the analyser's convention), the amplitude
      * in dBFS and the phase in degrees, the fundamental's level scalars from
      * the bin just written, and the frames held as the result's frame count.
+     * A coherent average also writes the power average of its frames
+     * ({@link FftResult#powerAverageDbFs}), on the same scale.
      * The amplitude scale is the result's own window gain, so an average and
      * the single frame the analyser wrote read on one scale.  The statistics
      * on the average are then {@link FftAnalyzer#recomputeStats}'s.
@@ -439,19 +447,27 @@ public final class CoherentAccumulator {
         final double conv  = r.amplitudePerMagnitude();
         final double[] re = r.re, im = r.im, dbFs = r.amplitudeDbFs, deg = r.phaseDeg;
         if (coherent) {
-            final double[] accRe = sumRe, accIm = sumIm;
+            final double[] accRe = sumRe, accIm = sumIm, accPow = sumPow;
+            if (r.powerAverageDbFs == null || r.powerAverageDbFs.length != n) {
+                r.powerAverageDbFs = new double[n];
+            }
+            final double[] powDbFs = r.powerAverageDbFs;
             BinRanges.parallel(n, (lo, hi) -> {
                 for (int k = lo; k < hi; k++) {
                     double avgRe = accRe[k] * mean;
                     double avgIm = accIm[k] * mean;
                     re[k] = avgRe;
                     im[k] = avgIm;
+                    double edge = (k == 0 || k == halfSize) ? 0.5 : 1.0;
                     double mag = Math.sqrt(avgRe * avgRe + avgIm * avgIm);
-                    double amp = mag * conv * ((k == 0 || k == halfSize) ? 0.5 : 1.0);
+                    double amp = mag * conv * edge;
                     dbFs[k] = amp > 1e-15 ? 20.0 * Math.log10(amp) : -300.0;
                     deg[k]  = Math.toDegrees(Math.atan2(avgIm, avgRe));
+                    double rms = Math.sqrt(accPow[k] * mean) * conv * edge;
+                    powDbFs[k] = rms > 1e-15 ? 20.0 * Math.log10(rms) : -300.0;
                 }
             });
+            r.hasPowerAverage = true;
         } else {
             final double[] acc = sumPow;
             BinRanges.parallel(n, (lo, hi) -> {
@@ -474,8 +490,9 @@ public final class CoherentAccumulator {
     /**
      * Adds one frame to the coherent average, turned back to the reference
      * frame as the class comment states, and appends the frame's row to the
-     * statistics.  Every bin's contribution as added - weight and rotation
-     * applied - goes into the subtractable ring
+     * statistics.  Each bin's power goes into the power average beside it,
+     * where no rotation enters.  Every bin's contribution as added - weight
+     * and rotation applied - goes into the subtractable ring
      * ({@link #subtractPreviousCycles}).
      *
      * @param re        the frame's real parts, bins 0 .. fftSize/2
@@ -485,10 +502,11 @@ public final class CoherentAccumulator {
      */
     public void add(double[] re, double[] im, double weight, FrameTurns turns) {
         final int n = halfSize + 1;
-        final double[] accRe = sumRe, accIm = sumIm;
+        final double[] accRe = sumRe, accIm = sumIm, accPow = sumPow;
         final int prevSlot = claimPrevCycleSlot(weight);
-        final double[] contribRe = prevCycleRe[prevSlot];
-        final double[] contribIm = prevCycleIm[prevSlot];
+        final double[] contribRe  = prevCycleRe[prevSlot];
+        final double[] contribIm  = prevCycleIm[prevSlot];
+        final double[] contribPow = prevCyclePow[prevSlot];
         final double delta = turns.delta();
         if (kappa <= 0.0 || memberCount == 0) {
             // No pinned fundamental: nothing to align - the frame is added as
@@ -497,11 +515,14 @@ public final class CoherentAccumulator {
                 for (int k = lo; k < hi; k++) {
                     double cRe = re[k] * weight;
                     double cIm = im[k] * weight;
-                    accRe[k] += cRe;
-                    accIm[k] += cIm;
+                    double cPow = (re[k] * re[k] + im[k] * im[k]) * weight;
+                    accRe[k]  += cRe;
+                    accIm[k]  += cIm;
+                    accPow[k] += cPow;
                     if (contribRe != null) {
-                        contribRe[k] = cRe;
-                        contribIm[k] = cIm;
+                        contribRe[k]  = cRe;
+                        contribIm[k]  = cIm;
+                        contribPow[k] = cPow;
                     }
                 }
             });
@@ -556,11 +577,14 @@ public final class CoherentAccumulator {
                 double rIm = im[k] * weight;
                 double cRe = rRe * rotRe - rIm * rotIm;
                 double cIm = rRe * rotIm + rIm * rotRe;
-                accRe[k] += cRe;
-                accIm[k] += cIm;
+                double cPow = (re[k] * re[k] + im[k] * im[k]) * weight;
+                accRe[k]  += cRe;
+                accIm[k]  += cIm;
+                accPow[k] += cPow;
                 if (contribRe != null) {
-                    contribRe[k] = cRe;
-                    contribIm[k] = cIm;
+                    contribRe[k]  = cRe;
+                    contribIm[k]  = cIm;
+                    contribPow[k] = cPow;
                 }
                 double nextRe = phRe * stepRe - phIm * stepIm;
                 phIm = phRe * stepIm + phIm * stepRe;
@@ -602,9 +626,8 @@ public final class CoherentAccumulator {
                 sumRe[k] *= factor;
                 sumIm[k] *= factor;
             }
-        } else {
-            for (int k = 0; k < sumPow.length; k++) sumPow[k] *= factor;
         }
+        for (int k = 0; k < sumPow.length; k++) sumPow[k] *= factor;
         frames *= factor;
         // The subtractable ring holds contributions AS ADDED - once the
         // sum is scaled, they must scale with it or a later subtraction
@@ -615,7 +638,8 @@ public final class CoherentAccumulator {
             if (coherent && prevCycleRe != null) {
                 double[] pr = prevCycleRe[slot], pi = prevCycleIm[slot];
                 for (int k = 0; k < n; k++) { pr[k] *= factor; pi[k] *= factor; }
-            } else if (prevCyclePow != null) {
+            }
+            if (prevCyclePow != null) {
                 double[] pp = prevCyclePow[slot];
                 for (int k = 0; k < n; k++) pp[k] *= factor;
             }
@@ -647,10 +671,12 @@ public final class CoherentAccumulator {
         for (int s = 0; s < prevCycleCount; s++) {
             int slot = Math.floorMod(prevCyclePos - 1 - s, DISCONTINUITY_DROP_CYCLES);
             if (coherent && prevCycleRe != null) {
-                remove(prevCycleRe[slot], prevCycleIm[slot], prevCycleWeight[slot]);
-            } else if (!coherent && prevCyclePow != null) {
-                removePower(prevCyclePow[slot], prevCycleWeight[slot]);
+                remove(prevCycleRe[slot], prevCycleIm[slot]);
             }
+            if (prevCyclePow != null) {
+                removePower(prevCyclePow[slot]);
+            }
+            frames = Math.max(0.0, frames - prevCycleWeight[slot]);
             removedFrames += prevCycleWeight[slot];
         }
         if (log.isInfoEnabled()) {
@@ -661,20 +687,19 @@ public final class CoherentAccumulator {
         prevCycleCount = 0;
     }
 
-    /** Takes a frame out again: its contribution exactly as {@link #add}
-     *  added it, and its weight. */
-    private void remove(double[] contribRe, double[] contribIm, double weight) {
+    /** Takes a frame's complex contribution out of the coherent sums again,
+     *  exactly as {@link #add} added it; the frames held are the caller's. */
+    private void remove(double[] contribRe, double[] contribIm) {
         for (int k = 0; k < sumRe.length; k++) {
             sumRe[k] -= contribRe[k];
             sumIm[k] -= contribIm[k];
         }
-        frames = Math.max(0.0, frames - weight);
     }
 
-    /** Takes a frame out of the incoherent average again. */
-    private void removePower(double[] contribPow, double weight) {
+    /** Takes a frame's power contribution out of the power sum again; the
+     *  frames held are the caller's. */
+    private void removePower(double[] contribPow) {
         for (int k = 0; k < sumPow.length; k++) sumPow[k] -= contribPow[k];
-        frames = Math.max(0.0, frames - weight);
     }
 
     /** The rows the statistics hold: one per frame {@link #add} has added

@@ -75,6 +75,19 @@ public class FftResult {
     public double[] phaseDeg;
     public double[] re;
     public double[] im;
+    /** The power average of the frames a coherent average holds, per bin
+     *  0 ... fftSize/2, as an RMS amplitude in dBFS on {@link #amplitudeDbFs}'s
+     *  scale: the noise readouts (N, N+D, SNR, THD+N, ENOB, TD+N) integrate
+     *  it, since the coherent mean lets noise fall with the frames held.
+     *  Valid only while {@link #hasPowerAverage}; the array itself is kept
+     *  across pooled reuse. */
+    public double[] powerAverageDbFs;
+    /** Whether {@link #powerAverageDbFs} belongs to this result: set by the
+     *  coherent average's overlay and by a loaded file carrying the column,
+     *  cleared by every analysis.  Without it the power is read off
+     *  {@link #amplitudeDbFs}, which for a single frame and for an incoherent
+     *  average already is the power average. */
+    public boolean  hasPowerAverage;
 
     // Fundamental
     public int    fundamentalBin;
@@ -450,6 +463,10 @@ public class FftResult {
         c.phaseDeg                   = reuseCopy(c.phaseDeg,      src.phaseDeg);
         c.re                         = reuseCopy(c.re,            src.re);
         c.im                         = reuseCopy(c.im,            src.im);
+        c.hasPowerAverage            = src.hasPowerAverage;
+        if (src.hasPowerAverage) {
+            c.powerAverageDbFs       = reuseCopy(c.powerAverageDbFs, src.powerAverageDbFs);
+        }
         c.fundamentalBin             = src.fundamentalBin;
         c.fundamentalHz              = src.fundamentalHz;
         c.fundamentalHzRefined       = src.fundamentalHzRefined;

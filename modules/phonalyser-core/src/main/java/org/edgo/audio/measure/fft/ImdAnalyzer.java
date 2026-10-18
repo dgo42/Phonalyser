@@ -215,14 +215,21 @@ public final class ImdAnalyzer {
         // inflating TD+N.  The walk follows the measured skirt to the
         // floor whatever its width while stopping well short of the IMD
         // products (kHz away), which stay in the residual as they should.
-        int nBins = amplitudeDbFs.length;
-        double floorDbFs = noiseFloorDbFs(amplitudeDbFs);
+        //
+        // Every bin's power, the floor and the skirts come off the power
+        // average where the result carries one: the coherent mean lets the
+        // noise and every part of a tone not coherent with it fall with the
+        // frames held, its power does not - so the skirt is found on the same
+        // spectrum the sums read.
+        double[] powerDbFs = r.hasPowerAverage ? r.powerAverageDbFs : amplitudeDbFs;
+        int nBins = powerDbFs.length;
+        double floorDbFs = noiseFloorDbFs(powerDbFs);
         int binF1 = (int) Math.round(out.f1Hz / binBw);
         int binF2 = (int) Math.round(out.f2Hz / binBw);
-        int lo1 = skirtEdge(amplitudeDbFs, binF1, -1, floorDbFs);
-        int hi1 = skirtEdge(amplitudeDbFs, binF1, +1, floorDbFs);
-        int lo2 = skirtEdge(amplitudeDbFs, binF2, -1, floorDbFs);
-        int hi2 = skirtEdge(amplitudeDbFs, binF2, +1, floorDbFs);
+        int lo1 = skirtEdge(powerDbFs, binF1, -1, floorDbFs);
+        int hi1 = skirtEdge(powerDbFs, binF1, +1, floorDbFs);
+        int lo2 = skirtEdge(powerDbFs, binF2, -1, floorDbFs);
+        int hi2 = skirtEdge(powerDbFs, binF2, +1, floorDbFs);
         // The two pilot lines of the fundamental phase alignment are generated
         // as a time base, not measured: neither is one of the tones nor a
         // distortion product, and at their level they would lay a floor of
@@ -241,7 +248,7 @@ public final class ImdAnalyzer {
             if (b >= pilot1Lo && b <= pilot1Hi) continue;
             if (b >= pilot2Lo && b <= pilot2Hi) continue;
             // FS-relative bin voltage - TD+N is a ratio.
-            double vBin = Math.pow(10.0, amplitudeDbFs[b] / 20.0);
+            double vBin = Math.pow(10.0, powerDbFs[b] / 20.0);
             double sq = vBin * vBin;
             sumAll += sq;
             boolean inSkirt = (b >= lo1 && b <= hi1)

@@ -322,6 +322,49 @@ class CoherentAccumulatorTest {
         assertEquals(0, acc.statisticsRowCount(), "no statistics row: a power average carries no phase");
     }
 
+    /** Between H15 and H16 of the fundamental at bin 100, outside both humps:
+     *  a bin the noise cases fill with a phase of their own. */
+    private static final int NOISE_BIN    = 1_550;
+    /** Frames of the power-average cases - fewer than the κ measurement
+     *  spans, so κ stands throughout. */
+    private static final int POWER_FRAMES = 16;
+    /** The coherent mean of {@link #POWER_FRAMES} random phases stands near
+     *  1/sqrt(16) = 0.25; far under the unit power it keeps. */
+    private static final double RANDOM_MEAN_LIMIT = 0.6;
+    private static final double TWO_PI = 2.0 * Math.PI;
+
+    @Test
+    void theCoherentAverageKeepsThePowerOfItsFrames() {
+        CoherentAccumulator acc = singleTone();
+        Random random = new Random(NOISE_SEED);
+        for (int f = 0; f < POWER_FRAMES; f++) {
+            double[] re = ones();
+            double[] im = zeros();
+            double phase = TWO_PI * random.nextDouble();
+            re[NOISE_BIN] = Math.cos(phase);
+            im[NOISE_BIN] = Math.sin(phase);
+            acc.add(re, im, 1.0, FrameTurns.of(f * DELTA));
+        }
+        assertEquals(POWER_FRAMES, acc.getSumPow()[NOISE_BIN], TOL_RAD,
+                "every frame's unit power, whatever its phase or rotation");
+        double mean = Math.hypot(acc.getSumRe()[NOISE_BIN], acc.getSumIm()[NOISE_BIN]) / acc.getFrames();
+        assertTrue(mean < RANDOM_MEAN_LIMIT, "while the coherent mean of the random phases falls: " + mean);
+    }
+
+    @Test
+    void aScaledSubtractionTakesThePowerOutWithTheComplexSums() {
+        CoherentAccumulator acc = singleTone();
+        double[] loud = ones();
+        loud[NOISE_BIN] = 3.0;
+        acc.add(ones(), zeros(), 1.0, FrameTurns.of(0.0));
+        acc.add(loud, zeros(), 1.0, FrameTurns.of(DELTA));
+        acc.scale(0.5);
+        acc.subtractPreviousCycles();
+        assertEquals(0.5, acc.getSumPow()[NOISE_BIN], TOL_RAD, "the scaled first frame's power alone remains");
+        assertEquals(0.5, acc.getSumRe()[NOISE_BIN], TOL_RAD, "as in the complex sums");
+        assertEquals(0.5, acc.getFrames(), TOL_RAD, "the weight taken off once");
+    }
+
     // ── Statistics ─────────────────────────────────────────────────────────
 
     /** H2's centre bin on the fundamental at bin 100. */

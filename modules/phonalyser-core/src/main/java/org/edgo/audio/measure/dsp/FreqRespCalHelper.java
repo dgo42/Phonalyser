@@ -982,7 +982,9 @@ public class FreqRespCalHelper {
     }
 
     /** One bin: {@code Z = X * v}, then the level and phase the display and
-     *  the statistics read. */
+     *  the statistics read.  A power average the result carries moves by the
+     *  same {@code |v|}: it is corrected exactly where and as much as the
+     *  spectrum is. */
     private void restateBin(FftResult r, int k, double vRe, double vIm, double linPerMag) {
         double xRe = r.re[k];
         double xIm = r.im[k];
@@ -994,6 +996,11 @@ public class FreqRespCalHelper {
         r.amplitudeDbFs[k] = newAmpLin > MIN_LINEAR_AMPLITUDE
                 ? AMPLITUDE_DB_FACTOR * Math.log10(newAmpLin) : FLOOR_DB;
         r.phaseDeg[k] = Math.toDegrees(Math.atan2(zIm, zRe));
+        if (r.hasPowerAverage && r.powerAverageDbFs[k] > FLOOR_DB) {
+            double gain = Math.hypot(vRe, vIm);
+            r.powerAverageDbFs[k] = gain > 0.0
+                    ? r.powerAverageDbFs[k] + AMPLITUDE_DB_FACTOR * Math.log10(gain) : FLOOR_DB;
+        }
     }
 
     /** The cascade's gain at one bin, {@code 20*log10|G|} - how many dB the

@@ -308,6 +308,120 @@ class FreqRespCalDeEmbedTest {
     }
 
     // -------------------------------------------------------------------------
+    // One row on, one row off
+    // -------------------------------------------------------------------------
+
+    /**
+     * A tone-only row taken off again by its reciprocal, sampled on the
+     * corrected spectrum's own lobes, gives the uncorrected spectrum back: the
+     * stretch exponent of a lobe bin is the same on the corrected lobe - the
+     * floor beside it untouched, the peak and the bin lifted by the same power
+     * of the response - so the lift comes off exactly, and the phase turns
+     * back.
+     */
+    @Test
+    @DisplayName("a tone-only row comes off exactly as it went on")
+    void aToneOnlyRowComesOffExactlyAsItWentOn() {
+        FreqRespCalibration cal = notchLikeCal(1.0);
+        FftResult frame = analyzedTone();
+        FftResult raw = frame.deepCopy();
+
+        FreqRespCalHelper.applyInverseInPlace(frame, toneOnlyInverse(frame, List.of(cal)));
+        new FftAnalyzer().recomputeStats(frame);
+        assertNotEquals(raw.amplitudeDbFs[FUNDAMENTAL_BIN], frame.amplitudeDbFs[FUNDAMENTAL_BIN],
+                "the row changed nothing, so taking it off proves nothing");
+        FreqRespCalHelper.applyInverseInPlace(frame, toneOnlyInverse(frame, List.of(cal)).reciprocal());
+
+        assertBack(raw, frame);
+    }
+
+    /** A with-noise row is one complex factor per bin, so its reciprocal takes
+     *  it off every bin it reached. */
+    @Test
+    @DisplayName("a with-noise row comes off exactly as it went on")
+    void aWithNoiseRowComesOffExactlyAsItWentOn() {
+        FreqRespCalibration cal = notchLikeCal(1.0);
+        FftResult frame = analyzedTone();
+        FftResult raw = frame.deepCopy();
+
+        FreqRespCalHelper.applyInverseInPlace(frame, withNoiseInverse(frame, List.of(cal)));
+        new FftAnalyzer().recomputeStats(frame);
+        FreqRespCalHelper.applyInverseInPlace(frame, withNoiseInverse(frame, List.of(cal)).reciprocal());
+
+        assertBack(raw, frame);
+    }
+
+    /**
+     * Two tone-only rows applied one at a time, each sampled on the spectrum
+     * the other left, equal their cascade applied once on the uncorrected
+     * spectrum: a row switched on next to an active one lands where the
+     * correction from scratch would.
+     */
+    @Test
+    @DisplayName("tone-only rows applied one at a time equal their cascade")
+    void toneOnlyRowsAppliedOneAtATimeEqualTheirCascade() {
+        FreqRespCalibration first = notchLikeCal(1.0);
+        FreqRespCalibration second = slopedCal();
+        FftResult oneByOne = analyzedTone();
+        FftResult cascaded = oneByOne.deepCopy();
+
+        FreqRespCalHelper.applyInverseInPlace(oneByOne, toneOnlyInverse(oneByOne, List.of(first)));
+        new FftAnalyzer().recomputeStats(oneByOne);
+        FreqRespCalHelper.applyInverseInPlace(oneByOne, toneOnlyInverse(oneByOne, List.of(second)));
+
+        FreqRespCalHelper.applyInverseInPlace(cascaded, toneOnlyInverse(cascaded, List.of(first, second)));
+
+        assertBack(cascaded, oneByOne);
+    }
+
+    /**
+     * A power average the result carries is corrected exactly where and as
+     * much as the spectrum: started equal to the spectrum, it stays equal to
+     * it on every restated bin.  The Nyquist bin is left out - the analyser
+     * halves its level and a restated bin does not.
+     */
+    @Test
+    @DisplayName("a power average moves with the spectrum it belongs to")
+    void aPowerAverageMovesWithTheSpectrum() {
+        FreqRespCalibration cal = notchLikeCal(1.0);
+        FftResult frame = analyzedTone();
+        // Each bin's level on the scale a restated bin is written on.
+        double linPerMag = levelScaleOf(frame);
+        frame.powerAverageDbFs = new double[frame.amplitudeDbFs.length];
+        for (int k = 0; k < frame.powerAverageDbFs.length; k++) {
+            double amp = Math.hypot(frame.re[k], frame.im[k]) * linPerMag;
+            frame.powerAverageDbFs[k] = amp > DB_FLOOR_LIMIT ? 20.0 * Math.log10(amp) : DB_FLOOR;
+        }
+        frame.hasPowerAverage  = true;
+        double before = frame.powerAverageDbFs[FUNDAMENTAL_BIN];
+
+        InverseCascade inv = withNoiseInverse(frame, List.of(cal));
+        FreqRespCalHelper.applyInverseInPlace(frame, inv);
+
+        assertNotEquals(before, frame.powerAverageDbFs[FUNDAMENTAL_BIN],
+                "the correction moved nothing, so the comparison below is empty");
+        for (int k = 1; k < FFT_SIZE / 2; k++) {
+            if (FreqRespCalHelper.gainDbAt(inv, k) == 0.0) continue;   // a bin the row never reached
+            assertEquals(frame.amplitudeDbFs[k], frame.powerAverageDbFs[k], SERIES_DB_TOLERANCE,
+                    "the power average of bin " + k + " moved with its level");
+        }
+    }
+
+    /** {@code actual} carries {@code expected}'s spectrum, bin for bin, within
+     *  the rounding the two orders of operation leave - relative to the bin's
+     *  magnitude, since a part near zero (a phase near a quarter turn) keeps
+     *  the rounding of the whole phasor. */
+    private void assertBack(FftResult expected, FftResult actual) {
+        for (int k = 0; k <= FFT_SIZE / 2; k++) {
+            double magnitudeSlack = slack(Math.hypot(expected.re[k], expected.im[k]));
+            assertEquals(expected.re[k], actual.re[k], magnitudeSlack, "real part of bin " + k);
+            assertEquals(expected.im[k], actual.im[k], magnitudeSlack, "imaginary part of bin " + k);
+            assertEquals(expected.amplitudeDbFs[k], actual.amplitudeDbFs[k], SERIES_DB_TOLERANCE,
+                    "level of bin " + k);
+        }
+    }
+
+    // -------------------------------------------------------------------------
     // Rebuild keys
     // -------------------------------------------------------------------------
 
