@@ -19,15 +19,14 @@
 package org.edgo.audio.measure.wav;
 
 import java.io.File;
-import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.List;
 
-import org.edgo.audio.measure.common.StereoSample;
+import javax.sound.sampled.AudioFormat;
+import javax.sound.sampled.AudioInputStream;
+
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -36,15 +35,16 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * RIFF round-trip tests: write a known PCM byte stream via {@link WavWriter}
- * and read it back via {@link WavReader}, confirming header metadata
- * (sample rate, channels, bit depth, frame count) and per-sample values
- * survive the write->read pass.  Catches endianness, header-finalisation
- * and channel-interleave regressions.
+ * and read it back via {@link PcmFileLoader} - the loader the generator's
+ * file player and the scope's Play-from open files through - confirming
+ * header metadata (sample rate, channels, bit depth, frame count) and
+ * per-sample values survive the write->read pass.  Catches endianness,
+ * header-finalisation and channel-interleave regressions.
  */
 class WavRoundtripTest {
 
     @Test
-    void pcm16_stereo_header_andFrameCountMatch(@TempDir Path tmp) throws IOException {
+    void pcm16_stereo_header_andFrameCountMatch(@TempDir Path tmp) throws Exception {
         int sampleRate    = 48_000;
         int channels      = 2;
         int bitsPerSample = 16;
@@ -71,15 +71,17 @@ class WavRoundtripTest {
         assertTrue(Files.exists(out.toPath()), "file written");
         assertTrue(Files.size(out.toPath()) > pcm.length, "file size > pcm size (header present)");
 
-        WavReader r = new WavReader(out.getAbsolutePath());
-        assertEquals(sampleRate,    r.getSampleRate());
-        assertEquals(channels,      r.getChannels());
-        assertEquals(bitsPerSample, r.getBitsPerSample());
-        assertEquals(frames,        r.getFrameCount());
+        try (AudioInputStream in = PcmFileLoader.instance().openAsPcm(out)) {
+            AudioFormat format = in.getFormat();
+            assertEquals(sampleRate,    format.getSampleRate());
+            assertEquals(channels,      format.getChannels());
+            assertEquals(bitsPerSample, format.getSampleSizeInBits());
+            assertEquals(frames,        in.getFrameLength());
+        }
     }
 
     @Test
-    void pcm16_stereo_perSampleValuesRoundTrip(@TempDir Path tmp) throws IOException {
+    void pcm16_stereo_perSampleValuesRoundTrip(@TempDir Path tmp) throws Exception {
         int sampleRate    = 48_000;
         int frames        = 50;
         File out = tmp.resolve("samples.wav").toFile();
@@ -96,33 +98,24 @@ class WavRoundtripTest {
             w.writeRaw(bb.array(), bb.array().length);
         }
 
-        // Read back; WavReader.process() delivers samples as
-        // OFFSET-BINARY (unsigned 0..2^bits-1) so signed value v becomes
-        // (v - SHORT_MIN).  WavReader's readSample for 16-bit:
-        //   s = (short)(...);  return (s - 0x8000) & 0xFFFF;
-        // So a written +0  arrives as 0xFFFF8000 & 0xFFFF = 0x8000 = 32768
-        //    a written -1   arrives as 0xFFFF7FFF & 0xFFFF = 0x7FFF = 32767
-        //    a written +1   arrives as 0xFFFF8001 & 0xFFFF = 0x8001 = 32769
-        // Verify the round-trip is invariant: same offset-binary
-        // encoding the rest of the pipeline expects.
-        List<int[]> out2 = new ArrayList<>();
-        new WavReader(out.getAbsolutePath()).process(samples -> {
-            for (StereoSample s : samples) {
-                out2.add(new int[]{ s.ch0, s.ch1 });
-            }
-        });
-        assertEquals(frames, out2.size(), "frame count round-trip");
-
+        // Read back: the loader hands 16-bit WAV PCM through as signed
+        // little-endian, so every frame decodes to the value it was
+        // written with.
+        byte[] back;
+        try (AudioInputStream in = PcmFileLoader.instance().openAsPcm(out)) {
+            assertEquals(AudioFormat.Encoding.PCM_SIGNED, in.getFormat().getEncoding());
+            assertEquals(frames, in.getFrameLength(), "frame count round-trip");
+            back = in.readAllBytes();
+        }
+        ByteBuffer rb = ByteBuffer.wrap(back).order(ByteOrder.LITTLE_ENDIAN);
         for (int f = 0; f < frames; f++) {
-            int expectedLeft  = (f - 0x8000) & 0xFFFF;
-            int expectedRight = (-f - 0x8000) & 0xFFFF;
-            assertEquals(expectedLeft,  out2.get(f)[0], "left frame " + f);
-            assertEquals(expectedRight, out2.get(f)[1], "right frame " + f);
+            assertEquals(f,  rb.getShort(), "left frame " + f);
+            assertEquals(-f, rb.getShort(), "right frame " + f);
         }
     }
 
     @Test
-    void pcm24_stereo_headerMatches(@TempDir Path tmp) throws IOException {
+    void pcm24_stereo_headerMatches(@TempDir Path tmp) throws Exception {
         // 24-bit PCM: 3 bytes per sample, 2 channels -> 6 bytes per frame.
         int frames = 5;
         File out = tmp.resolve("24bit.wav").toFile();
@@ -130,24 +123,28 @@ class WavRoundtripTest {
             byte[] silence = new byte[frames * 2 * 3];
             w.writeRaw(silence, silence.length);
         }
-        WavReader r = new WavReader(out.getAbsolutePath());
-        assertEquals(192_000, r.getSampleRate());
-        assertEquals(2,       r.getChannels());
-        assertEquals(24,      r.getBitsPerSample());
-        assertEquals(frames,  r.getFrameCount());
+        try (AudioInputStream in = PcmFileLoader.instance().openAsPcm(out)) {
+            AudioFormat format = in.getFormat();
+            assertEquals(192_000, format.getSampleRate());
+            assertEquals(2,       format.getChannels());
+            assertEquals(24,      format.getSampleSizeInBits());
+            assertEquals(frames,  in.getFrameLength());
+        }
     }
 
     @Test
-    void pcm16_mono_headerMatches(@TempDir Path tmp) throws IOException {
+    void pcm16_mono_headerMatches(@TempDir Path tmp) throws Exception {
         File out = tmp.resolve("mono.wav").toFile();
         try (WavWriter w = new WavWriter(out, 44_100, 1, 16, false)) {
             // 10 frames of silence
             byte[] silence = new byte[10 * 2];
             w.writeRaw(silence, silence.length);
         }
-        WavReader r = new WavReader(out.getAbsolutePath());
-        assertEquals(44_100, r.getSampleRate());
-        assertEquals(1,      r.getChannels());
-        assertEquals(10,     r.getFrameCount());
+        try (AudioInputStream in = PcmFileLoader.instance().openAsPcm(out)) {
+            AudioFormat format = in.getFormat();
+            assertEquals(44_100, format.getSampleRate());
+            assertEquals(1,      format.getChannels());
+            assertEquals(10,     in.getFrameLength());
+        }
     }
 }

@@ -22,14 +22,12 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Random;
-import java.util.function.DoubleFunction;
 
 import org.eclipse.swt.SWTError;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Shell;
 import org.edgo.audio.measure.dsp.HarmonicCompensation;
 import org.edgo.audio.measure.dsp.IntermodCompensation;
-import org.edgo.audio.measure.dsp.IntermodCompensation.GeneratorCorrections;
 import org.edgo.audio.measure.enums.AlignGenerator;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.fft.FftResult;
@@ -39,6 +37,7 @@ import org.edgo.audio.measure.gui.fft.predistortion.PredistortionEngine.LineRead
 import org.edgo.audio.measure.gui.fft.predistortion.PredistortionEngine.Listener;
 import org.edgo.audio.measure.gui.fft.predistortion.PredistortionEngine.StopReason;
 import org.edgo.audio.measure.preferences.Preferences;
+import org.edgo.audio.measure.test.AbstractReflectiveTest;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
@@ -65,7 +64,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * correction sets, so a line's phase is the phase of its raw peak.  The
  * listener runs on the calling thread.
  */
-class PredistortionEngineTest {
+class PredistortionEngineTest extends AbstractReflectiveTest {
 
     private static final int    FFT_SIZE       = 4096;
     private static final int    BINS           = FFT_SIZE / 2 + 1;
@@ -150,6 +149,10 @@ class PredistortionEngineTest {
     /** Relative rounding of a mean over the window's values. */
     private static final double RELATIVE_TOLERANCE   = 1.0e-12;
     private static final String STORE_LABEL          = "FFT";
+    /** The intermodulation accumulator's private correction phasors, by name
+     *  because that is what reflection takes. */
+    private static final String ACC_RE               = "accRe";
+    private static final String ACC_IM               = "accIm";
 
     /** Records the listener's callbacks in the order they arrive. */
     private static final class Recorder implements Listener {
@@ -559,18 +562,16 @@ class PredistortionEngineTest {
         expected.accumulate(expected.measurePhasors(r, F1_HZ, F2_HZ, 0.0, 0.0), 1.0);
         IntermodCompensation built = engine.getIntermodInForce();
         assertNotNull(built, "the settle built a correction");
-        // Read back through unit response and unit levels: the entries are
-        // the accumulated phasors themselves.
-        DoubleFunction<double[]> unitResponse = f -> new double[] { 1.0, 0.0 };
-        GeneratorCorrections want = expected.toGeneratorCorrections(unitResponse, 1.0, 1.0);
-        GeneratorCorrections got  = built.toGeneratorCorrections(unitResponse, 1.0, 1.0);
-        assertEquals(productCount, want.ampRatios().length, "every product is gated");
-        assertArrayEquals(want.coefA(), got.coefA());
-        assertArrayEquals(want.coefB(), got.coefB());
+        double[] wantRe = field(expected, ACC_RE);
+        double[] wantIm = field(expected, ACC_IM);
+        double[] gotRe  = field(built, ACC_RE);
+        double[] gotIm  = field(built, ACC_IM);
+        assertEquals(productCount, gotRe.length, "one correction per grid product");
         for (int g = 0; g < productCount; g++) {
-            assertEquals(want.ampRatios()[g], got.ampRatios()[g], RELATIVE_TOLERANCE * want.ampRatios()[g],
-                    PRODUCT_NAMES[g] + " level");
-            assertEquals(want.phiInits()[g], got.phiInits()[g], RELATIVE_TOLERANCE, PRODUCT_NAMES[g] + " phase");
+            double magnitude = Math.hypot(wantRe[g], wantIm[g]);
+            assertNotEquals(0.0, magnitude, PRODUCT_NAMES[g] + " is gated");
+            assertEquals(wantRe[g], gotRe[g], RELATIVE_TOLERANCE * magnitude, PRODUCT_NAMES[g] + " real part");
+            assertEquals(wantIm[g], gotIm[g], RELATIVE_TOLERANCE * magnitude, PRODUCT_NAMES[g] + " imaginary part");
         }
         assertEquals(List.of(StopReason.SETTLED), recorder.reasons);
         assertEquals(List.of(true), recorder.results);

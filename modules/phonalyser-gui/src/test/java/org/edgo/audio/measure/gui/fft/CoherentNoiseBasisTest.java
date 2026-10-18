@@ -16,7 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-package org.edgo.audio.measure.fft;
+package org.edgo.audio.measure.gui.fft;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -34,6 +34,10 @@ import org.edgo.audio.measure.dsp.FreqRespCalibration;
 import org.edgo.audio.measure.dsp.InverseCascade;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.WindowType;
+import org.edgo.audio.measure.fft.CoherentAccumulator;
+import org.edgo.audio.measure.fft.FftAnalyzer;
+import org.edgo.audio.measure.fft.FftResult;
+import org.edgo.audio.measure.test.AbstractReflectiveTest;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -50,6 +54,13 @@ import org.junit.jupiter.api.Test;
  * the tone, inside the mask.  Every stage is logged (logger
  * CoherentNoiseBasis).
  *
+ * <p>Both averages are collected the way the live FFT collects them: one
+ * frame per analysis cycle, analysed as the worker analyses it and added by
+ * the worker's own accumulate step, then written back through the worker's
+ * accumulator and the statistics recomputed - the display path.  The
+ * accumulate step and the accumulator are private, so they are reached by
+ * reflection.
+ *
  * <p>Geometry as the bench runs it: 384 kHz, 2 M points, BH7, 93.75 %
  * overlap, the seed frame plus 100 averages.  The calibration is the bench's
  * own pair of rows, read from {@code results/}; the case skips where they are
@@ -59,7 +70,7 @@ import org.junit.jupiter.api.Test;
  * frequency wander.
  */
 @Tag("exploratory")   // 2 M-point transforms and the bench's calibration files
-class CoherentNoiseBasisTest {
+class CoherentNoiseBasisTest extends AbstractReflectiveTest {
 
     private static final int        SAMPLE_RATE = 384_000;
     private static final int        FFT_SIZE    = 2_097_152;
@@ -94,11 +105,14 @@ class CoherentNoiseBasisTest {
     private static final double IDENTICAL_DB = 1e-9;
     /** A difference worth listing in the log. */
     private static final double LISTED_DB    = 0.01;
-    /** N of the two modes: the same power average under the same mask; only
-     *  the harmonic ladder may stand a bin apart (the coherent run re-pins
-     *  the fundamental), which moves a handful of noise bins. */
+    /** N of the two modes: the same power average under the same mask. */
     private static final double N_AGREE_DB   = 0.01;
     private static final double FLOOR_DB     = -290.0;
+
+    /** The worker members the collection drives: the private accumulate step
+     *  and the private accumulator its average is written back from. */
+    private static final String ACCUMULATE  = "accumulateIntoForeverBuffer";
+    private static final String ACCUMULATOR = "accumulator";
 
     private static final Logger LOG = LogManager.getLogger("CoherentNoiseBasis");
 
@@ -188,10 +202,31 @@ class CoherentNoiseBasisTest {
         return s;
     }
 
+    /** The average of {@code signal} as the live FFT collects it: every frame
+     *  one analysis cycle - analysed with the worker's own settings and added
+     *  by the worker's accumulate step at its sample offset - then the
+     *  accumulator written back onto the last cycle's result and the
+     *  statistics recomputed. */
     private FftResult average(double[] signal, boolean coherent) {
-        return new CaptureAverage(new FftAnalyzer(), new CoherentAccumulator()).analyze(signal,
-                SAMPLE_RATE, FFT_SIZE, HARMONICS, WINDOW, OVERLAP, 0.0, 0.0, coherent,
-                Double.NaN, false, TONE_HZ);
+        FftAnalyzer       analyzer = new FftAnalyzer();
+        FftAnalyzerWorker worker   = new FftAnalyzerWorker(null);   // headless
+        int       hop = OVERLAP.hopSamples(FFT_SIZE);
+        double[]  win = new double[FFT_SIZE];
+        FftResult r   = null;
+        for (int f = 0; f < FRAMES; f++) {
+            long base = (long) f * hop;
+            System.arraycopy(signal, (int) base, win, 0, FFT_SIZE);
+            analyzer.setSpectrumOnly(true);
+            analyzer.setMultiTone(false);
+            analyzer.setSecondToneHintHz(Double.NaN);
+            r = analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, HARMONICS, HARMONICS, WINDOW, OVERLAP,
+                    0.0, 0.0, coherent, Double.NaN, false, TONE_HZ, new FftResult(), hop);
+            call(worker, ACCUMULATE, r, base, coherent, Integer.MAX_VALUE);
+        }
+        this.<CoherentAccumulator>field(worker, ACCUMULATOR).overlayOnto(r);
+        r.captureRawPeaks();
+        analyzer.recomputeStats(r);
+        return r;
     }
 
     /** The view's correction of a frame by tone-only rows: the cascade

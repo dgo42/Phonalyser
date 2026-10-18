@@ -251,7 +251,7 @@ class FreqRespCalDelayBandTest {
         double[] freqs = FreqRespCalHelper.binAlignedFreqs(gridLo, gridHi,
                 RATE / (double) SWEEP_SAMPLES, Integer.MAX_VALUE);
         return FreqRespCalHelper.computeFromLogSweep(
-                recording, reference, 0, RATE, freqs, AMP_VRMS, ADC_FS_VRMS, 0, "T", false);
+                recording, reference, 0, RATE, freqs, AMP_VRMS, ADC_FS_VRMS, 0, "T");
     }
 
     /** What is left of the delay, in samples: a delay error of {@code d}

@@ -34,8 +34,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  * spacing at all - its per-cycle drawn hop enters as the stated step.
  *
  * <p>Covers: the enum's spacing derivation (values and the random-mode
- * refusal), the geometry validation, bit-identity between the convenience
- * overload and a hand-stated spacing, and the frame's independence from the
+ * refusal), the geometry validation, and the frame's independence from the
  * stated spacing.
  */
 class FftFrameOffsetsTest {
@@ -93,42 +92,6 @@ class FftFrameOffsetsTest {
                 short1, SAMPLE_RATE, FFT_SIZE, 8, 8, WindowType.HANN, FftOverlap.PCT_0,
                 0.0, 0.0, true, Double.NaN, false, Double.NaN, new FftResult(),
                 4_096));
-    }
-
-    @Test
-    void analyze_conveniencePathRefusesRandomOverlap() {
-        double[] signal = sine(1_000.0, FFT_SIZE * 2);
-        // No fixed spacing to derive - the caller must state the geometry.
-        assertThrows(IllegalStateException.class, () -> new FftAnalyzer().analyze(
-                signal, SAMPLE_RATE, FFT_SIZE, 8, WindowType.HANN, FftOverlap.RAND,
-                0.0, 0.0, true, Double.NaN, false));
-    }
-
-    // ── Stated geometry == the convenience derivation, to the bit ────────────
-
-    @Test
-    void statedGeometry_matchesDerivedGeometryExactly() {
-        double binWidth = (double) SAMPLE_RATE / FFT_SIZE;
-        double freqHz   = 1_000.0 + 0.3 * binWidth;
-        double[] signal = sine(freqHz, FFT_SIZE * 3);
-
-        FftResult derived = new FftAnalyzer().analyze(
-                signal, SAMPLE_RATE, FFT_SIZE, 8, WindowType.HANN, FftOverlap.PCT_75,
-                0.0, 0.0, true, Double.NaN, false);
-
-        int step = FftOverlap.PCT_75.hopSamples(FFT_SIZE);
-        FftResult stated = new FftAnalyzer().analyze(
-                signal, SAMPLE_RATE, FFT_SIZE, 8, 8, WindowType.HANN, FftOverlap.PCT_75,
-                0.0, 0.0, true, Double.NaN, false, Double.NaN, new FftResult(),
-                step);
-
-        assertEquals(1, derived.frameCount, "one frame analysed");
-        assertEquals(derived.frameCount, stated.frameCount);
-        assertEquals(derived.stepSamples, stated.stepSamples);
-        assertEquals(step, stated.stepSamples);
-        assertEquals(derived.fundamentalHzRefined, stated.fundamentalHzRefined, 0.0);
-        assertEquals(derived.thdPct, stated.thdPct, 0.0);
-        assertArrayEquals(derived.amplitudeDbFs, stated.amplitudeDbFs, 0.0);
     }
 
     // ── Variable spacing: the frame does not depend on it ────────────────────

@@ -58,9 +58,10 @@ class FftAnalyzerSmokeTest {
 
         FftAnalyzer analyzer = new FftAnalyzer();
         FftResult r = analyzer.analyze(
-                signal, sampleRate, fftSize, 8,            // harmonics
+                signal, sampleRate, fftSize, 8, 8,         // harmonics, THD harmonics
                 WindowType.HANN, FftOverlap.PCT_0,
-                0.0, 0.0, true, Double.NaN, false);        // logSummary=false
+                0.0, 0.0, true, Double.NaN, false,         // logSummary=false
+                Double.NaN, new FftResult(), FftOverlap.PCT_0.hopSamples(fftSize));
 
         assertEquals(expectedBin, r.fundamentalBin,
                 "integer-bin sine should land exactly on its bin");
@@ -94,9 +95,10 @@ class FftAnalyzerSmokeTest {
 
         FftAnalyzer analyzer = new FftAnalyzer();
         FftResult r = analyzer.analyze(
-                signal, sampleRate, fftSize, 8,
+                signal, sampleRate, fftSize, 8, 8,
                 WindowType.HANN, FftOverlap.PCT_0,
-                0.0, 0.0, true, Double.NaN, false);
+                0.0, 0.0, true, Double.NaN, false, Double.NaN,
+                new FftResult(), FftOverlap.PCT_0.hopSamples(fftSize));
 
         // Integer-bin pick can be one bin off due to window leakage; we
         // only care that the REFINED frequency is close to the truth.

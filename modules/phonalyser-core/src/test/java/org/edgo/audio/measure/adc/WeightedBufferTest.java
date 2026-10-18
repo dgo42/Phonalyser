@@ -18,13 +18,12 @@
 
 package org.edgo.audio.measure.adc;
 
-import org.edgo.audio.measure.common.StereoSample;
-import org.edgo.audio.measure.common.StereoSampleDouble;
-import org.junit.jupiter.api.Test;
-
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import org.edgo.audio.measure.common.StereoSample;
+import org.junit.jupiter.api.Test;
 
 /**
  * Tests for {@link WeightedBuffer} - the DNL/INL weight table and the
@@ -121,36 +120,6 @@ class WeightedBufferTest {
             assertTrue(mapped >= 0f && mapped <= maxCode + 1f,
                     "mapped code " + mapped + " out of [0, " + maxCode + "] for raw " + code);
         }
-    }
-
-    @Test
-    void correctedCode_skewedHistogram_redistributesPopularCodes() {
-        // Heavy hits on the lower half -> CDF rises fast in the lower half ->
-        // corrected codes shift the lower-half raw codes toward the top.
-        int bits = 8;
-        AdcHistogram h = new AdcHistogram(bits);
-        // 100 hits in codes 0..127, 1 hit in codes 128..255.
-        for (int code = 0; code < 128; code++) {
-            for (int n = 0; n < 100; n++) h.record(sample(code));
-        }
-        for (int code = 128; code < 256; code++) {
-            h.record(sample(code));
-        }
-
-        WeightedBuffer b = new WeightedBuffer(bits);
-        b.compute(h, 4);
-        b.buildCodeMap();
-
-        // A code in the dense bottom half should map far above the diagonal
-        // (its share of the CDF is huge).
-        StereoSampleDouble midLow = b.correctedCode(sample(64));
-        assertTrue(midLow.ch1 > 64,
-                "popular low code should map toward the top, got " + midLow.ch1);
-        // A code in the sparse upper half should map close to where it
-        // already is - the diagonal is already past the dense region.
-        StereoSampleDouble upper = b.correctedCode(sample(200));
-        assertTrue(upper.ch1 > 200,
-                "sparse upper codes stay above the diagonal too, got " + upper.ch1);
     }
 
     @Test

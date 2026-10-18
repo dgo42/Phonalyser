@@ -93,8 +93,9 @@ class FftAnalyzerRefinedBinTest {
      *  Returns the estimate in bins. */
     private double assertParabolaRecovers(WindowType window, double toleranceBins) {
         double trueBin = TONE_BIN + TONE_OFFSET_BINS;
-        FftResult r = analyzer.analyze(tone(trueBin, FFT_SIZE), SAMPLE_RATE, FFT_SIZE, 8,
-                window, FftOverlap.PCT_0, 0.0, 0.0, true, Double.NaN, false, Double.NaN);
+        FftResult r = analyzer.analyze(tone(trueBin, FFT_SIZE), SAMPLE_RATE, FFT_SIZE, 8, 8,
+                window, FftOverlap.PCT_0, 0.0, 0.0, true, Double.NaN, false, Double.NaN,
+                new FftResult(), FftOverlap.PCT_0.hopSamples(FFT_SIZE));
         double refined = r.fundamentalHzRefined / r.freqResolution;
         assertEquals(trueBin, refined, toleranceBins,
                 "fractional bin of a tone " + TONE_OFFSET_BINS + " bins above bin "

@@ -105,7 +105,8 @@ class FftDbFsConventionTest {
         for (int n = 0; n < signal.length; n++) {
             signal[n] = peakFraction * Math.sin(2.0 * Math.PI * exactFreq * n / SAMPLE_RATE);
         }
-        return new FftAnalyzer().analyze(signal, SAMPLE_RATE, FFT_SIZE, HARMONICS,
-                WindowType.HANN, FftOverlap.PCT_0, 0.0, 0.0, true, Double.NaN, false);
+        return new FftAnalyzer().analyze(signal, SAMPLE_RATE, FFT_SIZE, HARMONICS, HARMONICS,
+                WindowType.HANN, FftOverlap.PCT_0, 0.0, 0.0, true, Double.NaN, false, Double.NaN,
+                new FftResult(), FftOverlap.PCT_0.hopSamples(FFT_SIZE));
     }
 }

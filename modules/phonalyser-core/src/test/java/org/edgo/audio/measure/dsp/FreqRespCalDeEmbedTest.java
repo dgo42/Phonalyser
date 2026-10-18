@@ -762,8 +762,9 @@ class FreqRespCalDeEmbedTest {
                     + SECOND_HARMONIC_AMPLITUDE
                             * Math.sin(TWO * Math.PI * 2 * toneHz * n / SAMPLE_RATE_HZ);
         }
-        return new FftAnalyzer().analyze(signal, SAMPLE_RATE_HZ, FFT_SIZE, MAX_HARMONIC,
-                WindowType.HANN, FftOverlap.PCT_0, 0.0, 0.0, true, Double.NaN, false);
+        return new FftAnalyzer().analyze(signal, SAMPLE_RATE_HZ, FFT_SIZE, MAX_HARMONIC, MAX_HARMONIC,
+                WindowType.HANN, FftOverlap.PCT_0, 0.0, 0.0, true, Double.NaN, false, Double.NaN,
+                new FftResult(), FftOverlap.PCT_0.hopSamples(FFT_SIZE));
     }
 
     /** A single-tone frame of the stated geometry with the same magnitude in

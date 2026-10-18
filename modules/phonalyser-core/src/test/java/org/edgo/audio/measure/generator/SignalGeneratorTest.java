@@ -35,8 +35,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * argument, and that the phase accumulator wraps cleanly at full scale.
  *
  * <p>Audit ranked this as the #1 highest-value test: a regression here
- * silently corrupts every WAV file the user exports, every CLI tone,
- * and every iterative-distortion-compensation pass.
+ * silently corrupts every WAV file the user exports, every generated tone,
+ * and every predistortion run.
  *
  * <p>The DAC full-scale is a plain constructor argument since the
  * Preferences-injection rework, so the tests run against a literal value
@@ -199,8 +199,8 @@ class SignalGeneratorTest {
      * {@code .dpd} carries the same ratio, and the plant probe measures the
      * chain by dividing the arrival by the arrival the ratio should have
      * produced.  If the DDS delivers a different fraction, the plant absorbs
-     * the difference as if it were the chain's, and a run without a probe -
-     * the CLI - closes its loop at that gain.
+     * the difference as if it were the chain's, and a run without a probe
+     * closes its loop at that gain.
      *
      * <p>The dual-tone case is the sharp one: the two tones carry the per-tone
      * weights, so a correction subtracted at full scale is delivered

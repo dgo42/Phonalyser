@@ -19,7 +19,6 @@
 package org.edgo.audio.measure.gui.fft;
 
 import org.apache.commons.lang3.reflect.FieldUtils;
-import org.apache.commons.lang3.reflect.MethodUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.edgo.audio.measure.bind.Property;
@@ -30,6 +29,7 @@ import org.edgo.audio.measure.fft.CoherentAccumulator;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.preferences.Preferences;
+import org.edgo.audio.measure.test.AbstractReflectiveTest;
 import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
@@ -73,7 +73,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * cycles) and runs in the normal build, unlike the exploratory drift harness
  * beside it.
  */
-class FftPhaseAlignAccumulatorTest {
+class FftPhaseAlignAccumulatorTest extends AbstractReflectiveTest {
 
     private static final int        SAMPLE_RATE = 48_000;
     private static final int        FFT_SIZE    = 4096;
@@ -534,9 +534,8 @@ class FftPhaseAlignAccumulatorTest {
             r = analyze(analyzer, win, base);
             FieldUtils.writeField(worker, "winAbsStart", base, true);
             FieldUtils.writeField(worker, "phaseAlignUnsettled", false, true);
-            double phiF = (Double) MethodUtils.invokeMethod(worker, true, "cyclePhiF",
-                    FundamentalPhaseAlignment.PILOT_TONE, r, true);
-            if (!(Boolean) FieldUtils.readField(worker, "phaseAlignUnsettled", true)) {
+            double phiF = call(worker, "cyclePhiF", FundamentalPhaseAlignment.PILOT_TONE, r, true);
+            if (!(Boolean) field(worker, "phaseAlignUnsettled")) {
                 accumulateCycle(worker, phiF, r, base);
                 averaged++;
             }
@@ -561,11 +560,11 @@ class FftPhaseAlignAccumulatorTest {
         FieldUtils.writeField(worker, "pilotFirstTaken",    true, true);
         FieldUtils.writeField(worker, "pilotRefFirstTaken", true, true);
 
-        MethodUtils.invokeMethod(worker, true, "restartAlignment");
+        call(worker, "restartAlignment");
 
-        assertFalse((Boolean) FieldUtils.readField(worker, "pilotRefFirstTaken", true),
+        assertFalse((Boolean) field(worker, "pilotRefFirstTaken"),
                 "the reference channel's first frame is taken anew");
-        assertFalse((Boolean) FieldUtils.readField(worker, "pilotFirstTaken", true),
+        assertFalse((Boolean) field(worker, "pilotFirstTaken"),
                 "and so is the frame the pilot's relation is read against");
     }
 
@@ -590,12 +589,9 @@ class FftPhaseAlignAccumulatorTest {
         FundamentalPhaseAlignment previous = prefs.getFftFundamentalPhaseAlignment();
         FundamentalPhaseAlignment other = previous == FundamentalPhaseAlignment.PILOT_TONE
                 ? FundamentalPhaseAlignment.NONE : FundamentalPhaseAlignment.PILOT_TONE;
-        @SuppressWarnings("unchecked")
-        Consumer<FundamentalPhaseAlignment> listener = (Consumer<FundamentalPhaseAlignment>)
-                FieldUtils.readField(worker, "alignModeChanged", true);
+        Consumer<FundamentalPhaseAlignment> listener = field(worker, "alignModeChanged");
         Property<FundamentalPhaseAlignment> mode = prefs.fftFundamentalPhaseAlignmentProperty();
-        AtomicBoolean armed = (AtomicBoolean)
-                FieldUtils.readField(worker, "alignRestartPending", true);
+        AtomicBoolean armed = field(worker, "alignRestartPending");
         mode.addListener(listener);
         try {
             armed.set(false);
@@ -778,7 +774,7 @@ class FftPhaseAlignAccumulatorTest {
         double[] frame   = pilotSamples(kappaF, kappaP, kappaP2, at, notchRad);
         FieldUtils.writeField(worker, "winAbsStart", absStart, true);
         FieldUtils.writeField(worker, "analyzeBuf", frame, true);
-        return (Double) MethodUtils.invokeMethod(worker, true, "cyclePhiF",
+        return call(worker, "cyclePhiF",
                 FundamentalPhaseAlignment.PILOT_TONE, pilotSpectrum(frame, pilotLine, pilot2Line), true);
     }
 
@@ -921,12 +917,12 @@ class FftPhaseAlignAccumulatorTest {
         long pos = runMeasuredFrames(worker, PILOT_CYCLES);
 
         pilotCycle(worker, pos, FUND_POS, PILOT_POS, pos, steadyNotchRad(pos), false);
-        assertFalse((Boolean) FieldUtils.readField(worker, "pilotResyncPending", true),
+        assertFalse((Boolean) field(worker, "pilotResyncPending"),
                 "one frame is bridged by the trend and re-syncs nothing");
         pos += PILOT_HOPS[0];
 
         pilotCycle(worker, pos, FUND_POS, PILOT_POS, pos, steadyNotchRad(pos), false);
-        assertTrue((Boolean) FieldUtils.readField(worker, "pilotResyncPending", true),
+        assertTrue((Boolean) field(worker, "pilotResyncPending"),
                 "the second asks the analysis-cycle loop to discard the frame and re-sync");
     }
 
@@ -945,9 +941,9 @@ class FftPhaseAlignAccumulatorTest {
             pilotCycle(worker, pos, FUND_POS, PILOT_POS, pos, steadyNotchRad(pos), false);
             pos += PILOT_HOPS[0];
         }
-        AtomicBoolean paused = (AtomicBoolean) FieldUtils.readField(worker, "paused", true);
+        AtomicBoolean paused = field(worker, "paused");
         assertTrue(paused.get(), "the recording is stopped through the auto-stop path");
-        assertTrue((Boolean) FieldUtils.readField(worker, "pilotLostPublished", true),
+        assertTrue((Boolean) field(worker, "pilotLostPublished"),
                 "and the operator is told, once");
     }
 
@@ -1001,8 +997,7 @@ class FftPhaseAlignAccumulatorTest {
             accumulateCycle(worker, 0.0, r, base);
             base += PILOT_ACCUM_HOP;
         }
-        CoherentAccumulator accumulator =
-                (CoherentAccumulator) FieldUtils.readField(worker, ACCUMULATOR, true);
+        CoherentAccumulator accumulator = field(worker, ACCUMULATOR);
         double[] accumRe = accumulator.getSumRe();
         double[] accumIm = accumulator.getSumIm();
         int weight = Math.max(1, r.frameCount);
@@ -1148,9 +1143,8 @@ class FftPhaseAlignAccumulatorTest {
     /** The worker's own excess for this analysis cycle in mode
      *  REFERENCE_CHANNEL - the private method the analysis-cycle loop calls,
      *  reached by reflection. */
-    private double cyclePhiF(FftAnalyzerWorker worker, FftResult r) throws Exception {
-        return (Double) MethodUtils.invokeMethod(worker, true, "cyclePhiF",
-                FundamentalPhaseAlignment.REFERENCE_CHANNEL, r, true);
+    private double cyclePhiF(FftAnalyzerWorker worker, FftResult r) {
+        return call(worker, "cyclePhiF", FundamentalPhaseAlignment.REFERENCE_CHANNEL, r, true);
     }
 
     /**
@@ -1198,7 +1192,7 @@ class FftPhaseAlignAccumulatorTest {
         System.arraycopy(analysed, (int) base, win, 0, WIN_LEN);
         FftResult extra = analyze(analyzer, win, base);
         accumulateCycle(worker, heldExcessRad(base), extra, base);
-        accumulatorOf(worker).subtractPreviousCycles();
+        this.<CoherentAccumulator>field(worker, ACCUMULATOR).subtractPreviousCycles();
         double[] after = levels(worker, extra);
         for (int i = 0; i <= HARMONICS; i++) {
             assertEquals(held[i], after[i], IDENTICAL_TOL_DB,
@@ -1216,19 +1210,6 @@ class FftPhaseAlignAccumulatorTest {
     }
 
     // ── Drivers ────────────────────────────────────────────────────────────
-
-    /**
-     * The one place this class reaches into the worker's methods: the
-     * accumulate step is private - a productive class is not widened to let
-     * a test in - so a renamed member fails here and not at every call site.
-     */
-    private void call(FftAnalyzerWorker worker, String method, Object... args) {
-        try {
-            MethodUtils.invokeMethod(worker, true, method, args);
-        } catch (ReflectiveOperationException ex) {
-            throw new AssertionError("the worker's " + method + " is not reachable", ex);
-        }
-    }
 
     /**
      * One accumulated analysis cycle: the cycle's phase excess goes into the
@@ -1285,16 +1266,7 @@ class FftPhaseAlignAccumulatorTest {
     /** The worker's accumulator, written back onto {@code r} - the display
      *  path's step. */
     private void overlay(FftAnalyzerWorker worker, FftResult r) {
-        accumulatorOf(worker).overlayOnto(r);
-    }
-
-    /** The worker's private accumulator. */
-    private CoherentAccumulator accumulatorOf(FftAnalyzerWorker worker) {
-        try {
-            return (CoherentAccumulator) FieldUtils.readField(worker, ACCUMULATOR, true);
-        } catch (IllegalAccessException ex) {
-            throw new AssertionError("the worker's " + ACCUMULATOR + " is not reachable", ex);
-        }
+        this.<CoherentAccumulator>field(worker, ACCUMULATOR).overlayOnto(r);
     }
 
     /** One analysis cycle's analysis, with the worker's own settings: the
@@ -1304,8 +1276,9 @@ class FftPhaseAlignAccumulatorTest {
         analyzer.setSpectrumOnly(true);
         analyzer.setMultiTone(false);
         analyzer.setSecondToneHintHz(Double.NaN);
-        return analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, HARMONICS, WINDOW, OVERLAP,
-                0.0, 0.0, true, Double.NaN, false, Double.NaN);
+        return analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, HARMONICS, HARMONICS, WINDOW, OVERLAP,
+                0.0, 0.0, true, Double.NaN, false, Double.NaN,
+                new FftResult(), OVERLAP.hopSamples(FFT_SIZE));
     }
 
     /** The worker's phiF: the analysed spectrum's RAW fundamental-bin phase

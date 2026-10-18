@@ -16,12 +16,16 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-package org.edgo.audio.measure.fft;
+package org.edgo.audio.measure.gui.fft;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.WindowType;
+import org.edgo.audio.measure.fft.CoherentAccumulator;
+import org.edgo.audio.measure.fft.FftAnalyzer;
+import org.edgo.audio.measure.fft.FftResult;
+import org.edgo.audio.measure.test.AbstractReflectiveTest;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
@@ -35,24 +39,28 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Deterministic synthetic harmonic-stability harness.
  *
  * <p>Builds an off-bin tone + H2..H9 at predefined levels + a broadband noise
- * floor (Gaussian) that is then TPDF-dithered to {@link #DITHER_BITS}, runs it
- * through the coherent capture average over {@link #FRAMES} frames, and repeats
- * {@link #COLLECTIONS} times (independent noise seeds) to measure the run-to-run
- * SPREAD of each harmonic - the "drift" we have been chasing by overlaying
- * screenshots.  All results go to an INDEPENDENT log
- * ({@code target/fft-harmonic-stability.log}, see {@code log4j2-test.xml}).
+ * floor (Gaussian) that is then TPDF-dithered to {@link #DITHER_BITS}, averages
+ * it coherently over {@link #FRAMES} frames, and repeats {@link #COLLECTIONS}
+ * times (independent noise seeds) to measure the run-to-run SPREAD of each
+ * harmonic - the "drift" we have been chasing by overlaying screenshots.  All
+ * results go to an INDEPENDENT log ({@code target/fft-harmonic-stability.log},
+ * see {@code log4j2-test.xml}).
  *
- * <p><b>Scope note:</b> a single {@code analyze()} buffer carries NO inter-frame
- * clock drift (the frames sit at exact sample offsets), so this isolates the
- * MEASUREMENT + intra-capture coherent averaging.  If the harmonics come out
- * stable here, the live drift is the cross-cycle CLOCK, not the analysis math -
- * a useful thing to pin down deterministically.  A cross-cycle (worker) harness
- * with a simulated drifting offset is a separate, larger step.
+ * <p>The average is collected the way the live FFT collects it: every frame one
+ * analysis cycle, analysed with the worker's own settings and added by the
+ * worker's private accumulate step (reached by reflection), then written back
+ * through the worker's accumulator and the statistics recomputed.
+ *
+ * <p><b>Scope note:</b> the frames of one buffer carry NO inter-frame clock
+ * drift (they sit at exact sample offsets), so this isolates the MEASUREMENT +
+ * coherent averaging.  If the harmonics come out stable here, the live drift is
+ * the cross-cycle CLOCK, not the analysis math - a useful thing to pin down
+ * deterministically.  {@link FftCrossCycleDriftTest} adds a drifting clock.
  *
  * <p>Every generator/FFT knob is a {@code static final} constant below.
  */
 @Tag("exploratory")   // slow diagnostic harness - excluded from the normal build (see pom surefire)
-class FftHarmonicStabilityTest {
+class FftHarmonicStabilityTest extends AbstractReflectiveTest {
 
     // ── Generator & FFT settings (tune here) ───────────────────────────────
     private static final int        SAMPLE_RATE    = 384_000;          // Hz
@@ -91,13 +99,43 @@ class FftHarmonicStabilityTest {
     private static final FftOverlap PLATEAU_OVERLAP = FftOverlap.PCT_75;   // fixed -> window factor constant
     private static final int        PLATEAU_SEEDS   = 40;
 
-    private CaptureAverage captureAverage() {
-        return new CaptureAverage(new FftAnalyzer(), new CoherentAccumulator());
+    /** The worker members the collection drives: the private accumulate step
+     *  and the private accumulator its average is written back from. */
+    private static final String ACCUMULATE  = "accumulateIntoForeverBuffer";
+    private static final String ACCUMULATOR = "accumulator";
+
+    /** The coherent average of every frame {@code sig} holds at
+     *  {@code overlap}'s spacing, as the live FFT collects it: each frame one
+     *  analysis cycle - analysed with the worker's own settings and added by
+     *  the worker's accumulate step at its sample offset - then the
+     *  accumulator written back onto the last cycle's result and the
+     *  statistics recomputed. */
+    private FftResult average(double[] sig, FftOverlap overlap) {
+        FftAnalyzer       analyzer = new FftAnalyzer();
+        FftAnalyzerWorker worker   = new FftAnalyzerWorker(null);   // headless
+        int       hop    = overlap.hopSamples(FFT_SIZE);
+        int       frames = (sig.length - FFT_SIZE) / hop + 1;
+        double[]  win    = new double[FFT_SIZE];
+        FftResult r      = null;
+        for (int f = 0; f < frames; f++) {
+            long base = (long) f * hop;
+            System.arraycopy(sig, (int) base, win, 0, FFT_SIZE);
+            analyzer.setSpectrumOnly(true);
+            analyzer.setMultiTone(false);
+            analyzer.setSecondToneHintHz(Double.NaN);
+            r = analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, HARMONIC_COUNT, HARMONIC_COUNT,
+                    WINDOW, overlap, 0.0, 0.0, COHERENT, Double.NaN, false, Double.NaN,
+                    new FftResult(), hop);
+            call(worker, ACCUMULATE, r, base, COHERENT, Integer.MAX_VALUE);
+        }
+        this.<CoherentAccumulator>field(worker, ACCUMULATOR).overlayOnto(r);
+        r.captureRawPeaks();
+        analyzer.recomputeStats(r);
+        return r;
     }
 
     @Test
     void harmonicStabilityAcrossCollections() {
-        CaptureAverage analyzer = captureAverage();
         double[][] hDbFs    = new double[HARMONIC_COUNT][COLLECTIONS];  // existing peak-pick (window search)
         double[][] singleDb = new double[HARMONIC_COUNT][COLLECTIONS];  // single-bin magnitude @ theoretical bin
         double[][] lockDb   = new double[HARMONIC_COUNT][COLLECTIONS];  // phase-sensitive (lock-in) in-phase
@@ -111,8 +149,7 @@ class FftHarmonicStabilityTest {
 
         for (int c = 0; c < COLLECTIONS; c++) {
             double[] sig = synthesize(SEED + c, FRAMES, OVERLAP);
-            FftResult r = analyzer.analyze(sig, SAMPLE_RATE, FFT_SIZE, HARMONIC_COUNT,
-                    WINDOW, OVERLAP, 0.0, 0.0, COHERENT, Double.NaN, false, Double.NaN);
+            FftResult r = average(sig, OVERLAP);
 
             thd[c] = r.thdPct;
             snr[c] = r.snrDb;
@@ -182,7 +219,6 @@ class FftHarmonicStabilityTest {
      */
     @Test
     void harmonicSpreadSweep() {
-        CaptureAverage analyzer = captureAverage();
         LOG.info("=== SWEEP: peak-pick spread (dB) vs frames x overlap | {} pt {} | {} Hz | {} seeds/cell ===",
                 FFT_SIZE, WINDOW, FUND_HZ, SWEEP_COLLECTIONS);
         for (int frames : FRAMES_SWEEP) {
@@ -190,8 +226,7 @@ class FftHarmonicStabilityTest {
                 double[][] h = new double[HARMONIC_COUNT][SWEEP_COLLECTIONS];
                 for (int c = 0; c < SWEEP_COLLECTIONS; c++) {
                     double[] sig = synthesize(SEED + c, frames, ov);
-                    FftResult r = analyzer.analyze(sig, SAMPLE_RATE, FFT_SIZE, HARMONIC_COUNT,
-                            WINDOW, ov, 0.0, 0.0, COHERENT, Double.NaN, false, Double.NaN);
+                    FftResult r = average(sig, ov);
                     for (int i = 0; i < HARMONIC_COUNT; i++) {
                         h[i][c] = (r.harmonicDbFs != null && i < r.harmonicDbFs.length)
                                 ? r.harmonicDbFs[i] : Double.NaN;
@@ -216,7 +251,6 @@ class FftHarmonicStabilityTest {
      */
     @Test
     void harmonicPlateauCheck() {
-        CaptureAverage analyzer = captureAverage();
         LOG.info("=== PLATEAU CHECK: spread vs frames @ fixed {} overlap | {} seeds | {} Hz ===",
                 PLATEAU_OVERLAP.label, PLATEAU_SEEDS, FUND_HZ);
         LOG.info("  pure 1/√N => σ halves per 4× frames.  Flat σ tail => systematic floor.  (σ = std dev, dB)");
@@ -224,8 +258,7 @@ class FftHarmonicStabilityTest {
             double[][] h = new double[HARMONIC_COUNT][PLATEAU_SEEDS];
             for (int c = 0; c < PLATEAU_SEEDS; c++) {
                 double[] sig = synthesize(SEED + c, frames, PLATEAU_OVERLAP);
-                FftResult r = analyzer.analyze(sig, SAMPLE_RATE, FFT_SIZE, HARMONIC_COUNT,
-                        WINDOW, PLATEAU_OVERLAP, 0.0, 0.0, COHERENT, Double.NaN, false, Double.NaN);
+                FftResult r = average(sig, PLATEAU_OVERLAP);
                 for (int i = 0; i < HARMONIC_COUNT; i++) {
                     h[i][c] = (r.harmonicDbFs != null && i < r.harmonicDbFs.length)
                             ? r.harmonicDbFs[i] : Double.NaN;

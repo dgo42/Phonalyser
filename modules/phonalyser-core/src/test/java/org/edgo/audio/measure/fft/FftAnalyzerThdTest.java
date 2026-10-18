@@ -52,9 +52,10 @@ class FftAnalyzerThdTest {
         double[] signal = pureSine(sampleRate, freqHz, 0.5, fftSize * 2);
 
         FftResult r = new FftAnalyzer().analyze(
-                signal, sampleRate, fftSize, 8,
+                signal, sampleRate, fftSize, 8, 8,
                 WindowType.HANN, FftOverlap.PCT_0,
-                0.0, 0.0, true, Double.NaN, false);
+                0.0, 0.0, true, Double.NaN, false, Double.NaN,
+                new FftResult(), FftOverlap.PCT_0.hopSamples(fftSize));
 
         assertTrue(r.thdPct < 0.01,
                 "pure sine THD should be < 0.01 %, was " + r.thdPct);
@@ -80,9 +81,10 @@ class FftAnalyzerThdTest {
         }
 
         FftResult r = new FftAnalyzer().analyze(
-                signal, sampleRate, fftSize, 8,
+                signal, sampleRate, fftSize, 8, 8,
                 WindowType.HANN, FftOverlap.PCT_0,
-                0.0, 0.0, true, Double.NaN, false);
+                0.0, 0.0, true, Double.NaN, false, Double.NaN,
+                new FftResult(), FftOverlap.PCT_0.hopSamples(fftSize));
 
         // THD percent should be ~1 % (ratio of harmonics power to fundamental).
         assertEquals(1.0, r.thdPct, 0.05,
@@ -114,9 +116,10 @@ class FftAnalyzerThdTest {
         }
 
         FftResult r = new FftAnalyzer().analyze(
-                signal, sampleRate, fftSize, 8,
+                signal, sampleRate, fftSize, 8, 8,
                 WindowType.HANN, FftOverlap.PCT_0,
-                0.0, 0.0, true, Double.NaN, false);
+                0.0, 0.0, true, Double.NaN, false, Double.NaN,
+                new FftResult(), FftOverlap.PCT_0.hopSamples(fftSize));
 
         // harmonicBins[0]=H2, [1]=H3, [2]=H4, [3]=H5
         int fundBin = r.fundamentalBin;
@@ -164,9 +167,10 @@ class FftAnalyzerThdTest {
         double[] signal = pureSine(sampleRate, 2_000.0, 0.4, fftSize * 2);
 
         FftResult r = new FftAnalyzer().analyze(
-                signal, sampleRate, fftSize, 6,
+                signal, sampleRate, fftSize, 6, 6,
                 WindowType.HANN, FftOverlap.PCT_50,
-                10.0, 40_000.0, false, -3.0, false);
+                10.0, 40_000.0, false, -3.0, false, Double.NaN,
+                new FftResult(), FftOverlap.PCT_50.hopSamples(fftSize));
 
         assertEquals(sampleRate, r.sampleRate);
         assertEquals(fftSize,    r.fftSize);
@@ -212,8 +216,9 @@ class FftAnalyzerThdTest {
 
         FftAnalyzer analyzer = new FftAnalyzer();
         analyzer.setPilotBins(-1, -1);             // no pilot on the reference run
-        FftResult noPilot = analyzer.analyze(signal, sampleRate, fftSize, 8,
-                WindowType.BH7, FftOverlap.PCT_0, 0.0, 0.0, true, Double.NaN, false);
+        FftResult noPilot = analyzer.analyze(signal, sampleRate, fftSize, 8, 8,
+                WindowType.BH7, FftOverlap.PCT_0, 0.0, 0.0, true, Double.NaN, false, Double.NaN,
+                new FftResult(), FftOverlap.PCT_0.hopSamples(fftSize));
         double thdDb  = noPilot.thdDb;
         double snrDb  = noPilot.snrDb;
         double enobDb = noPilot.enobSinadDb;
@@ -225,8 +230,9 @@ class FftAnalyzerThdTest {
                        + pilotAmp * Math.sin(2.0 * Math.PI * pilot2Bin * n / fftSize);
         }
         analyzer.setPilotBins(pilot1Bin, pilot2Bin);
-        FftResult withPilots = analyzer.analyze(signal, sampleRate, fftSize, 8,
-                WindowType.BH7, FftOverlap.PCT_0, 0.0, 0.0, true, Double.NaN, false);
+        FftResult withPilots = analyzer.analyze(signal, sampleRate, fftSize, 8, 8,
+                WindowType.BH7, FftOverlap.PCT_0, 0.0, 0.0, true, Double.NaN, false, Double.NaN,
+                new FftResult(), FftOverlap.PCT_0.hopSamples(fftSize));
 
         assertEquals(thdDb, withPilots.thdDb, 0.01,
                 "THD must not move when the two pilots are added");
@@ -282,8 +288,9 @@ class FftAnalyzerThdTest {
 
         FftAnalyzer analyzer = new FftAnalyzer();
         analyzer.setPilotBins(pilot1Bin, pilot2Bin);
-        FftResult r = analyzer.analyze(signal, sampleRate, fftSize, 8,
-                WindowType.BH7, FftOverlap.PCT_0, 0.0, 0.0, true, Double.NaN, false);
+        FftResult r = analyzer.analyze(signal, sampleRate, fftSize, 8, 8,
+                WindowType.BH7, FftOverlap.PCT_0, 0.0, 0.0, true, Double.NaN, false, Double.NaN,
+                new FftResult(), FftOverlap.PCT_0.hopSamples(fftSize));
 
         int lobe = analyzer.mainLobeBins(WindowType.BH7);
         assertEquals(pilot1Bin - lobe, r.pilot1MaskLoBin,
@@ -312,8 +319,9 @@ class FftAnalyzerThdTest {
         for (int i = 0; i < n; i++) signal[i] += h2[i] + h3[i];
 
         FftAnalyzer analyzer = new FftAnalyzer();
-        FftResult r = analyzer.analyze(signal, sampleRate, fftSize, 8,
-                WindowType.HANN, FftOverlap.PCT_0, 0.0, 0.0, true, Double.NaN, false);
+        FftResult r = analyzer.analyze(signal, sampleRate, fftSize, 8, 8,
+                WindowType.HANN, FftOverlap.PCT_0, 0.0, 0.0, true, Double.NaN, false, Double.NaN,
+                new FftResult(), FftOverlap.PCT_0.hopSamples(fftSize));
         analyzer.recomputeStats(r);
         double h3Measured = r.harmonicDbFs[1];
         assertTrue(r.harmonicDbFs[0] < floorDbFs, "H2 is measured under the floor");
@@ -347,8 +355,9 @@ class FftAnalyzerThdTest {
         FftAnalyzer analyzer = new FftAnalyzer();
         analyzer.setMultiTone(true);
         analyzer.setSecondToneHintHz(130 * binHz);
-        FftResult r = analyzer.analyze(signal, sampleRate, fftSize, 8,
-                WindowType.HANN, FftOverlap.PCT_0, 0.0, 0.0, true, Double.NaN, false, 100 * binHz);
+        FftResult r = analyzer.analyze(signal, sampleRate, fftSize, 8, 8,
+                WindowType.HANN, FftOverlap.PCT_0, 0.0, 0.0, true, Double.NaN, false, 100 * binHz,
+                new FftResult(), FftOverlap.PCT_0.hopSamples(fftSize));
         assertTrue(r.imd != null, "the pair is analysed as a dual tone");
         assertTrue(r.imd.dnLDbFs[3] < floorDbFs, "2f1 - f2 is measured under the floor");
 

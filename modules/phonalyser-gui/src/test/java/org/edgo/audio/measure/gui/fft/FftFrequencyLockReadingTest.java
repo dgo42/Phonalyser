@@ -19,7 +19,6 @@
 package org.edgo.audio.measure.gui.fft;
 
 import org.apache.commons.lang3.reflect.FieldUtils;
-import org.apache.commons.lang3.reflect.MethodUtils;
 import org.edgo.audio.measure.enums.AlignGenerator;
 import org.edgo.audio.measure.enums.FundamentalPhaseAlignment;
 import org.edgo.audio.measure.enums.GenSignalForm;
@@ -28,6 +27,7 @@ import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.preferences.Preferences;
+import org.edgo.audio.measure.test.AbstractReflectiveTest;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -49,7 +49,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * driven by reflection on a worker that holds a synthetic window, the way
  * {@link FftFrequencyLockGatingTest} drives the step.
  */
-class FftFrequencyLockReadingTest {
+class FftFrequencyLockReadingTest extends AbstractReflectiveTest {
 
     private static final int    SAMPLE_RATE = 48_000;
     private static final int    FFT_SIZE    = 4096;
@@ -138,7 +138,7 @@ class FftFrequencyLockReadingTest {
         assertEquals(TONE_HZ, second.fundamentalHzRefined, TOLERANCE_BINS * BIN_HZ,
                 "cycle two reads the tone from the phase step (" + window + ")");
         lock(worker, second, HOP);
-        FrequencyAligner fll = (FrequencyAligner) FieldUtils.readField(worker, LOOP, true);
+        FrequencyAligner fll = field(worker, LOOP);
         assertEquals(-1L, lastUpdate(fll),
                 "cycle one's reading, the one-frame estimate, never reaches the loop");
         assertEquals(0.0, fll.getCorrection(), "and the loop holds");
@@ -183,17 +183,9 @@ class FftFrequencyLockReadingTest {
                 worker.currentResetEpoch());
     }
 
-    private void call(FftAnalyzerWorker worker, String method, Object... args) {
-        try {
-            MethodUtils.invokeMethod(worker, true, method, args);
-        } catch (ReflectiveOperationException ex) {
-            throw new AssertionError("the worker's " + method + " is not reachable", ex);
-        }
-    }
-
     /** The capture position of the loop's last update, -1 before the first. */
-    private long lastUpdate(FrequencyAligner fll) throws IllegalAccessException {
-        return (Long) FieldUtils.readField(fll, LAST_UPDATE, true);
+    private long lastUpdate(FrequencyAligner fll) {
+        return field(fll, LAST_UPDATE);
     }
 
     /** {@code length} samples of a unit sine at {@code hz}. */

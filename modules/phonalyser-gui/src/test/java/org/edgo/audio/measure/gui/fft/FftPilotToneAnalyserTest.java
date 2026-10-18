@@ -19,7 +19,6 @@
 package org.edgo.audio.measure.gui.fft;
 
 import org.apache.commons.lang3.reflect.FieldUtils;
-import org.apache.commons.lang3.reflect.MethodUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.edgo.audio.measure.enums.FftOverlap;
@@ -27,6 +26,7 @@ import org.edgo.audio.measure.enums.FundamentalPhaseAlignment;
 import org.edgo.audio.measure.enums.WindowType;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
+import org.edgo.audio.measure.test.AbstractReflectiveTest;
 import org.junit.jupiter.api.Test;
 
 import java.util.Random;
@@ -77,7 +77,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * bin costs a phase offset that is the same in every frame and cancels in the
  * difference between two.
  */
-class FftPilotToneAnalyserTest {
+class FftPilotToneAnalyserTest extends AbstractReflectiveTest {
 
     private static final int        SAMPLE_RATE = 48_000;
     private static final int        FFT_SIZE    = 4096;
@@ -321,8 +321,8 @@ class FftPilotToneAnalyserTest {
             FftResult r = analyse(analyzer, win, hop);
             excess[t]    = cyclePhiF(worker, r);
             deviation[t] = pilotAgainstReference(worker, r);
-            advances[t]  = (Double)  FieldUtils.readField(worker, "pilotAdvanceSamples", true);
-            unsettled[t] = (Boolean) FieldUtils.readField(worker, "phaseAlignUnsettled", true);
+            advances[t]  = field(worker, "pilotAdvanceSamples");
+            unsettled[t] = field(worker, "phaseAlignUnsettled");
             // The geometry and the measured positions, so a case that fails
             // says WHERE the two sides parted.
             LOG.info("{} analysis cycle {}: hop {}, frames {}, window start {}, pilot pos {} bins, "
@@ -356,18 +356,15 @@ class FftPilotToneAnalyserTest {
      *  fundamental's drift less the excess, both taken from the worker rather
      *  than recomputed, so the case tests the production formula and not a
      *  copy of it. */
-    private double pilotAgainstReference(FftAnalyzerWorker worker, FftResult r) throws Exception {
-        double againstReference = (Double) MethodUtils.invokeMethod(worker, true,
-                "fundamentalAgainstReferenceRad");
-        return (Double) MethodUtils.invokeMethod(worker, true,
-                "pilotAgainstReferenceRad", againstReference);
+    private double pilotAgainstReference(FftAnalyzerWorker worker, FftResult r) {
+        double againstReference = call(worker, "fundamentalAgainstReferenceRad");
+        return call(worker, "pilotAgainstReferenceRad", againstReference);
     }
 
     /** The worker's own excess for this analysis cycle in mode PILOT_TONE - the
      *  private method the analysis-cycle loop calls, reached by reflection. */
-    private double cyclePhiF(FftAnalyzerWorker worker, FftResult r) throws Exception {
-        return (Double) MethodUtils.invokeMethod(worker, true, "cyclePhiF",
-                FundamentalPhaseAlignment.PILOT_TONE, r, true);
+    private double cyclePhiF(FftAnalyzerWorker worker, FftResult r) {
+        return call(worker, "cyclePhiF", FundamentalPhaseAlignment.PILOT_TONE, r, true);
     }
 
     // ── The capture ────────────────────────────────────────────────────────

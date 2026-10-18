@@ -18,14 +18,11 @@
 
 package org.edgo.audio.measure.dsp;
 
-import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.List;
-import java.util.function.DoubleFunction;
 
-import org.edgo.audio.measure.dsp.IntermodCompensation.GeneratorCorrections;
 import org.edgo.audio.measure.dsp.IntermodCompensation.ProductPhasors;
 import org.edgo.audio.measure.fft.FftResult;
+import org.edgo.audio.measure.test.AbstractReflectiveTest;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -43,7 +40,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * correction, and a product held by the gate keeps its correction while its
  * frequency is still taken.
  */
-class IntermodCompensationTest {
+class IntermodCompensationTest extends AbstractReflectiveTest {
 
     private static final double F1_HZ = 1000.0;
     private static final double F2_HZ = 1100.0;
@@ -87,11 +84,15 @@ class IntermodCompensationTest {
      *  the frequency write is visible beside the held correction. */
     private static final double SHIFT_HZ      = 0.25;
     private static final double STEP          = 1.0;
-    /** ADC full scale and DAC F1, Vrms: a correction converts to itself. */
-    private static final double UNIT_VRMS     = 1.0;
     /** Far under the 1e-6 a second step adds, far over the rounding of a
      *  1e-6 amplitude. */
     private static final double AMPLITUDE_TOLERANCE = 1e-18;
+    /** The accumulator's private state, by name because that is what
+     *  reflection takes: each grid slot's correction phasor and the
+     *  frequency the slot was last measured at. */
+    private static final String ACC_RE  = "accRe";
+    private static final String ACC_IM  = "accIm";
+    private static final String FREQ_HZ = "freqHz";
 
     @Test
     void theGridIsTheImdReadoutsEightProductsInOrder() {
@@ -139,44 +140,44 @@ class IntermodCompensationTest {
         IntermodCompensation comp = new IntermodCompensation();
         ProductPhasors z = reading(AT_GATE_DB, UNDER_GATE_DB, 0.0);
         comp.accumulate(z, STEP);
-        GeneratorCorrections gc = comp.toGeneratorCorrections(hz -> new double[] { 1.0, 0.0 },
-                UNIT_VRMS, UNIT_VRMS);
+        double[] accRe = field(comp, ACC_RE);
+        double[] accIm = field(comp, ACC_IM);
 
         // 2 F2 - F1 at 4.9 dB and every product without a clearance stay.
-        assertEquals(1, gc.coefA().length, "one product moved");
-        assertEquals(MOVED_A, gc.coefA()[0], "2 F1 - F2 moved, a");
-        assertEquals(MOVED_B, gc.coefB()[0], "2 F1 - F2 moved, b");
         int moved = slotOf(z, MOVED_A, MOVED_B);
-        assertEquals(Math.hypot(z.re()[moved], z.im()[moved]), gc.ampRatios()[0], 0.0,
-                "the full step takes the reading's level");
-        assertEquals(Math.atan2(z.im()[moved], z.re()[moved]), gc.phiInits()[0], 0.0,
-                "the full step takes the reading's phase");
+        for (int g = 0; g < accRe.length; g++) {
+            if (g == moved) continue;
+            String name = "(" + z.toneOneMultiples()[g] + ", " + z.toneTwoMultiples()[g] + ")";
+            assertEquals(0.0, accRe[g], 0.0, name + " stays, real part");
+            assertEquals(0.0, accIm[g], 0.0, name + " stays, imaginary part");
+        }
+        assertEquals(z.re()[moved], accRe[moved], 0.0, "the full step takes the reading, real part");
+        assertEquals(z.im()[moved], accIm[moved], 0.0, "the full step takes the reading, imaginary part");
     }
 
     @Test
     void aGatedOutProductKeepsItsCorrectionAndTakesTheNewFrequency() {
         IntermodCompensation comp = new IntermodCompensation();
         comp.accumulate(reading(CLEAR_DB, CLEAR_DB, 0.0), STEP);
-        List<Double> hzBefore = new ArrayList<>();
-        GeneratorCorrections before = comp.toGeneratorCorrections(asking(hzBefore), UNIT_VRMS, UNIT_VRMS);
+        double[] reBefore = this.<double[]>field(comp, ACC_RE).clone();
+        double[] imBefore = this.<double[]>field(comp, ACC_IM).clone();
+        double[] hzBefore = this.<double[]>field(comp, FREQ_HZ).clone();
 
         comp.accumulate(reading(CLEAR_DB, UNDER_GATE_DB, SHIFT_HZ), STEP);
-        List<Double> hzAfter = new ArrayList<>();
-        GeneratorCorrections after = comp.toGeneratorCorrections(asking(hzAfter), UNIT_VRMS, UNIT_VRMS);
+        double[] reAfter = field(comp, ACC_RE);
+        double[] imAfter = field(comp, ACC_IM);
+        double[] hzAfter = field(comp, FREQ_HZ);
 
-        int heldBefore = entryOf(before, HELD_A, HELD_B);
-        int heldAfter  = entryOf(after, HELD_A, HELD_B);
-        assertEquals(before.ampRatios()[heldBefore], after.ampRatios()[heldAfter], 0.0,
-                "2 F2 - F1 under the gate keeps its amplitude");
-        assertEquals(before.phiInits()[heldBefore], after.phiInits()[heldAfter], 0.0,
-                "2 F2 - F1 under the gate keeps its phase");
-        // One chain read per entry, in entry order, at the stored frequency.
-        assertNotEquals(hzBefore.get(heldBefore), hzAfter.get(heldAfter), "the frequency moved");
-        assertEquals(HELD_A * F1_HZ + HELD_B * F2_HZ + SHIFT_HZ, hzAfter.get(heldAfter), 0.0,
+        ProductPhasors grid = comp.grid(F1_HZ, F2_HZ);
+        int held = slotOf(grid, HELD_A, HELD_B);
+        assertEquals(reBefore[held], reAfter[held], 0.0, "2 F2 - F1 under the gate keeps its correction, real part");
+        assertEquals(imBefore[held], imAfter[held], 0.0,
+                "2 F2 - F1 under the gate keeps its correction, imaginary part");
+        assertNotEquals(hzBefore[held], hzAfter[held], "the frequency moved");
+        assertEquals(HELD_A * F1_HZ + HELD_B * F2_HZ + SHIFT_HZ, hzAfter[held], 0.0,
                 "2 F2 - F1 stores the frequency it was read at");
-        int movedBefore = entryOf(before, MOVED_A, MOVED_B);
-        int movedAfter  = entryOf(after, MOVED_A, MOVED_B);
-        assertEquals(2.0 * before.ampRatios()[movedBefore], after.ampRatios()[movedAfter],
+        int moved = slotOf(grid, MOVED_A, MOVED_B);
+        assertEquals(2.0 * Math.hypot(reBefore[moved], imBefore[moved]), Math.hypot(reAfter[moved], imAfter[moved]),
                 AMPLITUDE_TOLERANCE, "2 F1 - F2 over the gate takes the second step");
     }
 
@@ -232,22 +233,5 @@ class IntermodCompensationTest {
             if (z.toneOneMultiples()[g] == a && z.toneTwoMultiples()[g] == b) return g;
         }
         throw new AssertionError("(" + a + ", " + b + ") is not on the grid");
-    }
-
-    /** Entry index of product {@code (a, b)} in {@code gc}. */
-    private int entryOf(GeneratorCorrections gc, int a, int b) {
-        for (int i = 0; i < gc.coefA().length; i++) {
-            if (gc.coefA()[i] == a && gc.coefB()[i] == b) return i;
-        }
-        throw new AssertionError("(" + a + ", " + b + ") has no entry");
-    }
-
-    /** A unit chain response, each frequency it is read at recorded in
-     *  {@code asked}. */
-    private DoubleFunction<double[]> asking(List<Double> asked) {
-        return f -> {
-            asked.add(f);
-            return new double[] { 1.0, 0.0 };
-        };
     }
 }

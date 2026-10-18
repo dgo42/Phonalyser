@@ -19,7 +19,6 @@
 package org.edgo.audio.measure.gui.fft;
 
 import org.apache.commons.lang3.reflect.FieldUtils;
-import org.apache.commons.lang3.reflect.MethodUtils;
 import org.edgo.audio.measure.enums.AlignGenerator;
 import org.edgo.audio.measure.enums.FundamentalPhaseAlignment;
 import org.edgo.audio.measure.enums.GenSignalForm;
@@ -29,6 +28,7 @@ import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.sound.DoubleSignalBuffer;
 import org.edgo.audio.measure.gui.sound.SignalBufferReader;
 import org.edgo.audio.measure.preferences.Preferences;
+import org.edgo.audio.measure.test.AbstractReflectiveTest;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -58,7 +58,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p>The worker is headless (no display), so nothing it posts to the UI thread
  * is delivered: the trims and the reset event are not asserted here.
  */
-class FftFrequencyLockGatingTest {
+class FftFrequencyLockGatingTest extends AbstractReflectiveTest {
 
     private static final int    SAMPLE_RATE    = 48_000;
     private static final int    FFT_SIZE       = 4096;
@@ -169,18 +169,18 @@ class FftFrequencyLockGatingTest {
         assertNotEquals(0.0, corrected, "a 1 ppm mistune is corrected in one step");
 
         call(worker, RESYNC, new SignalBufferReader(new DoubleSignalBuffer(SAMPLE_RATE, BUFFER_SECONDS)));
-        assertTrue((Boolean) FieldUtils.readField(worker, HOLD, true), "the re-sync holds the loop");
+        assertTrue((Boolean) field(worker, HOLD), "the re-sync holds the loop");
 
         cycle(worker, STORED_CYCLE);
         assertEquals(FIRST_CYCLE, lastUpdate(fll),
                 "the first analysis cycle after the re-sync has no reading to feed");
-        assertTrue((Boolean) FieldUtils.readField(worker, HOLD, true), "and leaves the hold armed");
+        assertTrue((Boolean) field(worker, HOLD), "and leaves the hold armed");
 
         cycle(worker, SKIPPED_CYCLE);
         assertEquals(FIRST_CYCLE, lastUpdate(fll),
                 "the first analysis cycle that would feed the loop does not update it");
         assertEquals(corrected, fll.getCorrection(), "nor move its correction");
-        assertFalse((Boolean) FieldUtils.readField(worker, HOLD, true), "and it uses the hold up");
+        assertFalse((Boolean) field(worker, HOLD), "and it uses the hold up");
 
         cycle(worker, FED_CYCLE);
         assertEquals(SKIPPED_CYCLE, lastUpdate(fll), "the next analysis cycle updates the loop");
@@ -202,7 +202,7 @@ class FftFrequencyLockGatingTest {
 
         FieldUtils.writeField(worker, PUBLISHED, MARKER_HZ, true);
         worker.resetFrequencyLock();
-        assertTrue((Boolean) FieldUtils.readField(worker, ARMED, true),
+        assertTrue((Boolean) field(worker, ARMED),
                 "the magnitude watch is re-armed");
         assertEquals(MARKER_HZ, published(worker),
                 "no loop engaged: the reset returns ahead of the re-send and the reset event");
@@ -228,30 +228,20 @@ class FftFrequencyLockGatingTest {
         r.freqResolution       = SAMPLE_RATE / (double) FFT_SIZE;
         r.fundamentalHzRefined = MEASURED_HZ;
         r.fundamentalDbFs      = FUND_DBFS;
-        FieldUtils.writeField(FieldUtils.readField(worker, ANALYSED_TONES, true), TONE1_HZ, MEASURED_HZ, true);
+        FieldUtils.writeField(this.<Object>field(worker, ANALYSED_TONES), TONE1_HZ, MEASURED_HZ, true);
         call(worker, STEP, r, FundamentalPhaseAlignment.NONE, absStart, absStart + FFT_SIZE,
                 worker.currentResetEpoch());
     }
 
-    /** The one place this class calls into the worker's private members, so a
-     *  renamed member fails here and not at every call site. */
-    private void call(FftAnalyzerWorker worker, String method, Object... args) {
-        try {
-            MethodUtils.invokeMethod(worker, true, method, args);
-        } catch (ReflectiveOperationException ex) {
-            throw new AssertionError("the worker's " + method + " is not reachable", ex);
-        }
+    private FrequencyAligner loop(FftAnalyzerWorker worker) {
+        return field(worker, LOOP);
     }
 
-    private FrequencyAligner loop(FftAnalyzerWorker worker) throws IllegalAccessException {
-        return (FrequencyAligner) FieldUtils.readField(worker, LOOP, true);
+    private long lastUpdate(FrequencyAligner fll) {
+        return field(fll, LAST_UPDATE);
     }
 
-    private long lastUpdate(FrequencyAligner fll) throws IllegalAccessException {
-        return (Long) FieldUtils.readField(fll, LAST_UPDATE, true);
-    }
-
-    private double published(FftAnalyzerWorker worker) throws IllegalAccessException {
-        return (Double) FieldUtils.readField(worker, PUBLISHED, true);
+    private double published(FftAnalyzerWorker worker) {
+        return field(worker, PUBLISHED);
     }
 }

@@ -18,8 +18,6 @@
 
 package org.edgo.audio.measure.gui.fft;
 
-import org.apache.commons.lang3.reflect.FieldUtils;
-import org.apache.commons.lang3.reflect.MethodUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.edgo.audio.measure.enums.FftOverlap;
@@ -27,6 +25,7 @@ import org.edgo.audio.measure.enums.WindowType;
 import org.edgo.audio.measure.fft.CoherentAccumulator;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
+import org.edgo.audio.measure.test.AbstractReflectiveTest;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
@@ -58,7 +57,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * overlap, ring of 4, tone 999.96 Hz at -2.8 dBFS.
  */
 @Tag("exploratory")   // parked red: pins the intended post-fix behaviour - excluded from the normal build (see pom surefire)
-class FftBlankStartupTest {
+class FftBlankStartupTest extends AbstractReflectiveTest {
 
     private static final int        SAMPLE_RATE = 32_000;
     private static final int        FFT_SIZE    = 65_536;
@@ -83,24 +82,9 @@ class FftBlankStartupTest {
 
     private static final Logger LOG = LogManager.getLogger("FftBlankStartup");
 
-    /** The one place this harness reaches into the worker: both members it
-     *  drives are private, so a renamed member fails here and not at every
-     *  call site. */
-    private void call(FftAnalyzerWorker worker, String method, Object... args) {
-        try {
-            MethodUtils.invokeMethod(worker, true, method, args);
-        } catch (ReflectiveOperationException ex) {
-            throw new AssertionError("the worker's " + method + " is not reachable", ex);
-        }
-    }
-
     /** The worker's accumulator, written back onto {@code r}. */
     private void overlay(FftAnalyzerWorker worker, FftResult r) {
-        try {
-            ((CoherentAccumulator) FieldUtils.readField(worker, ACCUMULATOR, true)).overlayOnto(r);
-        } catch (IllegalAccessException ex) {
-            throw new AssertionError("the worker's " + ACCUMULATOR + " is not reachable", ex);
-        }
+        this.<CoherentAccumulator>field(worker, ACCUMULATOR).overlayOnto(r);
     }
 
     /** How the capture begins, before the continuous clean sine. */
@@ -155,8 +139,9 @@ class FftBlankStartupTest {
             analyzer.setSpectrumOnly(true);
             analyzer.setMultiTone(false);
             analyzer.setSecondToneHintHz(Double.NaN);
-            FftResult r = analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, HARMONICS,
-                    WINDOW, OVERLAP, 0.0, 0.0, true, Double.NaN, false, FUND_HZ);
+            FftResult r = analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, HARMONICS, HARMONICS,
+                    WINDOW, OVERLAP, 0.0, 0.0, true, Double.NaN, false, FUND_HZ,
+                    new FftResult(), OVERLAP.hopSamples(FFT_SIZE));
             call(worker, ACCUMULATE, r, base, true, TARGET_N);
 
             overlay(worker, r);                      // the display path, every analysis cycle

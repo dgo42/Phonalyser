@@ -18,7 +18,6 @@
 
 package org.edgo.audio.measure.dsp;
 
-import org.edgo.audio.measure.dsp.HarmonicCompensation.GeneratorCorrections;
 import org.edgo.audio.measure.dsp.HarmonicCompensation.HarmonicPhasors;
 import org.junit.jupiter.api.Test;
 
@@ -50,15 +49,11 @@ class HarmonicCompensationStepTest {
         }
     }
 
-    /** The accumulated correction as the generator would run it, read back
-     *  through the unit calibration and unit levels. */
+    /** The accumulated correction of every harmonic as {@code [re, im]}. */
     private double[][] applied(HarmonicCompensation comp) {
-        double[][] acc = new double[HARMONICS][2];
-        GeneratorCorrections gc = comp.toGeneratorCorrections(F0_HZ, f -> new double[] { 1.0, 0.0 }, 1.0, 1.0);
-        for (int i = 0; i < gc.harmonicNumbers().length; i++) {
-            int h = gc.harmonicNumbers()[i] - 2;
-            acc[h][0] = gc.ampRatios()[i] * Math.cos(gc.phiInits()[i]);
-            acc[h][1] = gc.ampRatios()[i] * Math.sin(gc.phiInits()[i]);
+        double[][] acc = new double[HARMONICS][];
+        for (int h = 0; h < HARMONICS; h++) {
+            acc[h] = comp.correction(h);
         }
         return acc;
     }
