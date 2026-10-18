@@ -321,6 +321,7 @@ public final class FftView extends AbstractFreqDomainView {
             } else {
                 this.lastResult.copyFrom(slot);
             }
+            this.lastResultLive = true;
             logRenderStep("3.1 result copy");
             // Post-average pipeline (recompute -> .frc -> dBV), run ONCE
             // here on the DISPLAYED frame (post throttle + coalescing), on the
@@ -436,6 +437,10 @@ public final class FftView extends AbstractFreqDomainView {
      *  loop. */
     @Getter
     private FftResult lastResult;
+    /** Whether {@link #lastResult} came from the live capture - corrected by
+     *  the store's active rows, so a stopped one follows a change of them -
+     *  rather than from a loaded file, whose data stands as it was saved. */
+    private boolean lastResultLive;
 
     // Static-layer paint cache (traceBuffer Image + fingerprint) now
     // lives in AbstractFreqDomainView.  Mouse-move / crosshair redraws
@@ -884,16 +889,21 @@ public final class FftView extends AbstractFreqDomainView {
         this.snapshotFill      = source.getNextFrameProgress();
     }
 
-    /** The loaded correction rows moved (a .frc loaded, dropped, or its
-     *  with-noise flag flipped) - the FFT tab control calls this after every
-     *  rebuild of the store, so the per-bin response they divide by is
-     *  rebuilt here and the trace redrawn with it.  Rebuilt at once, on the
-     *  geometry of the frame on screen; with no frame yet the next one builds
-     *  it. */
-    public void onCalibrationChanged() {
+    /** One change of the loaded correction rows - the FFT tab control hands
+     *  over every change of the store.  While recording, the per-bin response
+     *  they divide by is rebuilt at once, on the geometry of the frame on
+     *  screen (with no frame yet the next one builds it), and the next frame is
+     *  corrected with it.  A stopped capture's result follows the change itself
+     *  ({@link #restateStoppedResult}); a loaded file's data stands as it was
+     *  saved. */
+    public void onCalibrationChanged(CorrectionStore.Change change) {
         if (isDisposed()) return;
-        this.calInv = null;
-        if (this.lastResult != null) buildCalInverse(this.lastResult);
+        if (this.lastResult != null && this.lastResultLive && !isRunning()) {
+            restateStoppedResult(change);
+        } else {
+            this.calInv = null;
+            if (this.lastResult != null) buildCalInverse(this.lastResult);
+        }
         redraw();
     }
 
@@ -1060,7 +1070,7 @@ public final class FftView extends AbstractFreqDomainView {
             if (DebugSwitches.SHOW_FFT_ANALYZE_TIME) {
                 logRenderStep("3.3 .frc apply (" + correctedBins + " bins)");
             }
-            carryLineFloorsThroughCal(r, lineHz, accumulated);
+            carryLineFloorsThroughCal(r, lineHz, accumulated, calInv);
         }
         // 3. Measurements - recomputed on every frame: averaging needs it
         //    (analyze skipped the stats while accumulating), the calibration
@@ -1086,11 +1096,11 @@ public final class FftView extends AbstractFreqDomainView {
             double[] preDbFs  = new double[1 + hc];
             double stableFundHz = r.coherentKappa * r.freqResolution;
             preFreqs[0] = r.fundamentalHz;
-            preDbFs[0]  = r.fundamentalDbFs + calGainDbAt(r, stableFundHz);
+            preDbFs[0]  = r.fundamentalDbFs + calGainDbAt(calInv, r, stableFundHz);
             for (int h = 0; h < hc; h++) {
                 if (r.harmonicBins[h] > 0) {
                     preFreqs[1 + h] = r.harmonicHz[h];
-                    preDbFs[1 + h] = r.harmonicDbFs[h] + calGainDbAt(r, harmonicCalHz(r, h, true));
+                    preDbFs[1 + h] = r.harmonicDbFs[h] + calGainDbAt(calInv, r, harmonicCalHz(r, h, true));
                 }
             }
             r.preCorrectionPeaks = new double[][] { preFreqs, preDbFs };
@@ -1102,7 +1112,7 @@ public final class FftView extends AbstractFreqDomainView {
         //    (the screenshot copy included) draws them without a response of
         //    its own.
         if (calibrated && r.imd != null) {
-            r.imdPreCorrectionPeaks = imdPreCorrectionPeaks(r);
+            r.imdPreCorrectionPeaks = imdPreCorrectionPeaks(r, calInv);
         }
 
 
@@ -1166,15 +1176,17 @@ public final class FftView extends AbstractFreqDomainView {
      *  reads: each floor less the dB the calibration takes off its line - the
      *  inverse of how a blue dot is derived from a red one - looked up at the
      *  same frequency the blue dot is, so a line held at its floor draws its
-     *  blue dot on that floor and its red dot the calibration's gain away. */
-    private void carryLineFloorsThroughCal(FftResult r, double[] lineHz, boolean accumulated) {
+     *  blue dot on that floor and its red dot the calibration's gain away.
+     *  {@code inv} is the cascade the spectrum is being corrected by. */
+    private void carryLineFloorsThroughCal(FftResult r, double[] lineHz, boolean accumulated,
+                                           InverseCascade inv) {
         if (r.lineFloorBins == null) return;
         int harmonics = Math.max(0, r.harmonicCount);
         for (int i = 0; i < r.lineFloorBins.length; i++) {
             if (r.lineFloorBins[i] == NO_LINE_BIN || !Double.isFinite(r.lineFloorDbFs[i])) continue;
             boolean harmonic = i >= 1 && i <= harmonics;
             double  hz = harmonic ? harmonicCalHz(r, i - 1, accumulated) : lineHz[i];
-            r.lineFloorDbFs[i] -= calGainDbAt(r, hz);
+            r.lineFloorDbFs[i] -= calGainDbAt(inv, r, hz);
         }
     }
 
@@ -1186,6 +1198,57 @@ public final class FftView extends AbstractFreqDomainView {
         return accumulated ? r.coherentKappa * r.freqResolution * (h + 2) : r.harmonicHz[h];
     }
 
+    /**
+     * Brings a stopped capture's result in line with one change of the loaded
+     * rows, in place: the row as it was is taken off when it was active, the
+     * row as it is now applied when it is active - each alone, on the spectrum
+     * as it stands ({@link #restateRow}).  The blue dots are the levels as
+     * captured, which no change of the rows moves: they are taken from the
+     * readouts as they stand when the first row comes, and dropped when the
+     * last one goes.  The held response belongs to a raw frame, so it is
+     * dropped and the next frame builds it on its own spectrum.
+     */
+    private void restateStoppedResult(CorrectionStore.Change change) {
+        FftResult r = lastResult;
+        boolean calibrated = !correctionStore.getEntries().isEmpty();
+        if (calibrated && r.preCorrectionPeaks == null) {
+            r.preCorrectionPeaks = FreqRespCalHelper.capturePreCorrectionPeaks(r);
+            holdPreCorrectionHarmonicsAtFloor(r);
+            if (r.imd != null) r.imdPreCorrectionPeaks = imdPreCorrectionPeaks(r, null);
+        }
+        CorrectionStore.Entry before = change.before();
+        CorrectionStore.Entry after  = change.after();
+        if (before != null && before.isActive()) restateRow(r, before, true);
+        if (after  != null && after.isActive())  restateRow(r, after, false);
+        if (!calibrated) {
+            r.preCorrectionPeaks    = null;
+            r.imdPreCorrectionPeaks = null;
+        }
+        calInv = null;
+    }
+
+    /**
+     * Applies one row's correction to {@code r} in place, or with {@code undo}
+     * takes it off again: the row's response sampled on {@code r}'s grid, with
+     * the tone lobes measured on the spectrum as it stands - a lobe bin's
+     * stretch exponent does not move under the other rows' correction, so the
+     * row comes off exactly as it went on - the line floors carried by the
+     * same gain, and the readouts recomputed on the result.
+     */
+    private void restateRow(FftResult r, CorrectionStore.Entry e, boolean undo) {
+        FreqRespCalibration cal = r.channelLeft ? e.getCalibration().left() : e.getCalibration().right();
+        List<FreqRespCalibration> row  = List.of(cal);
+        List<FreqRespCalibration> none = List.of();
+        double[] tones = FreqRespCalHelper.toneFrequencies(r);
+        InverseCascade inv = FreqRespCalHelper.cascadeInverse(
+                e.isWithNoise() ? row : none, e.isWithNoise() ? none : row,
+                tones, FreqRespCalHelper.toneLobeSpans(r, tones), r.fftSize, r.sampleRate);
+        if (undo) inv = inv.reciprocal();
+        carryLineFloorsThroughCal(r, tones, !Double.isNaN(r.coherentKappa), inv);
+        FreqRespCalHelper.applyInverseInPlace(r, inv);
+        statsAnalyzer.recomputeStats(r);
+    }
+
     /** Shows a static spectrum loaded from file instead of live data.  When
      *  the result carries IMD products ({@link FftResult#imd}) the view
      *  switches to IMD (dual-tone) table mode and renders them; otherwise it
@@ -1195,6 +1258,7 @@ public final class FftView extends AbstractFreqDomainView {
      *  overwrite it). */
     public void displayLoadedResult(FftResult r) {
         lastResult = r;
+        lastResultLive = false;
         tableModeIsImd = (r.imd != null);
         syncDataButtons();
         if (!isDisposed()) { redraw(); update(); }
@@ -2314,12 +2378,13 @@ public final class FftView extends AbstractFreqDomainView {
      *  {@link FftResult#imdPreCorrectionPeaks} lays them out: each line's
      *  measured post-correction level plus the cascade's gain at its own bin
      *  - what the correction took off that bin, added back - so blue stands
-     *  exactly where the measurement stood before the correction. */
-    private double[][] imdPreCorrectionPeaks(FftResult r) {
+     *  exactly where the measurement stood before the correction.  {@code inv}
+     *  is the cascade the spectrum was corrected by, {@code null} for none. */
+    private double[][] imdPreCorrectionPeaks(FftResult r, InverseCascade inv) {
         double[] hz   = imdLineHz(r.imd);
         double[] dbFs = imdMeasuredDbFs(r.imd);
         for (int i = 0; i < hz.length; i++) {
-            dbFs[i] += calGainDbAt(r, hz[i]);
+            dbFs[i] += calGainDbAt(inv, r, hz[i]);
         }
         return new double[][] { hz, dbFs };
     }
@@ -3001,15 +3066,15 @@ public final class FftView extends AbstractFreqDomainView {
         return (int) Math.round(f2 / (r.sampleRate / (double) r.fftSize));
     }
 
-    /** The dB the loaded calibration cascade takes off the bin nearest
+    /** The dB the calibration cascade {@code inv} takes off the bin nearest
      *  {@code hz} - what a level measured after the correction has to gain back
-     *  to read as it was measured.  0 with no response held (a static spectrum
-     *  shown after a reset is not corrected either, so its blue dot coincides
-     *  with the red one) and for a bin no row reached. */
-    private double calGainDbAt(FftResult r, double hz) {
-        if (calInv == null || !(hz > 0.0)) return 0.0;
+     *  to read as it was measured.  0 with no cascade (a static spectrum shown
+     *  after a reset is not corrected either, so its blue dot coincides with
+     *  the red one) and for a bin no row reached. */
+    private double calGainDbAt(InverseCascade inv, FftResult r, double hz) {
+        if (inv == null || !(hz > 0.0)) return 0.0;
         double binWidth = r.sampleRate / (double) r.fftSize;
-        return FreqRespCalHelper.gainDbAt(calInv, (int) Math.round(hz / binWidth));
+        return FreqRespCalHelper.gainDbAt(inv, (int) Math.round(hz / binWidth));
     }
 
     /** Emits one accumulated cal-overlay column - min/max dB extremes

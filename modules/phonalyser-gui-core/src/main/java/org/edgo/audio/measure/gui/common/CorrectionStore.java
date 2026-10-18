@@ -45,8 +45,9 @@ import java.util.List;
  * not a singleton.
  *
  * <p>The store announces nothing: its only writer, the pane's calibration tab
- * ({@link AbstractCalibrationTabControl}), re-derives the view and refreshes
- * its calibration tile itself after every sync.
+ * ({@link AbstractCalibrationTabControl}), hands every {@link Change} its
+ * {@link #update} returns to the pane, which re-derives the view and refreshes
+ * its calibration tile.
  *
  * <p>Written on the UI thread by the calibration tab and read there by the
  * view.  The FFT predistortion engine also reads it, on the FFT worker thread,
@@ -57,8 +58,8 @@ import java.util.List;
 @Log4j2
 public final class CorrectionStore {
 
-    /** Pairs a loaded calibration with the file path it came from.
-     *  Both fields are non-null. */
+    /** Pairs a loaded calibration with the file path it came from and the
+     *  row's flags.  Calibration and path are non-null. */
     @Value
     public static class Entry {
         StereoFreqRespCalibration calibration;
@@ -69,11 +70,40 @@ public final class CorrectionStore {
          *  per-frequency offset.  Always {@code false} for the FreqResp
          *  instance, which divides the whole trace regardless. */
         boolean                   withNoise;
+        /** The row's Active tick: only an active entry is divided by. */
+        boolean                   active;
+    }
+
+    /** What a {@link Change} reports. */
+    public enum Kind {
+        /** A loaded calibration entered the store: a file loaded into an empty
+         *  row, or a row holding one inserted. */
+        ADDED,
+        /** A loaded calibration left the store: its row's file cleared, or the
+         *  row removed. */
+        REMOVED,
+        /** The calibration of an entry was exchanged: another file loaded into
+         *  its row, or its file written anew. */
+        REPLACED,
+        /** An entry's Active or With-noise flag flipped; its calibration is the
+         *  same. */
+        CHANGED;
+
+        private Kind() {
+        }
+    }
+
+    /** One change of the store: its kind, the entry as it was ({@code null}
+     *  for {@link Kind#ADDED}) and as it is ({@code null} for
+     *  {@link Kind#REMOVED}). */
+    public record Change(Kind kind, Entry before, Entry after) {
     }
 
     /** Human label distinguishing the instances in log lines (e.g. "FFT"). */
     private final String label;
 
+    /** The entry of every row holding a loaded calibration, active or not, in
+     *  the order of the calibration rows. */
     private final List<Entry> entries = new ArrayList<>();
 
     /** @param label short identifier for this store's log lines */
@@ -85,32 +115,58 @@ public final class CorrectionStore {
     // Entries list
     // -------------------------------------------------------------------------
 
-    /** Immutable copy of every loaded calibration, in the order of the
-     *  calibration rows.  Empty when none loaded. */
+    /** Immutable copy of every active calibration - the ones divided by - in
+     *  the order of the calibration rows.  Empty when none is active. */
     public List<Entry> getEntries() {
-        return Collections.unmodifiableList(new ArrayList<>(entries));
+        List<Entry> active = new ArrayList<>();
+        for (Entry e : entries) {
+            if (e.isActive()) active.add(e);
+        }
+        return Collections.unmodifiableList(active);
     }
 
-    /** Appends a calibration to the end of the entries list.
-     *  {@code withNoise} is honoured only by the FFT instance (see
-     *  {@link Entry#isWithNoise()}). */
-    public void addEntry(StereoFreqRespCalibration calibration, String path, boolean withNoise) {
-        if (calibration == null || path == null) {
-            throw new IllegalArgumentException("calibration and path must be non-null");
+    /**
+     * Brings one row's entry from {@code before} to {@code after} and reports
+     * exactly that: {@link Kind#ADDED} when the row held none, {@link Kind#REMOVED}
+     * when it holds none now, {@link Kind#REPLACED} when its calibration or path
+     * is another, {@link Kind#CHANGED} when only its flags moved.
+     *
+     * @param position the row's place among the rows holding an entry - where
+     *                 an added entry goes
+     * @param before   the row's entry as the store holds it, {@code null} for
+     *                 none
+     * @param after    the row's entry as it is now, {@code null} for none
+     * @return the change, or {@code null} when the entry is the same
+     */
+    public Change update(int position, Entry before, Entry after) {
+        if (before == null && after == null) return null;
+        Kind kind;
+        if (before == null) {
+            entries.add(position, after);
+            kind = Kind.ADDED;
+        } else if (after == null) {
+            entries.remove(indexOf(before));
+            kind = Kind.REMOVED;
+        } else if (before.equals(after)) {
+            return null;
+        } else {
+            entries.set(indexOf(before), after);
+            kind = before.getCalibration() == after.getCalibration()
+                    && before.getPath().equals(after.getPath()) ? Kind.CHANGED : Kind.REPLACED;
         }
-        entries.add(new Entry(calibration, path, withNoise));
+        Entry shown = after != null ? after : before;
         if (log.isInfoEnabled()) {
-            log.info("{} calibration added (row {}, {} points, withNoise={}): {}",
-                    label, entries.size() - 1, calibration.left().freqs.length, withNoise, path);
+            log.info("{} calibration {} (active={}, withNoise={}): {}",
+                    label, kind, shown.isActive(), shown.isWithNoise(), shown.getPath());
         }
+        return new Change(kind, before, after);
     }
 
-    /** Clears every entry (no-op when already empty). */
-    public void clearAll() {
-        if (entries.isEmpty()) return;
-        entries.clear();
-        if (log.isInfoEnabled()) {
-            log.info("{} calibrations cleared", label);
+    /** The index of {@code entry} itself - two rows may hold equal entries. */
+    private int indexOf(Entry entry) {
+        for (int i = 0; i < entries.size(); i++) {
+            if (entries.get(i) == entry) return i;
         }
+        throw new IllegalArgumentException("entry not held: " + entry.getPath());
     }
 }

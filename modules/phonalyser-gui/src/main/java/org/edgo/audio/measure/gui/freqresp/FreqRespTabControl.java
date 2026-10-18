@@ -1781,11 +1781,11 @@ public final class FreqRespTabControl extends AbstractCalibrationTabControl<Freq
         }
     }
 
-    /** The store was rebuilt from the rows (the calibration tab lives in the
-     *  base): the view re-derives its displayed curves, and the calibration
+    /** The store changed (the calibration tab lives in the base): the view
+     *  re-derives its displayed curves from the store, and the calibration
      *  tile counts the store's entries anew. */
     @Override
-    protected void onCalibrationsSynced() {
+    protected void onCalibrationsSynced(CorrectionStore.Change change) {
         view.onCalibrationChanged();
         toolbarTabs.refreshTab(TAB_FREQRESP_CALIBRATION);
     }

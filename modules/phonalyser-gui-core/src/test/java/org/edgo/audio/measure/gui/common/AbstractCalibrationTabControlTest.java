@@ -21,6 +21,7 @@ package org.edgo.audio.measure.gui.common;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 
 import org.eclipse.swt.SWT;
@@ -84,6 +85,9 @@ class AbstractCalibrationTabControlTest {
      *  control builds it. */
     private static final class TestTabControl extends AbstractCalibrationTabControl<TestPane> {
 
+        /** Every store change handed over, in order. */
+        final List<CorrectionStore.Change> changes = new ArrayList<>();
+
         TestTabControl(Composite parent, CorrectionStore store, CalibrationList list) {
             super(parent, SWT.NONE, new TestPane(parent), store, list, new Property<>(null),
                     KEY_PREFIX, true);
@@ -93,7 +97,15 @@ class AbstractCalibrationTabControlTest {
         }
 
         @Override
-        protected void onCalibrationsSynced() {
+        protected void onCalibrationsSynced(CorrectionStore.Change change) {
+            changes.add(change);
+        }
+
+        /** The kinds of the changes handed over since the last call. */
+        List<CorrectionStore.Kind> takeKinds() {
+            List<CorrectionStore.Kind> kinds = changes.stream().map(CorrectionStore.Change::kind).toList();
+            changes.clear();
+            return kinds;
         }
 
         /** The row widgets, in display order. */
@@ -251,5 +263,67 @@ class AbstractCalibrationTabControlTest {
         assertEquals(1, list.size(), "row 0 is always present");
         assertEquals(1, tabs.rows().length);
         assertTrue(store.getEntries().isEmpty());
+    }
+
+    @Test
+    void everyRowActionHandsOverExactlyItsChange() throws IOException {
+        CalibrationList list = new CalibrationList();
+        list.add(new CalibrationEntry(frc("a.frc", 1.0), false, false));
+        list.add(new CalibrationEntry());
+        CorrectionStore store = new CorrectionStore(STORE_LABEL);
+        TestTabControl tabs = new TestTabControl(shell, store, list);
+        assertEquals(List.of(CorrectionStore.Kind.ADDED), tabs.takeKinds(),
+                "the loaded row enters the store, the empty one does not");
+
+        list.get(0).active().set(true);
+        assertEquals(List.of(CorrectionStore.Kind.CHANGED), tabs.takeKinds(), "an Active tick");
+
+        list.get(0).withNoise().set(true);
+        assertEquals(List.of(CorrectionStore.Kind.CHANGED), tabs.takeKinds(), "a With-noise flip");
+
+        list.get(0).setPath(frc("b.frc", 2.0));
+        assertEquals(List.of(CorrectionStore.Kind.REPLACED), tabs.takeKinds(), "another file");
+
+        list.get(1).setPath(frc("c.frc", 3.0));
+        assertEquals(List.of(CorrectionStore.Kind.ADDED), tabs.takeKinds(), "a file into an empty row");
+
+        list.get(1).setPath(null);
+        assertEquals(List.of(CorrectionStore.Kind.REMOVED), tabs.takeKinds(), "a cleared row");
+
+        list.remove(0);
+        assertEquals(List.of(CorrectionStore.Kind.REMOVED), tabs.takeKinds(), "a removed row");
+        assertTrue(store.getEntries().isEmpty());
+    }
+
+    @Test
+    void aSavedFileIsAReplacementOfItsRowOnly() throws IOException {
+        Preferences prefs = Preferences.instance().copyForDialog();
+        CalibrationList list = prefs.getFftCalibrations();
+        String a = frc("a.frc", 1.0);
+        list.add(new CalibrationEntry(a, true, false));
+        list.add(new CalibrationEntry(frc("b.frc", 2.0), true, false));
+        TestTabControl tabs = new TestTabControl(shell, new CorrectionStore(STORE_LABEL), list);
+        tabs.takeKinds();
+
+        prefs.broadcastSavedFile(a);
+
+        List<CorrectionStore.Change> changes = List.copyOf(tabs.changes);
+        assertEquals(1, changes.size());
+        assertEquals(CorrectionStore.Kind.REPLACED, changes.get(0).kind());
+        assertEquals(a, changes.get(0).after().getPath());
+    }
+
+    @Test
+    void clearingTheListRemovesEveryLoadedRow() throws IOException {
+        CalibrationList list = new CalibrationList();
+        list.add(new CalibrationEntry(frc("a.frc", 1.0), true, false));
+        list.add(new CalibrationEntry(frc("b.frc", 2.0), false, false));
+        TestTabControl tabs = new TestTabControl(shell, new CorrectionStore(STORE_LABEL), list);
+        tabs.takeKinds();
+
+        list.clear();
+
+        assertEquals(List.of(CorrectionStore.Kind.REMOVED, CorrectionStore.Kind.REMOVED), tabs.takeKinds(),
+                "one removal per loaded row, the parked one included");
     }
 }

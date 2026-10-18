@@ -54,6 +54,7 @@ import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.AbstractCalibrationTabControl;
 import org.edgo.audio.measure.gui.common.CalibrationDialog;
+import org.edgo.audio.measure.gui.common.CorrectionStore;
 import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.common.IconUtils;
@@ -1234,12 +1235,12 @@ public final class FftTabControl extends AbstractCalibrationTabControl<FftPane> 
     // Load-calibration tab - the rows live in the base class
     // =========================================================================
 
-    /** The store was rebuilt from the rows (the calibration tab lives in the
-     *  base): the view rebuilds the per-bin response it divides by, and the
-     *  calibration tile counts the store's entries anew. */
+    /** The store changed (the calibration tab lives in the base): the view
+     *  follows exactly that change, and the calibration tile counts the
+     *  store's entries anew. */
     @Override
-    protected void onCalibrationsSynced() {
-        view.onCalibrationChanged();
+    protected void onCalibrationsSynced(CorrectionStore.Change change) {
+        view.onCalibrationChanged(change);
         toolbarTabs.refreshTab(TAB_CALIBRATION);
     }
 

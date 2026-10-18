@@ -48,17 +48,18 @@ import lombok.extern.log4j.Log4j2;
  * A pane's toolbar tab control with a calibration tab: one row per item of a
  * {@link CalibrationList} (path, Active, load, clear, add, remove), the
  * {@code .frc} each row references loaded from disk, and the
- * {@link CorrectionStore} the pane's view divides by, re-synced from the
- * active, loaded rows.  The list is the source of truth: a user action on a
- * row only changes the list, and every list change - a row action, a wizard's
+ * {@link CorrectionStore} the pane's view divides by, holding the entry of
+ * every loaded row.  The list is the source of truth: a user action on a row
+ * only changes the list, and every list change - a row action, a wizard's
  * Apply, a saved file an item references - reaches the one row it names
- * through the list's change, in the same call, and re-syncs the store.  The
- * rows stay parallel to the list: row {@code i} shows item {@code i}.
+ * through the list's change, in the same call, and moves that row's entry in
+ * the store, handing the store's change on.  The rows stay parallel to the
+ * list: row {@code i} shows item {@code i}.
  *
  * <p>The subclass builds the calibration tab in its own tab order
  * ({@link #buildCalibrationTab}), starts following the list once every tab
  * exists ({@link #followCalibrations}), and re-derives what divides by the
- * store after each re-sync ({@link #onCalibrationsSynced}).  The tab's texts
+ * store from each of its changes ({@link #onCalibrationsSynced}).  The tab's texts
  * come from the subclass's message-key prefix ({@code <prefix>.calibration.*}).
  * An optional With-noise column (the FFT pane's) marks an entry whose
  * correction applies to every bin, noise floor included.
@@ -88,13 +89,16 @@ public abstract class AbstractCalibrationTabControl<P extends AbstractPane> exte
         /** Source of truth for path + Active + With-noise: an item of the
          *  calibration list. */
         CalibrationEntry         entry;
+        /** The row's entry as the store holds it - {@code null} while the row
+         *  holds no loaded calibration. */
+        CorrectionStore.Entry    storeEntry;
 
         private CalRow() {
         }
     }
 
     /** The store the pane's view divides by - written from
-     *  {@link #syncStoreFromRows} only, and shared with that view. */
+     *  {@link #storeChange} only, and shared with that view. */
     private final CorrectionStore correctionStore;
     /** The calibration items the rows show and follow. */
     private final CalibrationList calibrations;
@@ -127,11 +131,11 @@ public abstract class AbstractCalibrationTabControl<P extends AbstractPane> exte
         this.withNoiseColumn = withNoiseColumn;
     }
 
-    /** Called after every re-sync of the store from the rows.  The store is
-     *  written from here only and publishes nothing, so the subclass
+    /** Called after every change of the store, with exactly that change.  The
+     *  store is written from here only and publishes nothing, so the subclass
      *  re-derives what divides by it (the view's curves) and refreshes what
      *  shows it (the calibration tile). */
-    protected abstract void onCalibrationsSynced();
+    protected abstract void onCalibrationsSynced(CorrectionStore.Change change);
 
     /** The calibration tab's header tile: how many calibrations the store
      *  holds, {@code null} while it holds none. */
@@ -181,42 +185,64 @@ public abstract class AbstractCalibrationTabControl<P extends AbstractPane> exte
         }
     }
 
-    /** Starts following the calibration list and pushes the initially loaded
-     *  active rows into the store - the subclass calls it at the end of its
+    /** Starts following the calibration list and puts the initially loaded
+     *  rows into the store - the subclass calls it at the end of its
      *  construction, once every tab exists. */
     protected void followCalibrations() {
         Consumer<CalibrationList.Change> listListener = this::onCalibrationsChanged;
         calibrations.addListener(listListener);
         addDisposeListener(e -> calibrations.removeListener(listListener));
-        syncStoreFromRows();
+        for (int i = 0; i < calRows.size(); i++) {
+            syncRow(i);
+        }
     }
 
     /** The calibration list's listener: applies the change to the row it
-     *  names, in the same call, then re-syncs the store.  No row is disposed
-     *  but a removed or replaced one, so a row widget's own event - an Active
-     *  tick, Load, Clear, Add - may cause the change; Remove disposes only its
-     *  own row. */
+     *  names, in the same call, then brings that row's entry in the store in
+     *  line.  No row is disposed but a removed or replaced one, so a row
+     *  widget's own event - an Active tick, Load, Clear, Add - may cause the
+     *  change; Remove disposes only its own row. */
     private void onCalibrationsChanged(CalibrationList.Change change) {
         if (isDisposed()) return;
         int i = change.index();
         switch (change.kind()) {
-            case ADDED -> insertRow(i, change.entry());
-            case REMOVED -> removeRow(i);
+            case ADDED -> {
+                insertRow(i, change.entry());
+                syncRow(i);
+            }
+            case REMOVED -> {
+                dropStoreEntry(i);
+                removeRow(i);
+            }
             case REPLACED -> {
+                CorrectionStore.Entry before = calRows.get(i).storeEntry;
                 removeRow(i);
                 insertRow(i, change.entry());
+                calRows.get(i).storeEntry = before;
+                syncRow(i);
             }
             case CLEARED -> {
+                for (int r = calRows.size() - 1; r >= 0; r--) {
+                    dropStoreEntry(r);
+                }
                 for (CalRow r : calRows) r.composite.dispose();
                 calRows.clear();
                 // Row 0 is always present; its add arrives as a change of its own.
                 calibrations.add(new CalibrationEntry());
             }
-            case PATH -> showFile(calRows.get(i), false);
-            case FILE_SAVED -> showFile(calRows.get(i), true);
-            case ACTIVE, WITH_NOISE -> updateCalRowEnable(calRows.get(i));
+            case PATH -> {
+                showFile(calRows.get(i), false);
+                syncRow(i);
+            }
+            case FILE_SAVED -> {
+                showFile(calRows.get(i), true);
+                syncRow(i);
+            }
+            case ACTIVE, WITH_NOISE -> {
+                updateCalRowEnable(calRows.get(i));
+                syncRow(i);
+            }
         }
-        syncStoreFromRows();
     }
 
     /** Creates the row of {@code entry} at index {@code i} and loads the
@@ -397,11 +423,11 @@ public abstract class AbstractCalibrationTabControl<P extends AbstractPane> exte
         // The row takes the calibration just read, so the path change finds
         // the path loaded and reads nothing again.  Re-picking the row's own
         // file changes nothing in the list, yet the file on disk may be new:
-        // the store is re-synced here.
+        // the row's store entry is brought in line here.
         boolean samePath = picked.equals(r.entry.getPath());
         showLoaded(r, picked, cal);
         if (samePath) {
-            syncStoreFromRows();
+            syncRow(calRows.indexOf(r));
         } else {
             r.entry.setPath(picked);
         }
@@ -445,21 +471,42 @@ public abstract class AbstractCalibrationTabControl<P extends AbstractPane> exte
         }
     }
 
-    /** Pushes the current row state into the {@link CorrectionStore}.
-     *  Unloaded and inactive rows are skipped so the store holds only
-     *  entries the view divides by; then {@link #onCalibrationsSynced}. */
-    private void syncStoreFromRows() {
-        correctionStore.clearAll();
-        for (CalRow r : calRows) {
-            // Only push rows the user has explicitly activated; an
-            // unticked row is a "loaded but parked" calibration the
-            // user can re-engage with one click without re-browsing.
-            if (r.calibration != null && r.entry.getPath() != null && r.entry.active().get()) {
-                correctionStore.addEntry(r.calibration, r.entry.getPath(),
-                        withNoiseColumn && r.entry.withNoise().get());
-            }
+    /** Brings row {@code i}'s entry in the {@link CorrectionStore} in line
+     *  with the row - its loaded calibration, path, With-noise and Active
+     *  flags; none while it holds no file.  An unticked row stays in the store
+     *  as a "loaded but parked" calibration the user re-engages with one
+     *  click; the store divides by the active entries only. */
+    private void syncRow(int i) {
+        CalRow r = calRows.get(i);
+        CorrectionStore.Entry next = r.calibration != null && r.entry.getPath() != null
+                ? new CorrectionStore.Entry(r.calibration, r.entry.getPath(),
+                        withNoiseColumn && r.entry.withNoise().get(), r.entry.active().get())
+                : null;
+        storeChange(i, next);
+    }
+
+    /** Takes row {@code i}'s entry out of the store - the row is about to
+     *  go. */
+    private void dropStoreEntry(int i) {
+        storeChange(i, null);
+    }
+
+    /** Moves row {@code i}'s entry in the store to {@code next} and hands the
+     *  store's change, if there is one, to {@link #onCalibrationsSynced}. */
+    private void storeChange(int i, CorrectionStore.Entry next) {
+        CalRow r = calRows.get(i);
+        CorrectionStore.Change change = correctionStore.update(storePosition(i), r.storeEntry, next);
+        r.storeEntry = next;
+        if (change != null) onCalibrationsSynced(change);
+    }
+
+    /** Row {@code i}'s place among the rows holding a store entry. */
+    private int storePosition(int i) {
+        int position = 0;
+        for (int k = 0; k < i; k++) {
+            if (calRows.get(k).storeEntry != null) position++;
         }
-        onCalibrationsSynced();
+        return position;
     }
 
     /** The text of {@code key} under this control's message-key prefix. */

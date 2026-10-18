@@ -39,4 +39,37 @@ public record InverseCascade(double[] invRe, double[] invIm, LobeCorrection[] lo
     public boolean hasNoiseRows() {
         return invRe != null;
     }
+
+    /**
+     * The cascade that takes this one off again: every factor's complex
+     * reciprocal, {@code conj(v)/|v|^2}, per bin and per lobe, the lobes and
+     * their anchors kept.  Applied by {@link FreqRespCalHelper#applyInverseInPlace}
+     * to a spectrum this cascade corrected, with the lobes measured on that
+     * corrected spectrum, it gives the spectrum back: the stretch exponent of a
+     * lobe bin is the same before and after the correction.  A bin marked
+     * {@code (0, 0)} stays marked.
+     */
+    public InverseCascade reciprocal() {
+        double[] re = null;
+        double[] im = null;
+        if (invRe != null) {
+            re = new double[invRe.length];
+            im = new double[invIm.length];
+            for (int k = 0; k < invRe.length; k++) {
+                double magSq = invRe[k] * invRe[k] + invIm[k] * invIm[k];
+                if (!(magSq > 0.0)) continue;
+                re[k] =  invRe[k] / magSq;
+                im[k] = -invIm[k] / magSq;
+            }
+        }
+        LobeCorrection[] back = new LobeCorrection[lobes.length];
+        for (int t = 0; t < lobes.length; t++) {
+            LobeCorrection lc = lobes[t];
+            if (lc == null) continue;
+            double magSq = lc.invRe() * lc.invRe() + lc.invIm() * lc.invIm();
+            if (!(magSq > 0.0)) continue;
+            back[t] = new LobeCorrection(lc.lobe(), lc.invRe() / magSq, -lc.invIm() / magSq);
+        }
+        return new InverseCascade(re, im, back);
+    }
 }
