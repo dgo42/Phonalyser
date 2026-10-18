@@ -118,6 +118,15 @@ public final class CoherentAccumulator {
     private static final int    STATS_TONE_COLUMNS = 4;
     private static final int    STATS_LINE_COLUMNS = 6;
     private static final String STATS_FRAMES       = "frames";
+    /** Analysis cycles BEFORE a detected discontinuity whose contribution is
+     *  REMOVED from the accumulator when a gate fires.  The preceding cycle's
+     *  window shares nearly all samples with the detecting one, so the event
+     *  usually sits at its window-taper EDGE - attenuated below the gate
+     *  thresholds but still poisoning the average.  The last this-many
+     *  accepted cycles are kept subtractable in {@link #prevCycleRe}; the
+     *  rejected cycle itself never enters the accumulator, so the total loss
+     *  per event is this constant plus the detecting cycle. */
+    private static final int DISCONTINUITY_DROP_CYCLES = 1;
 
     /**
      * The turns one frame is turned back by, radians, and the advance they
@@ -188,6 +197,15 @@ public final class CoherentAccumulator {
     /** True from {@link #restart} until {@link #reset}. */
     @Getter
     private boolean  started;
+    /** Ring of the last {@link #DISCONTINUITY_DROP_CYCLES} accepted cycles'
+     *  contributions EXACTLY as added (rotation and weight applied), so a
+     *  gate firing can subtract them back out.  Coherent: re/im; incoherent:
+     *  power.  Sized like the accumulator at restart. */
+    private double[][] prevCycleRe, prevCycleIm, prevCyclePow;
+    private double[]   prevCycleWeight;
+    /** Slots of the ring currently valid (cleared by a subtraction, a restart
+     *  and a reset), and the next slot to write. */
+    private int prevCycleCount, prevCyclePos;
     /** The coherent family, sorted by position: each member's fractional
      *  bin, its (a, b) turn coefficients, which pilot it is (0 for none, 1 or
      *  2), the whole bins of its hump, and the phasor derived for the frame
@@ -269,6 +287,12 @@ public final class CoherentAccumulator {
         sumRe  = coherent ? new double[n] : null;
         sumIm  = coherent ? new double[n] : null;
         sumPow = coherent ? null : new double[n];
+        prevCycleRe     = coherent ? new double[DISCONTINUITY_DROP_CYCLES][n] : null;
+        prevCycleIm     = coherent ? new double[DISCONTINUITY_DROP_CYCLES][n] : null;
+        prevCyclePow    = coherent ? null : new double[DISCONTINUITY_DROP_CYCLES][n];
+        prevCycleWeight = new double[DISCONTINUITY_DROP_CYCLES];
+        prevCycleCount  = 0;
+        prevCyclePos    = 0;
         frames  = 0.0;
         started = true;
         kappaPinned     = kappa;
@@ -314,6 +338,7 @@ public final class CoherentAccumulator {
     /** Drops the collection: no sums, no geometry, nothing pinned. */
     public void reset() {
         sumRe = sumIm = sumPow = null;
+        prevCycleCount = 0;
         frames       = 0.0;
         started      = false;
         memberCount  = 0;
@@ -449,21 +474,21 @@ public final class CoherentAccumulator {
     /**
      * Adds one frame to the coherent average, turned back to the reference
      * frame as the class comment states, and appends the frame's row to the
-     * statistics.
+     * statistics.  Every bin's contribution as added - weight and rotation
+     * applied - goes into the subtractable ring
+     * ({@link #subtractPreviousCycles}).
      *
      * @param re        the frame's real parts, bins 0 .. fftSize/2
      * @param im        the frame's imaginary parts
      * @param weight    the frames this frame counts for
      * @param turns     the frame's advance and the turns it is turned back by
-     * @param contribRe where not null, receives every bin's contribution as
-     *                  added - weight and rotation applied - so that a caller
-     *                  can take this frame out again with {@link #remove}
-     * @param contribIm the imaginary parts of the same
      */
-    public void add(double[] re, double[] im, double weight, FrameTurns turns,
-                    double[] contribRe, double[] contribIm) {
+    public void add(double[] re, double[] im, double weight, FrameTurns turns) {
         final int n = halfSize + 1;
         final double[] accRe = sumRe, accIm = sumIm;
+        final int prevSlot = claimPrevCycleSlot(weight);
+        final double[] contribRe = prevCycleRe[prevSlot];
+        final double[] contribIm = prevCycleIm[prevSlot];
         final double delta = turns.delta();
         if (kappa <= 0.0 || memberCount == 0) {
             // No pinned fundamental: nothing to align - the frame is added as
@@ -550,16 +575,17 @@ public final class CoherentAccumulator {
      * Adds one frame to the incoherent average: each bin's power, no rotation.
      * The frame is a raw transform, or the analyser's incoherent result with
      * the magnitude in {@code re} and {@code im} zero - the power is the same.
+     * Every bin's contribution as added goes into the subtractable ring
+     * ({@link #subtractPreviousCycles}).
      *
      * @param re         the frame's real parts, bins 0 .. fftSize/2
      * @param im         the frame's imaginary parts
      * @param weight     the frames this frame counts for
-     * @param contribPow where not null, receives every bin's contribution as
-     *                   added, for {@link #removePower}
      */
-    public void addPower(double[] re, double[] im, double weight, double[] contribPow) {
+    public void addPower(double[] re, double[] im, double weight) {
         final int n = halfSize + 1;
         final double[] acc = sumPow;
+        final double[] contribPow = prevCyclePow[claimPrevCycleSlot(weight)];
         for (int k = 0; k < n; k++) {
             double c = (re[k] * re[k] + im[k] * im[k]) * weight;
             acc[k] += c;
@@ -580,11 +606,64 @@ public final class CoherentAccumulator {
             for (int k = 0; k < sumPow.length; k++) sumPow[k] *= factor;
         }
         frames *= factor;
+        // The subtractable ring holds contributions AS ADDED - once the
+        // sum is scaled, they must scale with it or a later subtraction
+        // over-removes.
+        final int n = halfSize + 1;
+        for (int s = 0; s < prevCycleCount; s++) {
+            int slot = Math.floorMod(prevCyclePos - 1 - s, DISCONTINUITY_DROP_CYCLES);
+            if (coherent && prevCycleRe != null) {
+                double[] pr = prevCycleRe[slot], pi = prevCycleIm[slot];
+                for (int k = 0; k < n; k++) { pr[k] *= factor; pi[k] *= factor; }
+            } else if (prevCyclePow != null) {
+                double[] pp = prevCyclePow[slot];
+                for (int k = 0; k < n; k++) pp[k] *= factor;
+            }
+            // The held weight as well: the frames held were scaled with the
+            // sums, so a subtraction takes off the weight the slot holds now.
+            prevCycleWeight[slot] *= factor;
+        }
+    }
+
+    /** Claim this cycle's slot in the subtractable ring; the accumulator
+     *  fills it with the contribution exactly as accumulated. */
+    private int claimPrevCycleSlot(double weight) {
+        final int prevSlot = prevCyclePos;
+        prevCyclePos = (prevCyclePos + 1) % DISCONTINUITY_DROP_CYCLES;
+        if (prevCycleCount < DISCONTINUITY_DROP_CYCLES) prevCycleCount++;
+        prevCycleWeight[prevSlot] = weight;
+        return prevSlot;
+    }
+
+    /** Removes the subtractable ring's held contributions - the last accepted
+     *  cycle(s) - from the accumulator.  The retroactive half of discontinuity
+     *  rejection: the window(s) BEFORE the detecting one shared nearly all of
+     *  its samples, with the event attenuated at their taper edge below the
+     *  gate thresholds, so their contribution is poisoned although no gate
+     *  fired on them. */
+    public void subtractPreviousCycles() {
+        if (prevCycleCount <= 0 || !started) return;
+        double removedFrames = 0.0;
+        for (int s = 0; s < prevCycleCount; s++) {
+            int slot = Math.floorMod(prevCyclePos - 1 - s, DISCONTINUITY_DROP_CYCLES);
+            if (coherent && prevCycleRe != null) {
+                remove(prevCycleRe[slot], prevCycleIm[slot], prevCycleWeight[slot]);
+            } else if (!coherent && prevCyclePow != null) {
+                removePower(prevCyclePow[slot], prevCycleWeight[slot]);
+            }
+            removedFrames += prevCycleWeight[slot];
+        }
+        if (log.isInfoEnabled()) {
+            log.info("Discontinuity: the previous {} analysis cycle(s) ({} frames) removed from the "
+                    + "accumulator - the event sat at their window edge, under the gates",
+                    prevCycleCount, Math.round(removedFrames));
+        }
+        prevCycleCount = 0;
     }
 
     /** Takes a frame out again: its contribution exactly as {@link #add}
-     *  handed it back, and its weight. */
-    public void remove(double[] contribRe, double[] contribIm, double weight) {
+     *  added it, and its weight. */
+    private void remove(double[] contribRe, double[] contribIm, double weight) {
         for (int k = 0; k < sumRe.length; k++) {
             sumRe[k] -= contribRe[k];
             sumIm[k] -= contribIm[k];
@@ -593,7 +672,7 @@ public final class CoherentAccumulator {
     }
 
     /** Takes a frame out of the incoherent average again. */
-    public void removePower(double[] contribPow, double weight) {
+    private void removePower(double[] contribPow, double weight) {
         for (int k = 0; k < sumPow.length; k++) sumPow[k] -= contribPow[k];
         frames = Math.max(0.0, frames - weight);
     }

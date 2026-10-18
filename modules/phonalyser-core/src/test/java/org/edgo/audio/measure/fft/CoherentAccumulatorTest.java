@@ -18,6 +18,7 @@
 
 package org.edgo.audio.measure.fft;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -80,7 +81,7 @@ class CoherentAccumulatorTest {
     @Test
     void aHumpTurnsByItsLinesAngleAndTheRestInProportionToTheBin() {
         CoherentAccumulator acc = singleTone();
-        acc.add(ones(), zeros(), 1.0, FrameTurns.of(DELTA), null, null);
+        acc.add(ones(), zeros(), 1.0, FrameTurns.of(DELTA));
         double phi1 = acc.fundamentalAngle(DELTA);
         int h2 = (int) Math.round(2 * KAPPA);
         // every bin of H2's hump turns by 2 x Phi1, the centre included
@@ -102,7 +103,7 @@ class CoherentAccumulatorTest {
         CoherentAccumulator acc = singleTone();
         double phiF = 0.4;
         acc.add(ones(), zeros(), 1.0,
-                new FrameTurns(DELTA, Double.NaN, phiF, 0.0, Double.NaN, Double.NaN), null, null);
+                new FrameTurns(DELTA, Double.NaN, phiF, 0.0, Double.NaN, Double.NaN));
         double phi1 = acc.fundamentalAngle(DELTA);
         int k0 = (int) Math.round(KAPPA);
         for (int m = -LOBE_HALF; m <= LOBE_HALF; m++) {
@@ -116,7 +117,7 @@ class CoherentAccumulatorTest {
     void aOneBinHumpIsTheRectangularWindowsCase() {
         CoherentAccumulator acc = new CoherentAccumulator();
         acc.restart(FFT_SIZE, true, KAPPA, Double.NaN, null, null, 1, NO_PILOT, NO_PILOT);
-        acc.add(ones(), zeros(), 1.0, FrameTurns.of(DELTA), null, null);
+        acc.add(ones(), zeros(), 1.0, FrameTurns.of(DELTA));
         double phi1 = acc.fundamentalAngle(DELTA);
         int h3 = (int) Math.round(3 * KAPPA);
         assertAngle(3.0 * phi1, angleAt(acc, h3 - 1), "H3's hump, one bin below");
@@ -132,7 +133,7 @@ class CoherentAccumulatorTest {
         acc.restart(FFT_SIZE, true, KAPPA, kappa2, new int[] { 0, 1, -1 }, new int[] { 1, 1, 1 },
                 LOBE_HALF, NO_PILOT, NO_PILOT);
         acc.add(ones(), zeros(), 1.0,
-                new FrameTurns(DELTA, phi2, 0.0, phiF2, Double.NaN, Double.NaN), null, null);
+                new FrameTurns(DELTA, phi2, 0.0, phiF2, Double.NaN, Double.NaN));
         double phi1 = acc.fundamentalAngle(DELTA);
         assertAngle(phi2 - phiF2, angleAt(acc, (int) kappa2), "F2's hump: its turn less its excess");
         assertAngle(phi1 + phi2, angleAt(acc, (int) (KAPPA + kappa2)), "the sum product F1 + F2");
@@ -146,7 +147,7 @@ class CoherentAccumulatorTest {
         CoherentAccumulator acc = new CoherentAccumulator();
         acc.restart(FFT_SIZE, true, KAPPA, kappa2, new int[] { 0 }, new int[] { 1 },
                 LOBE_HALF, NO_PILOT, NO_PILOT);
-        acc.add(ones(), zeros(), 1.0, FrameTurns.of(DELTA), null, null);
+        acc.add(ones(), zeros(), 1.0, FrameTurns.of(DELTA));
         double phi2 = Math.IEEEremainder(-2.0 * Math.PI * kappa2 * DELTA / FFT_SIZE, 2.0 * Math.PI);
         for (int k = 258; k <= 263; k++) {
             assertAngle(phi2, angleAt(acc, k), "F2's hump turned by F2's counted turn, bin " + k);
@@ -160,7 +161,7 @@ class CoherentAccumulatorTest {
         acc.restart(FFT_SIZE, true, KAPPA, Double.NaN, null, null, LOBE_HALF, pilot, NO_PILOT);
         double read = 0.7;
         acc.add(ones(), zeros(), 1.0,
-                new FrameTurns(DELTA, Double.NaN, 0.0, 0.0, read, Double.NaN), null, null);
+                new FrameTurns(DELTA, Double.NaN, 0.0, 0.0, read, Double.NaN));
         for (int m = -LOBE_HALF; m <= LOBE_HALF; m++) {
             assertAngle(read, angleAt(acc, pilot + m), "the pilot's hump by its reading, bin " + (pilot + m));
         }
@@ -169,7 +170,7 @@ class CoherentAccumulatorTest {
 
         CoherentAccumulator counted = new CoherentAccumulator();
         counted.restart(FFT_SIZE, true, KAPPA, Double.NaN, null, null, LOBE_HALF, pilot, NO_PILOT);
-        counted.add(ones(), zeros(), 1.0, FrameTurns.of(DELTA), null, null);
+        counted.add(ones(), zeros(), 1.0, FrameTurns.of(DELTA));
         for (int m = -LOBE_HALF; m <= LOBE_HALF; m++) {
             assertAngle(proportional(pilot), angleAt(counted, pilot + m),
                     "no reading: the whole hump by the pilot's own bin, bin " + (pilot + m));
@@ -180,19 +181,18 @@ class CoherentAccumulatorTest {
     void withoutAPinnedFundamentalTheFrameIsAddedAsItStands() {
         CoherentAccumulator acc = new CoherentAccumulator();
         acc.restart(FFT_SIZE, true, 0.0, Double.NaN, null, null, LOBE_HALF, NO_PILOT, NO_PILOT);
-        acc.add(ones(), zeros(), 2.0, FrameTurns.of(DELTA), null, null);
+        acc.add(ones(), zeros(), 2.0, FrameTurns.of(DELTA));
         assertEquals(2.0, acc.getSumRe()[777], 0.0, "weighted, unrotated");
         assertEquals(0.0, acc.getSumIm()[777], 0.0, "no rotation");
         assertEquals(2.0, acc.getFrames(), 0.0, "two frames held");
     }
 
     @Test
-    void aContributionHandedBackTakesTheFrameOutExactly() {
+    void subtractingThePreviousCycleTakesItsFrameOutExactly() {
         CoherentAccumulator acc = singleTone();
-        double[] cRe = zeros(), cIm = zeros();
-        acc.add(ones(), zeros(), 1.0, FrameTurns.of(0.0), null, null);
-        acc.add(ones(), zeros(), 1.0, FrameTurns.of(DELTA), cRe, cIm);
-        acc.remove(cRe, cIm, 1.0);
+        acc.add(ones(), zeros(), 1.0, FrameTurns.of(0.0));
+        acc.add(ones(), zeros(), 1.0, FrameTurns.of(DELTA));
+        acc.subtractPreviousCycles();
         for (int k = 0; k <= FFT_SIZE / 2; k += 97) {
             assertEquals(1.0, acc.getSumRe()[k], TOL_RAD, "the reference frame alone remains, bin " + k);
             assertEquals(0.0, acc.getSumIm()[k], TOL_RAD, "bin " + k);
@@ -201,10 +201,61 @@ class CoherentAccumulatorTest {
     }
 
     @Test
+    void subtractingThePreviousCycleTakesItsPowerOutExactly() {
+        CoherentAccumulator acc = new CoherentAccumulator();
+        acc.restart(FFT_SIZE, false, KAPPA, Double.NaN, null, null, LOBE_HALF, NO_PILOT, NO_PILOT);
+        double[] mag = ones();
+        mag[10] = 3.0;
+        acc.addPower(ones(), zeros(), 1.0);
+        acc.addPower(mag, zeros(), 1.0);
+        acc.subtractPreviousCycles();
+        assertEquals(1.0, acc.getSumPow()[10], 0.0, "the first frame's power alone remains");
+        assertEquals(1.0, acc.getFrames(), 0.0, "one frame held");
+    }
+
+    @Test
+    void aScaledPreviousCycleComesOutWithItsScaledWeight() {
+        CoherentAccumulator acc = singleTone();
+        acc.add(ones(), zeros(), 1.0, FrameTurns.of(0.0));
+        acc.add(ones(), zeros(), 1.0, FrameTurns.of(DELTA));
+        acc.scale(0.5);
+        acc.subtractPreviousCycles();
+        for (int k = 0; k <= FFT_SIZE / 2; k += 97) {
+            assertEquals(0.5, acc.getSumRe()[k], TOL_RAD, "the scaled reference frame alone remains, bin " + k);
+            assertEquals(0.0, acc.getSumIm()[k], TOL_RAD, "bin " + k);
+        }
+        assertEquals(0.5, acc.getFrames(), TOL_RAD,
+                "the scaled frames less the scaled weight of the frame taken out");
+    }
+
+    @Test
+    void aSubtractionWithNothingHeldChangesNothing() {
+        CoherentAccumulator acc = singleTone();
+        acc.add(ones(), zeros(), 1.0, FrameTurns.of(0.0));
+        acc.add(ones(), zeros(), 1.0, FrameTurns.of(DELTA));
+        acc.subtractPreviousCycles();
+        double[] held = acc.getSumRe().clone();
+        acc.subtractPreviousCycles();
+        assertArrayEquals(held, acc.getSumRe(), "the first subtraction emptied the ring");
+        assertEquals(1.0, acc.getFrames(), 0.0, "one frame held");
+
+        acc.add(ones(), zeros(), 1.0, FrameTurns.of(DELTA));
+        acc.restart(FFT_SIZE, true, KAPPA, Double.NaN, null, null, LOBE_HALF, NO_PILOT, NO_PILOT);
+        acc.subtractPreviousCycles();
+        assertArrayEquals(zeros(), acc.getSumRe(), "a restart empties the ring with the sums");
+        assertEquals(0.0, acc.getFrames(), 0.0, "no frame held");
+
+        acc.add(ones(), zeros(), 1.0, FrameTurns.of(0.0));
+        acc.reset();
+        acc.subtractPreviousCycles();
+        assertEquals(0.0, acc.getFrames(), 0.0, "a reset empties the ring with the sums");
+    }
+
+    @Test
     void scalingKeepsTheMeanAndShrinksTheFramesHeld() {
         CoherentAccumulator acc = singleTone();
-        acc.add(ones(), zeros(), 1.0, FrameTurns.of(0.0), null, null);
-        acc.add(ones(), zeros(), 1.0, FrameTurns.of(0.0), null, null);
+        acc.add(ones(), zeros(), 1.0, FrameTurns.of(0.0));
+        acc.add(ones(), zeros(), 1.0, FrameTurns.of(0.0));
         acc.scale(0.5);
         assertEquals(1.0, acc.getFrames(), 0.0, "frames scaled with the sums");
         assertEquals(1.0, acc.getSumRe()[5] / acc.getFrames(), TOL_RAD, "the mean is unchanged");
@@ -232,13 +283,13 @@ class CoherentAccumulatorTest {
         acc.restart(FFT_SIZE, true, kappaTrue + 0.2, Double.NaN, null, null, LOBE_HALF, NO_PILOT, NO_PILOT);
         for (int f = 0; f < CoherentAccumulator.KAPPA_MEAS_FRAMES - 1; f++) {
             double[][] fr = toneFrame(kappaTrue, f * DELTA);
-            acc.add(fr[0], fr[1], 1.0, FrameTurns.of(f * DELTA), null, null);
+            acc.add(fr[0], fr[1], 1.0, FrameTurns.of(f * DELTA));
             assertEquals(kappaTrue + 0.2, acc.getKappa(), 0.0, "kappa stands while measuring, frame " + f);
             assertEquals(false, acc.isKappaRefined(), "still measuring, frame " + f);
         }
         int last = CoherentAccumulator.KAPPA_MEAS_FRAMES - 1;
         double[][] fr = toneFrame(kappaTrue, last * DELTA);
-        acc.add(fr[0], fr[1], 1.0, FrameTurns.of(last * DELTA), null, null);
+        acc.add(fr[0], fr[1], 1.0, FrameTurns.of(last * DELTA));
         assertEquals(kappaTrue, acc.getKappa(), 1e-9, "corrected onto the tone when the measurement closes");
         assertEquals(true, acc.isKappaRefined(), "the measurement closed");
     }
@@ -252,7 +303,7 @@ class CoherentAccumulatorTest {
         CoherentAccumulator acc = new CoherentAccumulator();
         acc.restart(FFT_SIZE, true, KAPPA, Double.NaN, null, null, LOBE_HALF, NO_PILOT, NO_PILOT);
         for (int f = 0; f < CoherentAccumulator.KAPPA_MEAS_FRAMES; f++) {
-            acc.add(ones(), zeros(), 1.0, FrameTurns.of(f), null, null);
+            acc.add(ones(), zeros(), 1.0, FrameTurns.of(f));
         }
         assertEquals(KAPPA, acc.getKappa(), 0.0, "kappa stands");
         assertEquals(false, acc.isKappaRefined(), "nothing closed");
@@ -264,8 +315,8 @@ class CoherentAccumulatorTest {
         acc.restart(FFT_SIZE, false, KAPPA, Double.NaN, null, null, LOBE_HALF, NO_PILOT, NO_PILOT);
         double[] mag = ones();
         mag[10] = 3.0;
-        acc.addPower(mag, zeros(), 1.0, null);
-        acc.addPower(mag, zeros(), 1.0, null);
+        acc.addPower(mag, zeros(), 1.0);
+        acc.addPower(mag, zeros(), 1.0);
         assertEquals(18.0, acc.getSumPow()[10], 0.0, "twice the squared magnitude");
         assertEquals(2.0, acc.getFrames(), 0.0, "two frames held");
         assertEquals(0, acc.statisticsRowCount(), "no statistics row: a power average carries no phase");
@@ -305,7 +356,7 @@ class CoherentAccumulatorTest {
         // beyond the store's first sizing of 64 rows
         int rows = 100;
         for (int f = 0; f < rows; f++) {
-            acc.add(ones(), zeros(), 1.0, FrameTurns.of(DELTA), null, null);
+            acc.add(ones(), zeros(), 1.0, FrameTurns.of(DELTA));
         }
         assertEquals(rows, acc.statisticsRowCount(), "one row per frame added");
         for (int row = 0; row < rows; row++) {
@@ -313,7 +364,7 @@ class CoherentAccumulatorTest {
         }
         acc.restart(FFT_SIZE, true, KAPPA, Double.NaN, null, null, LOBE_HALF, NO_PILOT, NO_PILOT);
         assertEquals(0, acc.statisticsRowCount(), "dropped by the restart");
-        acc.add(ones(), zeros(), 1.0, FrameTurns.of(0.0), null, null);
+        acc.add(ones(), zeros(), 1.0, FrameTurns.of(0.0));
         assertEquals(1, acc.statisticsRowCount(), "the new collection's first row");
         acc.reset();
         assertEquals(0, acc.statisticsRowCount(), "dropped by the reset");
@@ -347,12 +398,12 @@ class CoherentAccumulatorTest {
     @Test
     void theStatisticsHoldTheValuesTheAddSaw() {
         CoherentAccumulator acc = singleTone();
-        acc.add(ones(), zeros(), 1.0, FrameTurns.of(0.0), null, null);
+        acc.add(ones(), zeros(), 1.0, FrameTurns.of(0.0));
         double[] re = ones();
         double[] im = zeros();
         re[H2_BIN] = 3.0;
         im[H2_BIN] = 4.0;
-        acc.add(re, im, 1.0, FrameTurns.of(DELTA), null, null);
+        acc.add(re, im, 1.0, FrameTurns.of(DELTA));
         int    row    = acc.statisticsRowCount() - 1;
         double frames = acc.getFrames();
         double sRe    = acc.getSumRe()[H2_BIN];
@@ -382,7 +433,7 @@ class CoherentAccumulatorTest {
         double[][] fr = null;
         for (int f = 0; f < 5; f++) {
             fr = noiseFrame(random);
-            acc.add(fr[0], fr[1], 1.0, FrameTurns.of(f * DELTA), null, null);
+            acc.add(fr[0], fr[1], 1.0, FrameTurns.of(f * DELTA));
         }
         ToneLobeLift   lobe   = new ToneLobeLift();
         int            half   = FFT_SIZE / 2;
@@ -399,7 +450,7 @@ class CoherentAccumulatorTest {
                 "the band top over the average's bins beside H2");
 
         acc.restart(FFT_SIZE, true, KAPPA, Double.NaN, null, null, LOBE_HALF, NO_PILOT, NO_PILOT);
-        acc.add(ones(), zeros(), 1.0, FrameTurns.of(0.0), null, null);
+        acc.add(ones(), zeros(), 1.0, FrameTurns.of(0.0));
         assertTrue(Double.isNaN(acc.statistic(0, column(acc, "(2,0) raw band top"))),
                 "a restart drops the geometry");
     }
@@ -408,7 +459,7 @@ class CoherentAccumulatorTest {
     void aFrameWithoutAPinnedFundamentalRecordsTheFrameCountAlone() {
         CoherentAccumulator acc = new CoherentAccumulator();
         acc.restart(FFT_SIZE, true, 0.0, Double.NaN, null, null, LOBE_HALF, NO_PILOT, NO_PILOT);
-        acc.add(ones(), zeros(), 2.0, FrameTurns.of(DELTA), null, null);
+        acc.add(ones(), zeros(), 2.0, FrameTurns.of(DELTA));
         assertEquals(List.of("frames"), acc.statisticsColumns(), "no line to follow");
         assertEquals(1, acc.statisticsRowCount(), "one row");
         assertEquals(2.0, acc.statistic(0, 0), 0.0, "the frame count");

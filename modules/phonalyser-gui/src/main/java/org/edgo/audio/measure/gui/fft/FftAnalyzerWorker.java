@@ -384,24 +384,6 @@ public final class FftAnalyzerWorker {
      *  block. */
     private static final boolean USE_TIME_DISCONTINUITY = true;
     private final TimeDiscontinuityDetector timeDetector = new TimeDiscontinuityDetector();
-    /** Analysis cycles BEFORE a detected discontinuity whose contribution is
-     *  REMOVED from the accumulator when a gate fires.  The preceding cycle's
-     *  window shares nearly all samples with the detecting one, so the event
-     *  usually sits at its window-taper EDGE - attenuated below the gate
-     *  thresholds but still poisoning the average.  The last this-many
-     *  accepted cycles are kept subtractable in {@link #prevCycleRe}; the
-     *  rejected cycle itself never enters the accumulator, so the total loss
-     *  per event is this constant plus the detecting cycle. */
-    private static final int DISCONTINUITY_DROP_CYCLES = 1;
-    /** Ring of the last {@link #DISCONTINUITY_DROP_CYCLES} accepted cycles'
-     *  contributions EXACTLY as added (rotation and weight applied), so a
-     *  gate firing can subtract them back out.  Coherent: re/im; incoherent:
-     *  power.  Sized like the accumulator at restart. */
-    private double[][] prevCycleRe, prevCycleIm, prevCyclePow;
-    private int[]      prevCycleWeight;
-    /** Slots of the ring currently valid (cleared by a subtraction, a restart
-     *  and a reset), and the next slot to write. */
-    private int prevCycleCount, prevCyclePos;
     /** Debug overlay: the last gate-REJECTED block's pre-average spectrum (dBFs),
      *  held so {@code FftView} can show what tripped a gate (rejected blocks never
      *  otherwise reach the display). */
@@ -856,7 +838,6 @@ public final class FftAnalyzerWorker {
         spectralDetector.reset();   // the median reference restarts with the average
         lastRejectBlockDbFs = null;
         lastRejectGates     = null;
-        prevCycleCount = 0;
         cycleStats.close();         // the diagnostic record ends with the run it describes
         // The pilot's reading goes with the accumulator: each tone's excess is
         // its drift since the average's first frame, so the zeros, the
@@ -982,7 +963,6 @@ public final class FftAnalyzerWorker {
                                                 int targetN) {
         int fftSize  = r.fftSize;
         int halfSize = fftSize / 2;
-        int N        = halfSize + 1;
         double kFrac = r.freqResolution > 0
                 ? r.fundamentalHzRefined / r.freqResolution
                 : 0.0;
@@ -1002,12 +982,6 @@ public final class FftAnalyzerWorker {
             // and the noise bandwidth the collection is pinned to.
             accumulator.bandGeometry(r.freqResolution, r.windowNenbwBins);
             accumIntFundBinRounded = Math.max(1, (int) Math.round(kFrac));
-            prevCycleRe     = coherent ? new double[DISCONTINUITY_DROP_CYCLES][N] : null;
-            prevCycleIm     = coherent ? new double[DISCONTINUITY_DROP_CYCLES][N] : null;
-            prevCyclePow    = coherent ? null : new double[DISCONTINUITY_DROP_CYCLES][N];
-            prevCycleWeight = new int[DISCONTINUITY_DROP_CYCLES];
-            prevCycleCount  = 0;
-            prevCyclePos    = 0;
             accumRefSampleStart    = samplesAbsStart;
             // The aligning mode's reading on the analysis cycle that becomes the
             // reference - the tones' reference phases: every later cycle's
@@ -1089,26 +1063,7 @@ public final class FftAnalyzerWorker {
             int    keep  = Math.max(0, targetN - weight);
             double scale = held > 0.0 ? keep / held : 0.0;
             accumulator.scale(scale);
-            // The subtractable ring holds contributions AS ADDED - once the
-            // sum is scaled, they must scale with it or a later subtraction
-            // over-removes.
-            for (int s = 0; s < prevCycleCount; s++) {
-                int slot = Math.floorMod(prevCyclePos - 1 - s, DISCONTINUITY_DROP_CYCLES);
-                if (coherent && prevCycleRe != null) {
-                    double[] pr = prevCycleRe[slot], pi = prevCycleIm[slot];
-                    for (int k = 0; k < N; k++) { pr[k] *= scale; pi[k] *= scale; }
-                } else if (prevCyclePow != null) {
-                    double[] pp = prevCyclePow[slot];
-                    for (int k = 0; k < N; k++) pp[k] *= scale;
-                }
-            }
         }
-        // Claim this cycle's slot in the subtractable ring; the accumulator
-        // fills it with the contribution exactly as accumulated.
-        final int prevSlot = prevCyclePos;
-        prevCyclePos = (prevCyclePos + 1) % DISCONTINUITY_DROP_CYCLES;
-        if (prevCycleCount < DISCONTINUITY_DROP_CYCLES) prevCycleCount++;
-        prevCycleWeight[prevSlot] = weight;
         if (coherent) {
             int k0 = pinnedFundBin(halfSize);
             if (k0 > 0 && accumulator.isKappaRefined() && !measuredGeometry) {
@@ -1171,8 +1126,7 @@ public final class FftAnalyzerWorker {
             accumulator.add(r.re, r.im, weight,
                     new FrameTurns(delta, phi2, phiF, phiF2,
                             pilotTurn(pilotRawPhase1, pilotRawRef1),
-                            pilotTurn(pilotRawPhase2, pilotRawRef2)),
-                    prevCycleRe[prevSlot], prevCycleIm[prevSlot]);
+                            pilotTurn(pilotRawPhase2, pilotRawRef2)));
             // A re-sync during the κ measurement is absorbed by the
             // measurement's own re-anchor; the one-shot realign the loop would
             // otherwise open with is dropped when the measurement closes, so
@@ -1222,7 +1176,7 @@ public final class FftAnalyzerWorker {
         } else {
             // The incoherent result holds the frame's magnitude in re and 0
             // in im; the accumulator sums its power either way.
-            accumulator.addPower(r.re, r.im, weight, prevCyclePow[prevSlot]);
+            accumulator.addPower(r.re, r.im, weight);
         }
         return true;
     }
@@ -1256,32 +1210,6 @@ public final class FftAnalyzerWorker {
                 * Math.IEEEremainder(counted * kappa, fftSize) / fftSize;
         double missingTurn = Math.IEEEremainder(turnRad - countedTurn, 2.0 * Math.PI);
         return counted + missingTurn * fftSize / (2.0 * Math.PI * kappa);
-    }
-
-    /** Removes the subtractable ring's held contributions - the last accepted
-     *  cycle(s) - from the accumulator.  The retroactive half of discontinuity
-     *  rejection: the window(s) BEFORE the detecting one shared nearly all of
-     *  its samples, with the event attenuated at their taper edge below the
-     *  gate thresholds, so their contribution is poisoned although no gate
-     *  fired on them. */
-    private void subtractPreviousCycles() {
-        if (prevCycleCount <= 0 || !accumulator.isStarted()) return;
-        int removedFrames = 0;
-        for (int s = 0; s < prevCycleCount; s++) {
-            int slot = Math.floorMod(prevCyclePos - 1 - s, DISCONTINUITY_DROP_CYCLES);
-            if (accumulator.isCoherent() && prevCycleRe != null) {
-                accumulator.remove(prevCycleRe[slot], prevCycleIm[slot], prevCycleWeight[slot]);
-            } else if (!accumulator.isCoherent() && prevCyclePow != null) {
-                accumulator.removePower(prevCyclePow[slot], prevCycleWeight[slot]);
-            }
-            removedFrames += prevCycleWeight[slot];
-        }
-        if (log.isInfoEnabled()) {
-            log.info("Discontinuity: the previous {} analysis cycle(s) ({} frames) removed from the "
-                    + "accumulator - the event sat at their window edge, under the gates",
-                    prevCycleCount, removedFrames);
-        }
-        prevCycleCount = 0;
     }
 
     /** Highest harmonic the phase trace reports.  The ladder H2 to H9 is the
@@ -3707,7 +3635,7 @@ public final class FftAnalyzerWorker {
                 if (log.isInfoEnabled()) {
                     log.info("Time-domain discontinuity in the analysis cycle's window - re-sync");
                 }
-                subtractPreviousCycles();
+                accumulator.subtractPreviousCycles();
                 onSignalDiscontinuity(rdr);
                 resultPool.release(r);
                 return IDLE_CYCLE_MS;
@@ -3723,7 +3651,7 @@ public final class FftAnalyzerWorker {
                     lastRejectBlockDbFs = dbgBlock;
                     lastRejectGates     = spectralDetector.gates();
                 }
-                subtractPreviousCycles();
+                accumulator.subtractPreviousCycles();
                 onSignalDiscontinuity(rdr);
                 resultPool.release(r);
                 return IDLE_CYCLE_MS;
@@ -3874,8 +3802,10 @@ public final class FftAnalyzerWorker {
 
         // Hand off to the UI.  No copy needed: analyze() returns a FRESH
         // FftResult each cycle (the worker never mutates a handed-off {@code r}),
-        // and the view deep-copies on receipt.  publishResult coalesces, so a
-        // slow repaint can't pile spectra up on the asyncExec queue.
+        // and the view deep-copies on receipt and runs its post-average
+        // pipeline on that copy only - the handed-off result is read-only for
+        // every reader.  publishResult coalesces, so a slow repaint can't pile
+        // spectra up on the asyncExec queue.
         if (log.isWarnEnabled() && DebugSwitches.SHOW_FFT_ANALYZE_TIME) {
             log.warn("1. FFT analyze took {} ms",
                     String.format("%.2f", (System.nanoTime() - startAnalyze) / 1_000_000.0));
@@ -3988,7 +3918,9 @@ public final class FftAnalyzerWorker {
      * the analysis the way stop-after-N stops it
      * ({@link #pauseAndAnnounceAutoStop}).
      *
-     * <p>The view finalizes the same object in place on the display's thread.
+     * <p>The view reads the same object on the display's thread and runs its
+     * post-average pipeline on its own copy only, so the engine reads the
+     * result exactly as this worker produced it.
      * The engine reads, directly and through the correction sets'
      * measurements: the frame count, the channel, the bin
      * width, the refined tones, the captured fundamental and peak phasors
@@ -4002,13 +3934,7 @@ public final class FftAnalyzerWorker {
      * ({@link FftResult#imdProductA} / {@link FftResult#imdProductB}), and
      * {@link FftResult#amplitudeDbFs} with {@link FftResult#freqResolution}
      * and {@link FftResult#windowNenbwBins} for the lines' clearances.  The
-     * view rewrites four of them in place: the harmonic bins, which its
-     * statistics recompute rewrites with the value they hold (the nearest bin
-     * to the same harmonic frequency); {@link FftResult#harmonicDbFs}, which
-     * the same recompute rewrites; {@link FftResult#preCorrectionPeaks},
-     * which its calibration sets; and {@link FftResult#amplitudeDbFs}, which
-     * its calibration rewrites.  Until the view has run,
-     * the pre-correction peaks are null and the harmonic levels hold the
+     * pre-correction peaks are null and the harmonic levels hold the
      * analyser's detection on the last single frame, not the average.
      */
     private void handToPredistortionEngine(FftResult r) {

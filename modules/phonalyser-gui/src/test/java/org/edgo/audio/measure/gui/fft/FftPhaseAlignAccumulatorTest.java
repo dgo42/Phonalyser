@@ -231,12 +231,11 @@ class FftPhaseAlignAccumulatorTest {
 
     /** The worker members this harness drives, by name because that is what
      *  reflection takes: the private field holding the next analysis cycle's
-     *  phase excess, the private accumulate step, the private rollback the
-     *  discontinuity path uses, and the private accumulator whose overlay
-     *  writes the average back onto a result for the display path. */
+     *  phase excess, the private accumulate step, and the private accumulator
+     *  whose overlay writes the average back onto a result for the display
+     *  path and whose rollback the discontinuity path uses. */
     private static final String PHI_F_FIELD = "pendingPhiF";
     private static final String ACCUMULATE  = "accumulateIntoForeverBuffer";
-    private static final String SUBTRACT    = "subtractPreviousCycles";
     private static final String ACCUMULATOR = "accumulator";
 
     private static final Logger LOG = LogManager.getLogger("FftPhaseAlign");
@@ -1199,7 +1198,7 @@ class FftPhaseAlignAccumulatorTest {
         System.arraycopy(analysed, (int) base, win, 0, WIN_LEN);
         FftResult extra = analyze(analyzer, win, base);
         accumulateCycle(worker, heldExcessRad(base), extra, base);
-        call(worker, SUBTRACT);
+        accumulatorOf(worker).subtractPreviousCycles();
         double[] after = levels(worker, extra);
         for (int i = 0; i <= HARMONICS; i++) {
             assertEquals(held[i], after[i], IDENTICAL_TOL_DB,
@@ -1219,10 +1218,9 @@ class FftPhaseAlignAccumulatorTest {
     // ── Drivers ────────────────────────────────────────────────────────────
 
     /**
-     * The one place this class reaches into the worker: the accumulate step,
-     * its rollback and the overlay that reads the accumulator back are all
-     * private - a productive class is not widened to let a test in - so a
-     * renamed member fails here and not at every call site.
+     * The one place this class reaches into the worker's methods: the
+     * accumulate step is private - a productive class is not widened to let
+     * a test in - so a renamed member fails here and not at every call site.
      */
     private void call(FftAnalyzerWorker worker, String method, Object... args) {
         try {
@@ -1287,8 +1285,13 @@ class FftPhaseAlignAccumulatorTest {
     /** The worker's accumulator, written back onto {@code r} - the display
      *  path's step. */
     private void overlay(FftAnalyzerWorker worker, FftResult r) {
+        accumulatorOf(worker).overlayOnto(r);
+    }
+
+    /** The worker's private accumulator. */
+    private CoherentAccumulator accumulatorOf(FftAnalyzerWorker worker) {
         try {
-            ((CoherentAccumulator) FieldUtils.readField(worker, ACCUMULATOR, true)).overlayOnto(r);
+            return (CoherentAccumulator) FieldUtils.readField(worker, ACCUMULATOR, true);
         } catch (IllegalAccessException ex) {
             throw new AssertionError("the worker's " + ACCUMULATOR + " is not reachable", ex);
         }

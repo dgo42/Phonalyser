@@ -107,9 +107,9 @@ public final class CaptureAverage {
 
     private void addFrame(double[] re, double[] im, double delta, boolean coherent) {
         if (coherent) {
-            accumulator.add(re, im, 1.0, CoherentAccumulator.FrameTurns.of(delta), null, null);
+            accumulator.add(re, im, 1.0, CoherentAccumulator.FrameTurns.of(delta));
         } else {
-            accumulator.addPower(re, im, 1.0, null);
+            accumulator.addPower(re, im, 1.0);
         }
     }
 }
