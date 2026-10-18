@@ -18,8 +18,6 @@
 
 package org.edgo.audio.measure.generator;
 
-import java.io.BufferedReader;
-import java.io.FileReader;
 import java.io.IOException;
 import java.util.Locale;
 import java.util.SplittableRandom;
@@ -28,11 +26,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.edgo.audio.measure.common.Constants;
 import org.edgo.audio.measure.dsp.SineKernel;
 import org.edgo.audio.measure.enums.GenSignalForm;
-import org.edgo.audio.measure.fft.FftResult;
-import org.edgo.audio.measure.fft.HarmonicsCsv;
 
 import lombok.Getter;
-import lombok.Value;
 import lombok.extern.log4j.Log4j2;
 
 /**
@@ -366,8 +361,8 @@ public class SignalGenerator implements GeneratorControls {
 
     /**
      * Every constructor takes both lanes' amplitudes and full scales: a
-     * single-lane driver (a sweep engine, the command line, a deconvolution
-     * reference) passes its one value for both.
+     * single-lane driver (a sweep engine, a deconvolution reference) passes
+     * its one value for both.
      *
      * @param form                  waveform type
      * @param frequency             output frequency in Hz (ignored for noise types)
@@ -400,16 +395,13 @@ public class SignalGenerator implements GeneratorControls {
     }
 
     /**
-     * Constructs a {@link GenSignalForm#SINE_COMP} generator.
-     * Loads H2..Hn harmonic corrections from an {@code fft_harmonics_*.csv} file
-     * produced by {@link HarmonicsCsv#export}, or an
-     * {@code applied_compensation_*.csv} file from the iterative workflow.
-     *
-     * <p>If the CSV contains generator-parameter metadata (written by
-     * {@link Main#exportAppliedCompensationCsv}) with a calibration amplitude
-     * different from the commanded one, the per-harmonic ratios are scaled by
-     * {@code csv_amplitude / amplitude} so the absolute compensation voltage
-     * matches the calibrated value.
+     * Constructs a {@link GenSignalForm#SINE_COMP} generator from a
+     * predistortion file ({@code .dpd}), read by {@link Predistortion} and
+     * applied to this generator: a single-tone file ({@code harmonic;...}
+     * header) carries the H2..Hn corrections, a dual-tone file
+     * ({@code a;b;...} header) the intermodulation-product corrections.  The
+     * corrections are relative to the fundamental; comment lines ({@code #})
+     * are not read.
      *
      * @param frequency             fundamental frequency in Hz
      * @param sampleRate            sample rate in Hz
@@ -417,7 +409,7 @@ public class SignalGenerator implements GeneratorControls {
      * @param amplitudeVrmsRight    the right lane's fundamental amplitude in V RMS
      * @param dacFsVoltageAmplLeft  the left lane's DAC full-scale PEAK amplitude
      * @param dacFsVoltageAmplRight the right lane's DAC full-scale PEAK amplitude
-     * @param harmonicsCsvPath      path to the harmonics CSV file
+     * @param harmonicsCsvPath      path to the predistortion file
      */
     public SignalGenerator(double frequency, int sampleRate,
                            double amplitudeVrmsLeft, double amplitudeVrmsRight,
@@ -426,65 +418,6 @@ public class SignalGenerator implements GeneratorControls {
         this(GenSignalForm.SINE_COMP, frequency, sampleRate, amplitudeVrmsLeft, amplitudeVrmsRight,
                 dacFsVoltageAmplLeft, dacFsVoltageAmplRight);
         new Predistortion(harmonicsCsvPath, frequency, sampleRate).applyTo(this);
-    }
-
-    /**
-     * Constructs a {@link GenSignalForm#SINE_COMP} generator directly from a
-     * {@link FftResult} - no intermediate CSV file is written.
-     * Requires coherent averaging ({@code result.coherentAveraging == true}); otherwise
-     * phases are unknown and amplitude-only correction is applied with a warning.
-     *
-     * @param frequency             fundamental frequency in Hz
-     * @param sampleRate            sample rate in Hz
-     * @param amplitudeVrmsLeft     the left lane's fundamental amplitude in V RMS
-     * @param amplitudeVrmsRight    the right lane's fundamental amplitude in V RMS
-     * @param dacFsVoltageAmplLeft  the left lane's DAC full-scale PEAK amplitude
-     * @param dacFsVoltageAmplRight the right lane's DAC full-scale PEAK amplitude
-     * @param result                FFT analysis result containing harmonic amplitudes and phases
-     */
-    public SignalGenerator(double frequency, int sampleRate,
-                           double amplitudeVrmsLeft, double amplitudeVrmsRight,
-                           double dacFsVoltageAmplLeft, double dacFsVoltageAmplRight,
-                           FftResult result) {
-        this(GenSignalForm.SINE_COMP, frequency, sampleRate, amplitudeVrmsLeft, amplitudeVrmsRight,
-                dacFsVoltageAmplLeft, dacFsVoltageAmplRight);
-        loadHarmonicsFromResult(frequency, sampleRate, result);
-    }
-
-    /**
-     * Constructs a {@link GenSignalForm#SINE_COMP} generator from pre-computed
-     * accumulated harmonic corrections (amplitude + phase arrays).
-     * Used by the iterative compensation workflow where corrections are aggregated
-     * across multiple iterations as complex numbers.
-     *
-     * @param frequency             fundamental frequency in Hz
-     * @param sampleRate            sample rate in Hz
-     * @param amplitudeVrmsLeft     the left lane's fundamental amplitude in V RMS
-     * @param amplitudeVrmsRight    the right lane's fundamental amplitude in V RMS
-     * @param dacFsVoltageAmplLeft  the left lane's DAC full-scale PEAK amplitude
-     * @param dacFsVoltageAmplRight the right lane's DAC full-scale PEAK amplitude
-     * @param ampRatios             per-harmonic amplitude ratios (relative to fundamental)
-     * @param phiInits              per-harmonic initial phases (radians, DAC output reference)
-     * @param freqsHz               per-harmonic frequencies in Hz
-     */
-    public SignalGenerator(double frequency, int sampleRate,
-                           double amplitudeVrmsLeft, double amplitudeVrmsRight,
-                           double dacFsVoltageAmplLeft, double dacFsVoltageAmplRight,
-                           double[] ampRatios, double[] phiInits, double[] freqsHz) {
-        this(GenSignalForm.SINE_COMP, frequency, sampleRate, amplitudeVrmsLeft, amplitudeVrmsRight,
-                dacFsVoltageAmplLeft, dacFsVoltageAmplRight);
-        int n = ampRatios.length;
-        int[] hNums = new int[n];
-        for (int i = 0; i < n; i++) {
-            hNums[i] = (int) Math.round(freqsHz[i] / frequency);
-            log.info("Accumulated H{}: {} Hz  {} dBFS  phi_init {} deg",
-                    hNums[i],
-                    String.format(Locale.US, "%.3f", freqsHz[i]),
-                    String.format(Locale.US, "%.4f", 20.0 * Math.log10(ampRatios[i])),
-                    String.format(Locale.US, "%.2f", Math.toDegrees(phiInits[i])));
-        }
-        this.comp = new Compensation(ampRatios, hNums, phiInits);
-        log.info("Harmonic compensation: {} harmonic(s) from accumulated corrections", n);
     }
 
     /**
@@ -1366,64 +1299,6 @@ public class SignalGenerator implements GeneratorControls {
     // -------------------------------------------------------------------------
 
     /**
-     * Initialises harmonic compensation phasors directly from a {@link FftResult}.
-     * Equivalent to {@link #loadHarmonics} but avoids writing a CSV file.
-     * Only harmonics whose bin index is valid (> 0) are loaded.
-     */
-    private void loadHarmonicsFromResult(double frequency, int sampleRate, FftResult r) {
-        if (!r.coherentAveraging) {
-            log.warn("FFT result uses incoherent averaging - phase information unavailable; "
-                   + "phase correction disabled, amplitude correction only.");
-        }
-
-        // Fundamental phase: atan2(im, re) at the fundamental bin.
-        // For incoherent results im[k] = 0, so phi1 = 0 -> omegaD = -π/2 (no real correction).
-        double phi1   = Math.atan2(r.im[r.fundamentalBin], r.re[r.fundamentalBin]);
-        double omegaD = -(phi1 + Math.PI / 2.0);
-        // Convert delay to rad/Hz so each harmonic uses its own actual frequency
-        double delayRadPerHz = omegaD / r.fundamentalHzRefined;
-        log.info("System delay estimate: {} rad ({} samples at {} Hz)",
-                String.format(Locale.US, "%.2f", omegaD),
-                String.format(Locale.US, "%.4f", omegaD / (2.0 * Math.PI * frequency / sampleRate)),
-                (double) sampleRate);
-
-        // Collect valid harmonics (H2 .. Hn)
-        int validCount = 0;
-        for (int h = 0; h < r.harmonicCount; h++) {
-            if (r.harmonicBins[h] > 0) validCount++;
-        }
-
-        double[] amp   = new double[validCount];
-        int[]    hNums = new int[validCount];
-        double[] phis  = new double[validCount];
-
-        int i = 0;
-        for (int h = 0; h < r.harmonicCount; h++) {
-            int bin = r.harmonicBins[h];
-            if (bin <= 0) continue;
-
-            double phiH     = Math.atan2(r.im[bin], r.re[bin]);
-            double ampRatio = r.harmonicPct[h] / 100.0;
-            double freqHz   = r.harmonicHz[h];
-            int    hNumber  = h + 2;
-
-            double phiInit = phiH + freqHz * delayRadPerHz;
-            amp[i]   = ampRatio;
-            hNums[i] = hNumber;
-            phis[i]  = phiInit;
-            log.info("Harmonic compensation H{}: {} Hz  {} dBFS  phi_meas {} deg  phi_init {} deg",
-                    hNumber,
-                    String.format(Locale.US, "%.3f", freqHz),
-                    String.format(Locale.US, "%.4f", 20.0 * Math.log10(ampRatio)),
-                    String.format(Locale.US, "%.2f", Math.toDegrees(phiH)),
-                    String.format(Locale.US, "%.2f", Math.toDegrees(phiInit)));
-            i++;
-        }
-        this.comp = new Compensation(amp, hNums, phis);
-        log.info("Harmonic compensation: {} harmonic(s) loaded from FFT result", validCount);
-    }
-
-    /**
      * Loads a predistortion-correction file onto this running generator and
      * switches to the matching compensated form - the wizard's "Apply" and the
      * relaunch path both route through here.  The file format is
@@ -1499,56 +1374,4 @@ public class SignalGenerator implements GeneratorControls {
         return SineKernel.cosAtPhaseAcc(acc);
     }
 
-    // -------------------------------------------------------------------------
-    // Applied-compensation CSV metadata
-    // -------------------------------------------------------------------------
-
-    /**
-     * Generator parameters recorded in the header of an
-     * {@code applied_compensation_*.csv} file.  Any field is −1 / NaN when the
-     * corresponding {@code #} metadata line was not present in the CSV.
-     */
-    @Value
-    public static class Metadata {
-        int    sampleRateHz;    // −1 if absent
-        int    bitDepth;        // −1 if absent
-        double amplitudeVRms;   //  0 if absent
-        double frequencyHz;     //  0 if absent
-    }
-
-    /**
-     * Parses generator-parameter metadata from {@code #}-prefixed comment lines
-     * at the top of an {@code applied_compensation_*.csv} file.  Returns
-     * {@code null} if no metadata line is found (e.g. legacy harmonics CSV).
-     */
-    public static Metadata readAppliedCompensationMetadata(String csvPath) throws IOException {
-        int    sampleRate = -1;
-        int    bitDepth   = -1;
-        double amp        = 0.0;
-        double freq       = 0.0;
-        boolean any       = false;
-        try (BufferedReader br = new BufferedReader(new FileReader(csvPath))) {
-            String line;
-            while ((line = br.readLine()) != null) {
-                line = line.trim();
-                if (line.isEmpty())      continue;
-                if (!line.startsWith("#")) break;   // stop at first non-comment line
-                String body = line.substring(1).trim();
-                int eq = body.indexOf('=');
-                if (eq <= 0) continue;
-                String key = body.substring(0, eq).trim();
-                String val = body.substring(eq + 1).trim();
-                try {
-                    switch (key) {
-                        case "sample_rate_hz" -> { sampleRate = Integer.parseInt(val);    any = true; }
-                        case "bit_depth"      -> { bitDepth   = Integer.parseInt(val);    any = true; }
-                        case "amplitude_vrms" -> { amp        = Double.parseDouble(val);  any = true; }
-                        case "frequency_hz"   -> { freq       = Double.parseDouble(val);  any = true; }
-                        default -> { /* ignore unknown keys */ }
-                    }
-                } catch (NumberFormatException ignored) { /* skip malformed */ }
-            }
-        }
-        return any ? new Metadata(sampleRate, bitDepth, amp, freq) : null;
-    }
 }

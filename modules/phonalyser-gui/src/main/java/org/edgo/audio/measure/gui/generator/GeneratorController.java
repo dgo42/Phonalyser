@@ -430,8 +430,8 @@ public final class GeneratorController {
         GenSignalForm form = prefs.getGenSignalForm();
         GeneratorRun.SweepSpec sweep = null;
         if (form == GenSignalForm.LINEAR_SWEEP || form == GenSignalForm.LOG_SWEEP) {
-            // No lead-in for the GUI-driven sweep - that's a CLI-measurement
-            // feature, not a music-style sweep control.
+            // No lead-in for the generator-pane sweep - a lead-in belongs to
+            // the frequency-response measurement, not to a free-running sweep.
             sweep = new GeneratorRun.SweepSpec(
                     prefs.getGenSweepFreqStartHz(),
                     prefs.getGenSweepFreqEndHz(),

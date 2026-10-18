@@ -246,7 +246,7 @@ public final class ServerConfig {
     }
 
     /** The value following {@code flag}, or null when the flag is absent.
-     *  Case-insensitive, like the CLI argument parser the app already uses.
+     *  Case-insensitive.
      *
      *  @throws IllegalArgumentException when the flag is the LAST argument and
      *          its value is missing - silently falling back to the default
@@ -264,10 +264,7 @@ public final class ServerConfig {
         return null;
     }
 
-    /** Whether {@code flag} appears at all - a value-less switch.  The CLI
-     *  module's {@code ArgParser.hasArg} does the same scan, but this module
-     *  may not depend on the CLI, so the three lines live here beside
-     *  {@link #value(String[], String)} rather than pull a module edge in. */
+    /** Whether {@code flag} appears at all - a value-less switch. */
     private boolean flag(String[] args, String flag) {
         for (String arg : args) {
             if (arg.equalsIgnoreCase(flag)) {

@@ -821,14 +821,14 @@ public final class TuneNotchWizardDialog {
                 FreqRespCalibration cal = FreqRespCalHelper.computeFromLogSweep(
                         leftMaster ? window.left() : window.right(), sweepRef, 0, captureRate, freqs,
                         ampVrms, leftMaster ? adcFsVrmsLeft : adcFsVrmsRight, fade,
-                        leftMaster ? "L" : "R", false);
+                        leftMaster ? "L" : "R");
                 calL = cal;
                 calR = cal;
             } else {
                 calL = FreqRespCalHelper.computeFromLogSweep(
-                        window.left(),  sweepRef, 0, captureRate, freqs, ampVrms, adcFsVrmsLeft,  fade, "L", false);
+                        window.left(),  sweepRef, 0, captureRate, freqs, ampVrms, adcFsVrmsLeft,  fade, "L");
                 calR = FreqRespCalHelper.computeFromLogSweep(
-                        window.right(), sweepRef, 0, captureRate, freqs, ampVrms, adcFsVrmsRight, fade, "R", false);
+                        window.right(), sweepRef, 0, captureRate, freqs, ampVrms, adcFsVrmsRight, fade, "R");
             }
             long decMs = (System.nanoTime() - decStart) / 1_000_000L;
             if (log.isInfoEnabled()) {

@@ -124,17 +124,16 @@ public final class FreqRespAnalyzerConfig {
     private final StereoCaptureProvider stereoCaptureProvider = null;
 
     /** Optional hook fired with the raw captured stereo samples between
-     *  the capture and the deconvolution steps.  Used by the CLI's
-     *  {@code --sweep-wav} flag to persist the unprocessed recording
-     *  without making the analyzer aware of file paths.  {@code null}
-     *  means no listener. */
+     *  the capture and the deconvolution steps.  Lets a caller persist the
+     *  unprocessed recording without making the analyzer aware of file
+     *  paths.  {@code null} means no listener. */
     @Builder.Default
     private final RawCaptureListener rawCaptureListener = null;
 
     /** Optional per-block progress hook for the capture leg - fires on
      *  the audio capture thread with the cumulative sample count and
      *  the block's max-channel RMS.  Used by the GUI's progress-dialog live
-     *  meter; CLI / unit-test callers pass {@code null}. */
+     *  meter; unit-test callers pass {@code null}. */
     @Builder.Default
     private final StereoCaptureProgress captureProgress = null;
 }

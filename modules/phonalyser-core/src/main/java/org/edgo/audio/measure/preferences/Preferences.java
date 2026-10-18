@@ -325,10 +325,9 @@ public final class Preferences {
     @Getter
     @Setter
     private volatile double fftDbrRefDbFs = 0.0;
-    /** When {@code true}, {@link #save()} is a no-op.  Set by the CLI so a
-     *  {@code --adc-fs-vrms} (or any other) value injected into Preferences for
-     *  one headless run is never written back to the user's YAML.  Default
-     *  {@code false} - the GUI persists normally. */
+    /** When {@code true}, {@link #save()} is a no-op.  Set by the tests so a
+     *  value injected into Preferences for one run is never written back to
+     *  the user's YAML.  Default {@code false} - the GUI persists normally. */
     @Getter
     @Setter
     private volatile boolean transientMode;
@@ -1163,8 +1162,8 @@ public final class Preferences {
     }
 
     /** Writes the current preferences to {@link #PREFS_FILE} in the working dir.
-     *  No-op in {@link #isTransientMode() transient mode} (CLI runs), so values
-     *  injected for one headless run never overwrite the user's saved YAML. */
+     *  No-op in {@link #isTransientMode() transient mode} (test runs), so values
+     *  injected for one run never overwrite the user's saved YAML. */
     public synchronized void save() {
         if (transientMode) return;
         Map<String, Object> root = toMap();
@@ -3530,7 +3529,7 @@ public final class Preferences {
 
     /** Persists the per-card profile store to {@code devices.yaml} - the policy
      *  gate the profile mutators call.  No-op in {@link #isTransientMode()
-     *  transient mode} or a {@link #detached} copy, so a dialog edit copy / a CLI
+     *  transient mode} or a {@link #detached} copy, so a dialog edit copy / a test
      *  run never writes the store; otherwise delegates to
      *  {@link #writeDevicesTo(Path)} against {@link #devicesPath()}. */
     public synchronized void saveDevices() {

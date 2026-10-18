@@ -23,9 +23,9 @@ import org.edgo.audio.measure.sound.StereoSamples;
 /**
  * Optional hook fired by {@link FreqRespAnalyzer} after the stereo sweep
  * capture finishes and before deconvolution starts.  Lets a caller
- * side-effect on the unprocessed samples - the CLI's {@code --sweep-wav}
- * flag uses this to persist a WAV of the raw recording without dragging
- * file-path concerns into the analyzer's signature.
+ * side-effect on the unprocessed samples - persist a WAV of the raw
+ * recording, for one - without dragging file-path concerns into the
+ * analyzer's signature.
  *
  * <p>Fires on whatever thread runs the analyzer.  Exceptions thrown from the
  * listener propagate out of {@link FreqRespAnalyzer#run} and abort the

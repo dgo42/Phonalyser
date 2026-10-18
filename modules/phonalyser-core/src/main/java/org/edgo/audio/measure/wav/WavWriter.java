@@ -24,8 +24,6 @@ import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
-import org.edgo.audio.measure.common.StereoSampleDouble;
-
 import lombok.extern.log4j.Log4j2;
 
 /**
@@ -44,8 +42,8 @@ public class WavWriter implements AutoCloseable {
     private       long             dataBytes = 0;
 
     /**
-     * @param floatFormat  true for 32-bit IEEE float (samples supplied via writeFloats),
-     *                     false for integer PCM (samples supplied via writeRaw)
+     * @param floatFormat  true for a 32-bit IEEE-float header (format code 3),
+     *                     false for integer PCM; the samples come through writeRaw
      */
     public WavWriter(File file, int sampleRate, int channels, int bitsPerSample, boolean floatFormat)
             throws IOException {
@@ -64,47 +62,6 @@ public class WavWriter implements AutoCloseable {
     public void writeRaw(byte[] buf, int length) throws IOException {
         raf.write(buf, 0, length);
         dataBytes += length;
-    }
-
-    /** Writes integer PCM samples packed to the given bit depth (little-endian). */
-    public void writeSamples(StereoSampleDouble[] samples, int bitsPerSample) throws IOException {
-        int bytesPerSample = bitsPerSample / 8;
-        int ch0, ch1;
-        ByteBuffer bb = ByteBuffer.allocate(samples.length * (bytesPerSample + 1) * 2).order(ByteOrder.LITTLE_ENDIAN);
-        for (StereoSampleDouble s : samples) {
-            switch (bytesPerSample) {
-                case 1:
-                    ch0 = (((int) Math.round(s.ch0 * 256.) + 0x8000) & 0xFF);
-                    ch1 = (((int) Math.round(s.ch1 * 256.) + 0x8000) & 0xFF);
-                    bb.putShort((short) ch0);
-                    bb.putShort((short) ch1);
-                    break;
-                case 2:
-                    ch0 = (((int) Math.round((double)s.ch0 * 256.) + 0x800000) & 0xFFFFFF);
-                    ch1 = (((int) Math.round((double)s.ch1 * 256.) + 0x800000) & 0xFFFFFF);
-                    bb.put((byte) ch0).put((byte)(ch0 >> 8)).put((byte)(ch0 >> 16));
-                    bb.put((byte) ch1).put((byte)(ch1 >> 8)).put((byte)(ch1 >> 16));
-                    break;
-                case 3:
-                    ch0 = (((int) Math.round((double)s.ch0 * 256.) + 0x80000000) & 0xFFFFFFFF);
-                    ch1 = (((int) Math.round((double)s.ch1 * 256.) + 0x80000000) & 0xFFFFFFFF);
-                    bb.putInt(ch0);
-                    bb.putInt(ch1);
-                    break;
-            }
-        }
-        raf.write(bb.array());
-        dataBytes += bb.capacity();
-    }
-
-    /** Writes 32-bit IEEE float samples (for float WAV mode). */
-    public void writeFloats(float[] samples) throws IOException {
-        ByteBuffer bb = ByteBuffer.allocate(samples.length * 4).order(ByteOrder.LITTLE_ENDIAN);
-        for (float s : samples) {
-            bb.putFloat(s);
-        }
-        raf.write(bb.array());
-        dataBytes += (long) samples.length * 4;
     }
 
     @Override

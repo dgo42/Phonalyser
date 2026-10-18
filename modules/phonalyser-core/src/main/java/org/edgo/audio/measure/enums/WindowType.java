@@ -21,7 +21,7 @@ package org.edgo.audio.measure.enums;
 import java.util.Locale;
 
 /** Window function used by the FFT analyser.  The constant name IS the short token
- *  used at the CLI / yaml edge (parsed back via {@link #valueOf}) and as the compact
+ *  used at the yaml edge (parsed back via {@link #valueOf}) and as the compact
  *  tile label; the long display label is i18n via {@link #labelKey()}. */
 public enum WindowType {
     RECT,

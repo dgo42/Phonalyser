@@ -99,9 +99,8 @@ public interface StereoCaptureProvider {
     /** Localized pre-check for the sweep capture: refuses - with the real
      *  numbers - when the two capture lanes (plus their trim copies) cannot
      *  fit the heap, BEFORE the generator starts.  Sized on the CAPTURE rate,
-     *  which is what the record is allocated at.  The CLI capture leg guards
-     *  the same {@link MemUtil} numbers with its English backstop; this one
-     *  carries the i18n text the measurement-failed dialog shows. */
+     *  which is what the record is allocated at.  The {@link MemUtil} numbers
+     *  go out in the i18n text the measurement-failed dialog shows. */
     default void ensureCaptureFits(int captureRateHz, int durationSec) {
         long needBytes = MemUtil.stereoCaptureHeapBytes(captureRateHz, durationSec);
         long freeBytes = MemUtil.heapShortfall(needBytes);

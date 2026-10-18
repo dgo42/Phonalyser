@@ -18,13 +18,6 @@
 
 package org.edgo.audio.measure.fft;
 
-import java.io.BufferedWriter;
-import java.io.File;
-import java.io.FileWriter;
-import java.io.IOException;
-import java.io.PrintWriter;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
 import java.util.Locale;
 
@@ -143,7 +136,7 @@ public class FftAnalyzer {
      *  it discards the single-cycle stats and re-derives them with
      *  {@link #recomputeStats} on the accumulated spectrum (display cycles only),
      *  so the per-cycle computation is pure waste.  Leave {@code false} for
-     *  one-shot CLI / test callers and single-cycle (non-averaging) display. */
+     *  one-shot / test callers and single-cycle (non-averaging) display. */
     @Setter
     private boolean spectrumOnly = false;
 
@@ -330,29 +323,6 @@ public class FftAnalyzer {
         return new BinPhasor(gz.re(), gz.im());
     }
 
-    /** The raw windowed transform of ONE frame of {@code samples}, the frame
-     *  starting at {@code base}, written to {@code re} / {@code im} (length
-     *  {@code fftSize}, both halves) in the units of {@link FftResult#re} /
-     *  {@link FftResult#im} - what {@code analyze} measures, with nothing
-     *  measured.  The frames an average takes beyond the analysed one.
-     *
-     *  @param base first sample of the frame */
-    public void frameSpectrum(double[] samples, int base, int fftSize,
-                              WindowType windowType, double[] re, double[] im) {
-        if (Integer.bitCount(fftSize) != 1) {
-            throw new IllegalArgumentException("fftSize must be a power of 2, got: " + fftSize);
-        }
-        if (base < 0 || (long) base + fftSize > samples.length) {
-            throw new IllegalArgumentException("Frame at " + base + " exceeds the buffer: "
-                    + fftSize + " samples needed, " + samples.length + " held");
-        }
-        if (re.length < fftSize || im.length < fftSize) {
-            throw new IllegalArgumentException("Spectrum arrays shorter than the transform: "
-                    + fftSize + " needed, " + Math.min(re.length, im.length) + " given");
-        }
-        frameFft(samples, base, fftSize, getCachedWindow(fftSize, windowType), re, im);
-    }
-
     /**
      * Sub-bin fractional bin κ of the line sitting near {@code hintBin},
      * measured on the frame the same way the fundamental's own κ is: the
@@ -417,120 +387,17 @@ public class FftAnalyzer {
 
     // (FftResult lives in its own file now.)
 
-    /** Harmonics the THD sums when the caller states no limit: H2..H9, the
-     *  sum every overload below the full one has always taken.  A caller that
-     *  offers the limit as a setting passes its own count to the full
-     *  overload. */
+    /** Harmonics the THD sums for a result that carries no limit of its own
+     *  ({@link FftResult#thdHarmonics} unset): H2..H9.  The analysis itself
+     *  always states the limit its caller passes. */
     private static final int THD_HARMONICS_LEGACY = 8;
 
     // =========================================================================
-    // Analysis - backward-compatible overload (Hann, 0 % overlap)
-    // =========================================================================
-
-    public FftResult analyze(double[] samples, int sampleRate,
-                                 int fftSize, int harmonicCount) {
-        return analyze(samples, sampleRate, fftSize, harmonicCount,
-                WindowType.HANN, FftOverlap.PCT_0, 0.0, 0.0, true, Double.NaN);
-    }
-
-    public FftResult analyze(double[] samples, int sampleRate,
-                                 int fftSize, int harmonicCount,
-                                 WindowType windowType, FftOverlap overlap) {
-        return analyze(samples, sampleRate, fftSize, harmonicCount,
-                windowType, overlap, 0.0, 0.0, true, Double.NaN);
-    }
-
-    public FftResult analyze(double[] samples, int sampleRate,
-                                 int fftSize, int harmonicCount,
-                                 WindowType windowType, FftOverlap overlap,
-                                 double snrFreqMin, double snrFreqMax,
-                                 boolean coherentAveraging) {
-        return analyze(samples, sampleRate, fftSize, harmonicCount,
-                windowType, overlap, snrFreqMin, snrFreqMax, coherentAveraging, Double.NaN);
-    }
-
-    // =========================================================================
-    // Analysis - full version
+    // Analysis
     // =========================================================================
 
     /**
-     * Runs coherent-averaged FFT analysis on a normalized mono signal.
-     *
-     * @param samples       signal samples, range −1.0 ... +1.0
-     * @param sampleRate    sample rate in Hz
-     * @param fftSize       FFT frame length - must be a power of 2
-     * @param harmonicCount number of harmonics to evaluate (2nd ... N-th)
-     * @param windowType    window function to apply per frame
-     * @param overlap       overlap between successive frames
-     * @param snrFreqMin         lower bound for SNR noise integration in Hz (0 = no limit)
-     * @param snrFreqMax         upper bound for SNR noise integration in Hz (0 = no limit)
-     * @param coherentAveraging  true = accumulate complex spectra (noise cancels across frames);
-     *                           false = accumulate power per bin (no phase coherence required)
-     * @param fundRefDbFs   known real level of the fundamental in dBFS (callers convert dBV inputs at the boundary); {@link Double#NaN} = unknown
-     * @return fully populated {@link FftResult}
-     */
-    public FftResult analyze(double[] samples, int sampleRate,
-                                 int fftSize, int harmonicCount,
-                                 WindowType windowType, FftOverlap overlap,
-                                 double snrFreqMin, double snrFreqMax,
-                                 boolean coherentAveraging, double fundRefDbFs) {
-        return analyze(samples, sampleRate, fftSize, harmonicCount,
-                windowType, overlap, snrFreqMin, snrFreqMax, coherentAveraging,
-                fundRefDbFs, true);
-    }
-
-    /**
-     * Same as the 10-arg overload, plus {@code logSummary}: when {@code false},
-     * the trailing THD / THD+N / SNR log lines are suppressed so the caller
-     * can mutate the result (e.g. apply ADC correction) and log the final
-     * numbers itself without producing a misleading uncorrected line first.
-     */
-    public FftResult analyze(double[] samples, int sampleRate,
-                                 int fftSize, int harmonicCount,
-                                 WindowType windowType, FftOverlap overlap,
-                                 double snrFreqMin, double snrFreqMax,
-                                 boolean coherentAveraging, double fundRefDbFs,
-                                 boolean logSummary) {
-        return analyze(samples, sampleRate, fftSize, harmonicCount,
-                windowType, overlap, snrFreqMin, snrFreqMax, coherentAveraging,
-                fundRefDbFs, logSummary, Double.NaN);
-    }
-
-    /**
-     * Full overload with {@code expectedFundHz}: when set (not {@link Double#NaN}),
-     * the fundamental peak search is restricted to a narrow ±10-bin window around
-     * the expected frequency instead of the loudest bin in the spectrum.  Use this
-     * when the fundamental can be deeply attenuated (e.g. measuring distortion
-     * through a notch filter at the notch frequency) - global max would otherwise
-     * latch onto a harmonic, mains hum, or a spur and the entire downstream
-     * harmonic table would be wrong.  Pass {@link Double#NaN} for the legacy
-     * loudest-bin behaviour.
-     *
-     * <p>Allocates a fresh {@link FftResult} per call - preferred for one-shot
-     * test callers; the THD sums its historic H2..H9.  The live FFT view and
-     * the capture average go through
-     * {@link #analyze(double[], int, int, int, int, WindowType, FftOverlap,
-     * double, double, boolean, double, boolean, double, FftResult, int)}
-     * to state the THD's harmonic limit and to write into a pre-allocated
-     * result slot, avoiding per-call array churn.
-     */
-    public FftResult analyze(double[] samples, int sampleRate,
-                                 int fftSize, int harmonicCount,
-                                 WindowType windowType, FftOverlap overlap,
-                                 double snrFreqMin, double snrFreqMax,
-                                 boolean coherentAveraging, double fundRefDbFs,
-                                 boolean logSummary, double expectedFundHz) {
-        // The one place the fixed overlap's spacing is derived.  A random
-        // overlap has no fixed spacing (hopSamples throws) - its drawn hop
-        // enters as the stated step directly.
-        int step = overlap.hopSamples(fftSize);
-        return analyze(samples, sampleRate, fftSize, harmonicCount, THD_HARMONICS_LEGACY,
-                windowType, overlap, snrFreqMin, snrFreqMax, coherentAveraging,
-                fundRefDbFs, logSummary, expectedFundHz, new FftResult(), step);
-    }
-
-    /**
-     * The one full analysis method - every overload above funnels into it.
+     * The analysis method.
      * It analyses ONE frame: the {@code fftSize} samples at the start of
      * {@code samples}, transformed as they stand.  Averaging over frames is
      * the {@link CoherentAccumulator}'s, which takes this result's spectrum
@@ -791,7 +658,7 @@ public class FftAnalyzer {
         // Result - downstream code (frequency response calibration scale, chart, cal-CSV anchor)
         // depends on those reflecting the actual FFT measurement.
         // The reference arrives already in dBFS - the analyzer speaks one scale
-        // only; the GUI / CLI callers convert their dBV inputs at the boundary
+        // only; the GUI callers convert their dBV inputs at the boundary
         // (unit translation is a presentation concern, not a measurement one).
         // refLin then lives in the same FS-relative units as amplLinear[k], so
         // harmonic % / THD / SNR don't pick up a spurious adcFsVoltageRms factor.
@@ -1803,40 +1670,9 @@ public class FftAnalyzer {
         return window;
     }
 
-
-
-
-    // =========================================================================
-    // CSV export
-    // =========================================================================
-
-    public String exportFftCsv(FftResult r, String directory) throws IOException {
-        String ts      = ts();
-        File   outFile = new File(directory, "fft_spectrum_" + ts + ".csv");
-        try (PrintWriter pw = new PrintWriter(new BufferedWriter(new FileWriter(outFile)))) {
-            pw.println("frequency_hz;amplitude_dbfs;phase_deg;re;im");
-            for (int k = 0; k <= r.fftSize / 2; k++) {
-                pw.printf(Locale.GERMAN, "%.6f;%.6f;%.4f;%.10e;%.10e%n",
-                        k * r.freqResolution,
-                        r.amplitudeDbFs[k],
-                        r.phaseDeg[k],
-                        r.re[k],
-                        r.im[k]);
-            }
-        }
-        log.info("FFT spectrum CSV saved: {}", outFile.getAbsolutePath());
-        return outFile.getAbsolutePath();
-    }
-
-
-
     // =========================================================================
     // Helpers
     // =========================================================================
-
-    private String ts() {
-        return LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
-    }
 
     /** Locates each harmonic (H2..H{@code harmonicCount+1}) in the
      *  averaged spectrum.  Physics fixes the Nth harmonic at exactly

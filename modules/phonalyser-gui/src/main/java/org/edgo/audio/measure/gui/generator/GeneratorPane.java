@@ -69,14 +69,14 @@ import lombok.Getter;
 import lombok.extern.log4j.Log4j2;
 
 /**
- * Generator pane - UI mirror of the CLI generator.  Hosts:
+ * Generator pane - the signal generator's UI.  Hosts:
  * <ul>
  *   <li>Signal-form combo (with 24×24 pictogram per entry)</li>
  *   <li>Frequency input - wheel ±5 %, arrows ±1 Hz, disabled for noise forms</li>
  *   <li>Amplitude input - accepts {@code mV}, {@code V}, {@code dBV},
  *       {@code dBFS} (case-insensitive); wheel ±5 %, arrows ±1 unit step</li>
  *   <li>Dither bits combo - {@code Off} shown instead of 0</li>
- *   <li>Harmonics-CSV picker - Text field + Browse (...) + Reset (×) buttons</li>
+ *   <li>Predistortion-file picker - Text field + Browse (...) + Reset (×) buttons</li>
  *   <li>Play button - runs the {@link org.edgo.audio.measure.generator.SignalGenerator}
  *       on a background thread when clicked</li>
  * </ul>

@@ -25,7 +25,7 @@ package org.edgo.audio.measure.gui.freqresp;
  * needed.
  *
  * <p>Fired from whatever thread runs the analyzer (a background daemon for
- * the GUI worker, the main thread for the CLI).  Implementations that touch
+ * the GUI worker).  Implementations that touch
  * SWT widgets are responsible for marshalling to the UI thread.
  */
 @FunctionalInterface

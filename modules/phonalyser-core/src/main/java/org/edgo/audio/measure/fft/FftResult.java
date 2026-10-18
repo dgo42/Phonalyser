@@ -679,8 +679,9 @@ public class FftResult {
      * bins for a single tone (derived from the refined fundamental, index
      * 0 = 2nd harmonic) and the de-rotated INTERMOD-PRODUCT bins
      * ({@link #imdProductBin}) for a dual tone - the two correction paths never
-     * run together.  Shared by the GUI analyser worker and the CLI iterative
-     * compensator so both feed the correction identical raw phase.  Where no
+     * run together.  Shared by the analyzer (each analysed frame) and the GUI
+     * analyser worker (the averaged spectrum) so both feed the correction
+     * identical raw phase.  Where no
      * fundamental places the peaks, none is captured: the phasors are left
      * NaN / null rather than a previous analysis's on a reused result.
      */

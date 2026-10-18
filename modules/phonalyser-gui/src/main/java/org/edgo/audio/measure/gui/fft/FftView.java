@@ -1797,9 +1797,8 @@ public final class FftView extends AbstractFreqDomainView {
     }
 
     /** Tints the spectrum area outside the active distortion-HP /
-     *  distortion-LP window with the same light grey the CLI FFT chart
-     *  uses, so the user can see at a glance which bands are excluded
-     *  from THD / SNR integration. */
+     *  distortion-LP window with a light grey, so the user can see at a
+     *  glance which bands are excluded from THD / SNR integration. */
     private void drawDistortionBands(GC gc, Rectangle plot,
                                      double freqMin, double freqMax,
                                      boolean logFreq) {
@@ -1829,8 +1828,7 @@ public final class FftView extends AbstractFreqDomainView {
     }
 
     /** Draws a small red dot at the fundamental peak and at every
-     *  detected harmonic - same {@code FUND_ANNOTATION_COLOR} the CLI
-     *  FFT chart uses.  Helps the user see at a glance which peaks the
+     *  detected harmonic.  Helps the user see at a glance which peaks the
      *  analyser picked up. */
     private void drawHarmonicDots(GC gc, Rectangle plot, FftResult r,
                                   MagnitudeUnit unit,
@@ -3123,7 +3121,7 @@ public final class FftView extends AbstractFreqDomainView {
     // =========================================================================
 
     /**
-     * Draws the THD info table in the format the CLI FFT chart uses -
+     * Draws the THD info table -
      * a centred header line with f0 / dBFS / dBV, a centred span line,
      * three two-column metric rows (N+D / THD H₂..ₙ, N / THD+N, SNR /
      * ENOB), and harmonics laid out two per row.  THD/THD+N precision
@@ -3308,7 +3306,7 @@ public final class FftView extends AbstractFreqDomainView {
         // ── Clock difference (Δf measured − requested) + crystal
         // oscillator delta translated back to the master oscillator
         // (22.5792 MHz for the 44.1k sample-rate family, 24.576 MHz
-        // for the 48k family).  Mirrors the CLI FFT chart layout.
+        // for the 48k family).
         // Only shown when "Get fundamental from generator" is enabled
         // - without that anchor the row would be meaningless.
         if (includeClockRow) {

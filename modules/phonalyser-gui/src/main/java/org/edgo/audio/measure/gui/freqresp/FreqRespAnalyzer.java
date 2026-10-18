@@ -201,10 +201,9 @@ public final class FreqRespAnalyzer {
         // Parallel deconv: both channels share inputs (sweepRef, leadIn,
         // capture rate, freqs) but compute independently, so they run on
         // separate CompletableFutures.
-        // Savitzky-Golay output smoothing is OFF for the main sweep (applySavGol
-        // = false), matching the Tune-notch wizard: the bin-aligned grid already
-        // gives a leakage-free trace, and SG would round the bottom off deep,
-        // narrow features (e.g. a notch null read shallow).
+        // No output smoothing: the bin-aligned grid already gives a
+        // leakage-free trace, and a smoothing window would round the bottom
+        // off deep, narrow features (e.g. a notch null read shallow).
         FreqRespCalibration calL;
         FreqRespCalibration calR;
         Channel combined = cfg.getCombinedMaster();
@@ -217,7 +216,7 @@ public final class FreqRespAnalyzer {
                     leftMaster ? rec.left() : rec.right(), sweepRef, recLeadInSamples,
                     cfg.getCaptureRateHz(), freqs, cfg.getAmplitudeVrms(),
                     leftMaster ? cfg.getAdcFsVoltageRmsLeft() : cfg.getAdcFsVoltageRmsRight(),
-                    recFadeSamples, leftMaster ? "L" : "R", false);
+                    recFadeSamples, leftMaster ? "L" : "R");
             calL = cal;
             calR = cal;
         } else {
@@ -225,12 +224,12 @@ public final class FreqRespAnalyzer {
                     () -> FreqRespCalHelper.computeFromLogSweep(
                             rec.left(), sweepRef, recLeadInSamples,
                             cfg.getCaptureRateHz(), freqs, cfg.getAmplitudeVrms(),
-                            cfg.getAdcFsVoltageRmsLeft(), recFadeSamples, "L", false));
+                            cfg.getAdcFsVoltageRmsLeft(), recFadeSamples, "L"));
             CompletableFuture<FreqRespCalibration> calRFut = CompletableFuture.supplyAsync(
                     () -> FreqRespCalHelper.computeFromLogSweep(
                             rec.right(), sweepRef, recLeadInSamples,
                             cfg.getCaptureRateHz(), freqs, cfg.getAmplitudeVrms(),
-                            cfg.getAdcFsVoltageRmsRight(), recFadeSamples, "R", false));
+                            cfg.getAdcFsVoltageRmsRight(), recFadeSamples, "R"));
             calL = awaitOrFail(calLFut);
             calR = awaitOrFail(calRFut);
         }

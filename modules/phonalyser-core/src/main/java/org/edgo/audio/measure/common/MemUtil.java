@@ -21,10 +21,9 @@ package org.edgo.audio.measure.common;
 import lombok.experimental.UtilityClass;
 
 /**
- * Heap arithmetic shared by every consumer that allocates capture-scale
- * buffers: the CLI capture legs guard with an English message, the GUI
- * pre-checks with a localized one - both from the SAME numbers, so the two
- * can never disagree about what fits.
+ * Heap arithmetic for capture-scale buffers: the sweep capture's pre-check
+ * ({@code StereoCaptureProvider.ensureCaptureFits}) refuses with these
+ * numbers, before the generator starts, a capture that cannot fit.
  */
 @UtilityClass
 public class MemUtil {
