@@ -80,10 +80,6 @@
         </dependency>
         <dependency>
             <groupId>${project.groupId}</groupId>
-            <artifactId>phonalyser-cli</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>${project.groupId}</groupId>
             <artifactId>backend-wdm-ks</artifactId>
             <scope>runtime</scope>
         </dependency>

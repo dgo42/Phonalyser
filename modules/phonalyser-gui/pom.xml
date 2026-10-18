@@ -3,12 +3,11 @@
   phonalyser-gui - the SWT desktop application: panes, views, controllers,
   preferences dialog, help viewer, automation engine, and GuiMain.
 
-  Sits on top of everything per the intended layering (core -> backends/cli ->
+  Sits on top of everything per the intended layering (core -> backends ->
   gui-core -> gui).
 
-  It compiles against backend-javasound (GuiMain -> CsjsoundNativePath,
-  GeneratorController file playback -> JavaSoundDeviceManager) and backend-qa40x (the automation
-  engine); the remaining backends are runtime-only, resolved through the service
+  It compiles against backend-javasound (NativeAppPaths -> CsjsoundNativePath);
+  the remaining backends are runtime-only, resolved through the service
   registry.  It must NEVER depend on backend-qa40x-gui - that module sits above
   this one and is found at runtime, which is what keeps a backend's own UI
   optional instead of compiled in.
@@ -31,10 +30,6 @@
     <dependencies>
         <dependency>
             <groupId>${project.groupId}</groupId>
-            <artifactId>phonalyser-cli</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>${project.groupId}</groupId>
             <artifactId>phonalyser-core</artifactId>
         </dependency>
         <!-- Bus, i18n, widgets, registry, bindings and the common base classes -
@@ -43,15 +38,39 @@
             <groupId>${project.groupId}</groupId>
             <artifactId>phonalyser-gui-core</artifactId>
         </dependency>
-        <!--dependency>
+        <!-- Backends are RUNTIME only: they are discovered through the service
+             loader, so GUI code never names one - with the single exception of
+             JavaSound below. -->
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>backend-wdm-ks</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>backend-wasapi</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>backend-coreaudio</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <!-- COMPILE scope, unlike its siblings: NativeAppPaths names the JavaSound
+             backend's native-path helper to stage the csjsound provider's DLL for
+             fat-jar runs, which has to happen before the JavaSound service scan.
+             Do NOT also list it in runtime scope - a second declaration of the same
+             artifact wins with its own scope and silently demotes this one, and the
+             module then fails to compile. -->
+        <dependency>
             <groupId>${project.groupId}</groupId>
             <artifactId>backend-javasound</artifactId>
-            <scope>runtime</scope>
-        </dependency-->
-        <!--dependency>
+        </dependency>
+        <dependency>
             <groupId>${project.groupId}</groupId>
             <artifactId>backend-qa40x</artifactId>
-        </dependency-->
+            <scope>runtime</scope>
+        </dependency>
 
         <!-- The wire format.  BenchCards and CalibrationStore read a connected
              server's device and calibration payloads by their field names, so

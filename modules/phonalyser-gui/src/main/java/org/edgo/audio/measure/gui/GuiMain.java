@@ -29,7 +29,6 @@ import java.util.function.DoubleBinaryOperator;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.eclipse.swt.widgets.Display;
-import org.edgo.audio.measure.cli.util.CliAppPaths;
 import org.edgo.audio.measure.common.AppPaths;
 import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.gui.automation.AutomationRunner;
@@ -38,6 +37,7 @@ import org.edgo.audio.measure.gui.helpviewer.HelpViewer;
 import org.edgo.audio.measure.gui.helpviewer.Versions;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.scope.gl.Glfw;
+import org.edgo.audio.measure.gui.util.NativeAppPaths;
 import org.edgo.audio.measure.preferences.BackendKey;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioBackend;
@@ -115,7 +115,7 @@ public final class GuiMain {
         // System.loadLibrary (SWT, JNA) - java.library.path is snapshotted
         // exactly once, at that first load.  No-op on non-Windows and on
         // installed layouts (see CsjsoundNativePath).
-        CliAppPaths.installCsjsoundLibrary();
+        NativeAppPaths.installCsjsoundLibrary();
 
         // Route any worker-thread death through log4j.  Without this, an
         // uncaught exception on a background thread (FFT analyser, scope

@@ -28,18 +28,17 @@
         ├── backend-net                  net client (+ server-api).  The server
         │                                appears in NO scope, tests included: its
         │                                tests mock the far end of the socket
-        └── phonalyser-cli
-             └── phonalyser-gui-core     shared SWT infrastructure
-                  ├── phonalyser-gui     the application (+ server-net, which the
-                  │                      server switch starts in-process)
-                  ├── backend-qa40x-gui  a backend's own UI (+ backend-qa40x)
-                  └── backend-net-gui    the net backend's UI (+ backend-net)
-                       └── phonalyser-app  fat jar + jpackage installer
+        └── phonalyser-gui-core          shared SWT infrastructure
+             ├── phonalyser-gui          the application (+ server-net, which the
+             │                           server switch starts in-process)
+             ├── backend-qa40x-gui       a backend's own UI (+ backend-qa40x)
+             └── backend-net-gui         the net backend's UI (+ backend-net)
+                  └── phonalyser-app     fat jar + jpackage installer
 
   Backends and backend settings panels are discovered at runtime through
   ServiceLoader, so no CODE names a concrete backend and none of the arrows
   above ever points back up.  The dependencies exist only to put the providers
-  on the class path of whoever must offer them: the CLI, the packaged app, and
+  on the class path of whoever must offer them: the GUI, the packaged app, and
   the server that serves them.
 
   Every module lives under modules/; this POM is the only place that spells that
@@ -76,7 +75,7 @@
         <checkstyle.config>${project.basedir}/config/checkstyle/checkstyle.xml</checkstyle.config>
     </properties>
 
-    <!-- One module: the modules/ aggregator, which names the eighteen.  Keeping
+    <!-- One module: the modules/ aggregator, which names the twenty.  Keeping
          the list there rather than here means the directory is a Maven project in
          its own right, so an IDE opened on it (or indexing folder by folder, as
          VS Code's Java support does) discovers them all. -->

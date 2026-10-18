@@ -33,7 +33,7 @@
     <dependencySets>
         <!-- Mirrors the built-in jar-with-dependencies descriptor.  In the
              multi-module build this unpacks every reactor module (core,
-             backends, cli, gui, qa40x-gui) plus the third-party jars. -->
+             backends, gui) plus the third-party jars. -->
         <dependencySet>
             <outputDirectory>/</outputDirectory>
             <useProjectArtifact>true</useProjectArtifact>
