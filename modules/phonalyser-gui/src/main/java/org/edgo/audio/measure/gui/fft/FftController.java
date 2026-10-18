@@ -246,7 +246,8 @@ public final class FftController {
 
     /** Loads a spectrum {@code .fft} file (as written by
      *  {@link #saveSpectrum} - {@code frequency_hz;magnitude_dBV;phase_deg}
-     *  rows under {@code # mode=} / {@code # tone*_hz=} header comments),
+     *  rows, a coherent average's with {@code power_dBV} beside them, under
+     *  {@code # mode=} / {@code # tone*_hz=} header comments),
      *  reconstructs an {@link FftResult} and recomputes its fundamental /
      *  harmonic / THD / SNR metrics (and the IMD products when the file
      *  was captured in IMD mode) from the loaded bins.
@@ -295,7 +296,8 @@ public final class FftController {
                 double f   = Double.parseDouble(p[0].trim());
                 double dbv = Double.parseDouble(p[1].trim());
                 double ph  = (p.length >= 3) ? Double.parseDouble(p[2].trim()) : 0.0;
-                rows.add(new double[]{ f, dbv, ph });
+                double pow = (p.length >= 4) ? Double.parseDouble(p[3].trim()) : Double.NaN;
+                rows.add(new double[]{ f, dbv, ph, pow });
             }
         } catch (NumberFormatException ex) {
             throw new IOException(ex.getMessage(), ex);
@@ -329,6 +331,19 @@ public final class FftController {
         for (int k = 0; k < n; k++) {
             r.amplitudeDbFs[k] = rows.get(k)[1] - dbvOffsetDb;
             r.phaseDeg[k]      = rows.get(k)[2];
+        }
+        // A coherent average's file carries its power average in a fourth
+        // column on every row; the noise readouts stand on it as they did live.
+        boolean power = true;
+        for (double[] row : rows) {
+            power &= !Double.isNaN(row[3]);
+        }
+        if (power) {
+            r.powerAverageDbFs = new double[n];
+            for (int k = 0; k < n; k++) {
+                r.powerAverageDbFs[k] = rows.get(k)[3] - dbvOffsetDb;
+            }
+            r.hasPowerAverage = true;
         }
         // From here the spectrum is measured, not parsed: the analyser bound to
         // it rebuilds the bin phasors from the stored magnitude and phase.
@@ -385,9 +400,10 @@ public final class FftController {
         double fundRefDbFs = (prefs.isFftManualFundEnabled() && manualVrms > 0)
                 ? 20.0 * Math.log10(manualVrms) - analysedDbvOffsetDb()
                 : Double.NaN;
-        // H(N) counted from the 2nd is N - 1 harmonics - the live worker's rule.
+        // H(N) counted from the 2nd is N - 1 harmonics - the live worker's rule,
+        // for the calculated ladder and the THD sum alike.
         new FftAnalyzer(r).applyDistortionSettings(
-                Math.max(9, prefs.getFftCalcMaxHarmonic()),
+                Math.max(9, prefs.getFftCalcMaxHarmonic()) - 1,
                 Math.max(1, prefs.getFftThdMaxHarmonic() - 1),
                 fundRefDbFs,
                 prefs.isFftDistMinEnabled() ? prefs.getFftDistMinHz() : 0,
@@ -405,9 +421,10 @@ public final class FftController {
     }
 
     /** Writes {@code r} as a {@code .fft} spectrum file -
-     *  {@code frequency_hz;magnitude_dBV;phase_deg} rows under provenance
-     *  header comments (capture mode, tones, analysis parameters, applied
-     *  calibrations). */
+     *  {@code frequency_hz;magnitude_dBV;phase_deg} rows, plus
+     *  {@code power_dBV} for a result carrying a power average, under
+     *  provenance header comments (capture mode, tones, analysis parameters,
+     *  applied calibrations). */
     public void saveSpectrum(Path file, FftResult r, boolean imd,
                              double tone1Hz, double tone2Hz) throws IOException {
         try (PrintWriter pw = new PrintWriter(Files.newBufferedWriter(file, StandardCharsets.UTF_8))) {
@@ -462,12 +479,21 @@ public final class FftController {
                 pw.printf("# tone1_hz=%.6f%n", tone1Hz);
                 pw.printf("# tone2_hz=%.6f%n", tone2Hz);
             }
-            pw.println("frequency_hz;magnitude_dBV;phase_deg");
+            // A coherent average carries the power average its noise readouts
+            // stand on; it goes into a fourth column so a re-opened file
+            // reads the same noise.
+            boolean power = r.hasPowerAverage;
+            pw.println(power ? "frequency_hz;magnitude_dBV;phase_deg;power_dBV"
+                             : "frequency_hz;magnitude_dBV;phase_deg");
             for (int k = 0; k < r.amplitudeDbFs.length; k++) {
                 double f   = k * r.freqResolution;
                 double dbv = r.amplitudeDbFs[k] + dbvOffset;
                 double ph  = (r.phaseDeg != null && k < r.phaseDeg.length) ? r.phaseDeg[k] : 0;
-                pw.printf("%.6f;%.6f;%.6f%n", f, dbv, ph);
+                if (power) {
+                    pw.printf("%.6f;%.6f;%.6f;%.6f%n", f, dbv, ph, r.powerAverageDbFs[k] + dbvOffset);
+                } else {
+                    pw.printf("%.6f;%.6f;%.6f%n", f, dbv, ph);
+                }
             }
         }
     }

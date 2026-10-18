@@ -19,6 +19,7 @@
 package org.edgo.audio.measure.gui.fft;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -56,6 +57,9 @@ class FftControllerSpectrumIoTest {
     private static final double FREQ_RES_HZ = 375.0;
     /** Writer prints 6 decimals; allow one ULP of that. */
     private static final double PRINT_EPS = 1e-5;
+    /** How far the synthetic power average stands above the magnitude - any
+     *  offset that tells the two columns apart. */
+    private static final double POWER_ABOVE_MEAN_DB = 12.0;
 
     @TempDir
     Path tmp;
@@ -163,6 +167,39 @@ class FftControllerSpectrumIoTest {
         assertThrows(IOException.class,
                 () -> io().loadSpectrum(numeric.toString()),
                 "unparseable number -> IO error");
+    }
+
+    @Test
+    void aCoherentAveragesPowerAverageRoundTripsInItsOwnColumn() throws IOException {
+        FftResult original = syntheticResult(100);
+        original.powerAverageDbFs = new double[BINS];
+        for (int k = 0; k < BINS; k++) {
+            original.powerAverageDbFs[k] = original.amplitudeDbFs[k] + POWER_ABOVE_MEAN_DB;
+        }
+        original.hasPowerAverage = true;
+        Path file = tmp.resolve("coherent.fft");
+        io().saveSpectrum(file, original, false, Double.NaN, Double.NaN);
+
+        assertTrue(Files.readString(file, StandardCharsets.UTF_8)
+                        .contains("frequency_hz;magnitude_dBV;phase_deg;power_dBV"),
+                "the power column is named in the column header");
+        FftResult r = io().loadSpectrum(file.toString()).result();
+        assertTrue(r.hasPowerAverage, "the loaded result carries the power average");
+        for (int k = 0; k < BINS; k++) {
+            assertEquals(original.powerAverageDbFs[k], r.powerAverageDbFs[k], PRINT_EPS,
+                    "power round-trip at bin " + k);
+        }
+    }
+
+    @Test
+    void aResultWithoutPowerAverageWritesAndReadsNone() throws IOException {
+        Path file = tmp.resolve("single.fft");
+        io().saveSpectrum(file, syntheticResult(100), false, Double.NaN, Double.NaN);
+
+        assertFalse(Files.readString(file, StandardCharsets.UTF_8).contains("power_dBV"),
+                "a single frame's file keeps three columns");
+        assertFalse(io().loadSpectrum(file.toString()).result().hasPowerAverage,
+                "its power is read off the magnitude");
     }
 
     @Test

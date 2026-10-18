@@ -36,8 +36,10 @@ public class FileVersions {
     // truth is the bundled seed resource - the store writer copies it from the
     // seed fresh at write time (Preferences.devicesFormatVersion).
 
-    /** Saved {@code .fft} spectrum files ({@code # format_version=} header). */
-    public final int FFT_SPECTRUM = 1;
+    /** Saved {@code .fft} spectrum files ({@code # format_version=} header).
+     *  2: a coherent average's rows carry its power average as a fourth
+     *  column, {@code power_dBV}. */
+    public final int FFT_SPECTRUM = 2;
 
     /** {@code .frc} filter-calibration files ({@code # format_version=} header).
      *  Reset to 1 for the first release - development-era files carried up to 6. */
