@@ -403,15 +403,6 @@ public final class JavaSoundDeviceManager extends AbstractLocalDeviceManager {
         return name.equalsIgnoreCase(UNKNOWN_VENDOR) ? "" : name;
     }
 
-    public DeviceRef getDeviceByIndex(int index, boolean isOutput) {
-        List<DeviceRef> all = isOutput ? listOutputDevices() : listInputDevices();
-        if (index < 0 || index >= all.size()) {
-            throw new IllegalArgumentException("JavaSound device index out of range: " + index
-                    + " (have " + all.size() + " " + (isOutput ? "output" : "input") + " devices)");
-        }
-        return all.get(index);
-    }
-
     /**
      * Opens a {@link SourceDataLine} for {@code fmt} on the first mixer whose
      * name contains {@code deviceName} (and supports the format), falling back

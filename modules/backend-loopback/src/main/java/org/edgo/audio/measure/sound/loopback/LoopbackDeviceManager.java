@@ -69,14 +69,6 @@ public final class LoopbackDeviceManager extends AbstractLocalDeviceManager {
     }
 
     @Override
-    public DeviceRef getDeviceByIndex(int index, boolean isOutput) {
-        if (index != 0) {
-            throw new IllegalArgumentException("No loopback device at index " + index);
-        }
-        return device;
-    }
-
-    @Override
     public List<AudioFormat> listSupportedFormats(DeviceRef ref, boolean output) {
         if (!(ref instanceof LoopbackDeviceRef)) {
             return List.of();

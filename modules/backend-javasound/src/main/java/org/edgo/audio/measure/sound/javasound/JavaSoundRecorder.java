@@ -38,8 +38,8 @@ import lombok.extern.log4j.Log4j2;
  * Stereo PCM capture via {@code javax.sound.sampled.TargetDataLine} - the
  * cross-platform path used by the {@link AudioBackendType#JAVASOUND}
  * backend.  Mirrors {@link org.edgo.audio.measure.sound.wasapi.WasapiRecorder} / {@link org.edgo.audio.measure.sound.wdmks.WdmksRecorder}'s public
- * surface so the GUI scope view and CLI tools can drive it identically
- * through {@link AudioBackend}.
+ * surface so every caller drives it identically through
+ * {@link AudioBackend}.
  */
 @Log4j2
 public class JavaSoundRecorder extends AbstractPcmCapture {

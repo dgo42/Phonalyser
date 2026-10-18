@@ -565,20 +565,6 @@ public final class NetDeviceManager implements AudioDeviceManager, NetFaultListe
         return listDevices(false);
     }
 
-    /** The device at {@code index} of one direction's list - matched on the
-     *  index the server published, so a device that vanished fails here rather
-     *  than handing back its neighbour. */
-    @Override
-    public DeviceRef getDeviceByIndex(int index, boolean isOutput) {
-        for (DeviceRef ref : listDevices(!isOutput)) {
-            if (ref.index() == index) {
-                return ref;
-            }
-        }
-        throw new IllegalArgumentException("no remote " + (isOutput ? "output" : "input")
-                + " device with index " + index + " on " + remoteBackend);
-    }
-
     /**
      * The formats spec 4.3 inlines with the device, kept from the catalogue.
      * The direction is the REF's - a ref names one direction of one device - so

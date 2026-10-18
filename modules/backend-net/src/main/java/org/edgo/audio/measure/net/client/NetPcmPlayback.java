@@ -56,11 +56,6 @@ public final class NetPcmPlayback implements AudioPlayback {
     }
 
     @Override
-    public void play(SignalGenerator generator, int durationSeconds) {
-        throw new UnsupportedOperationException(NOT_IMPLEMENTED);
-    }
-
-    @Override
     public void play(SignalGenerator generator, AtomicBoolean stopFlag,
             CountDownLatch readyLatch) {
         throw new UnsupportedOperationException(NOT_IMPLEMENTED);

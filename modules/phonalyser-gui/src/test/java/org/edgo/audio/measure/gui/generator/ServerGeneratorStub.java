@@ -602,14 +602,6 @@ public final class ServerGeneratorStub implements AudioDeviceManager, RemoteGene
     }
 
     @Override
-    public DeviceRef getDeviceByIndex(int index, boolean isOutput) {
-        if (index != 0) {
-            throw new IllegalArgumentException("no such device: " + index);
-        }
-        return isOutput ? output : input;
-    }
-
-    @Override
     public List<AudioFormat> listSupportedFormats(DeviceRef device, boolean output) {
         return List.of();
     }

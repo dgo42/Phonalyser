@@ -86,12 +86,6 @@ final class StubPlayback implements AudioPlayback {
     }
 
     @Override
-    public void play(SignalGenerator source, int durationSeconds) {
-        throw new UnsupportedOperationException(
-                "the net server only ever plays continuously");
-    }
-
-    @Override
     public void play(SignalGenerator source, AtomicBoolean stopFlag,
             CountDownLatch readyLatch) {
         generator = source;

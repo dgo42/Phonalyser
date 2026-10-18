@@ -18,16 +18,13 @@
 
 package org.edgo.audio.measure.sound;
 
-import java.util.Arrays;
 import java.util.Locale;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.Consumer;
 
 import javax.sound.sampled.AudioFormat;
 
-import org.edgo.audio.measure.common.StereoSample;
 import org.edgo.audio.measure.enums.Channel;
 
 import lombok.Getter;
@@ -69,11 +66,7 @@ public abstract class AbstractPcmCapture implements AudioCapture {
     protected final AtomicBoolean recording = new AtomicBoolean(false);
 
     @Setter
-    private Consumer<StereoSample[]> sampleListener;
-    @Setter
     private PcmBatchListener pcmBatchListener;
-    @Setter
-    private Consumer<byte[]> rawBytesListener;
     /** Whether {@link #endCapture} has already spoken - the end is said once per
      *  open, however many times a dying device makes the backend notice. */
     private final AtomicBoolean ended = new AtomicBoolean();
@@ -97,7 +90,6 @@ public abstract class AbstractPcmCapture implements AudioCapture {
      *  thread runs the check. */
     private volatile long lastDeliveryNanos;
 
-    private StereoSample[] sampleBuf = new StereoSample[0];
     /** Consume-thread-only scratch for the mono->stereo upmix; null when stereo. */
     private byte[] monoUpmix;
     /** Logged once when a consumer listener faults, so a per-block failure logs
@@ -263,27 +255,10 @@ public abstract class AbstractPcmCapture implements AudioCapture {
             outBytes = stereoBytes;
         }
         try {
-            if (rawBytesListener != null) {
-                rawBytesListener.accept(outBytes == out.length ? out : Arrays.copyOf(out, outBytes));
-            }
-            // Prefer the PCM-bytes listener - it skips the StereoSample[]
-            // alloc/decode entirely (the consumer decodes into reusable float
-            // buffers).  Only one of the two is set in any real configuration;
-            // if both are, the PCM listener wins (the GUI scope view).
+            // The bytes go out undecoded: the consumer decodes them into its
+            // own reusable float buffers (the GUI scope view).
             if (pcmBatchListener != null) {
                 pcmBatchListener.accept(out, outBytes);
-            } else if (sampleListener != null) {
-                int nFrames = outBytes / frameSize;
-                if (sampleBuf.length != nFrames) {
-                    sampleBuf = new StereoSample[nFrames];
-                    for (int i = 0; i < nFrames; i++) sampleBuf[i] = new StereoSample();
-                }
-                for (int f = 0; f < nFrames; f++) {
-                    int offset = f * frameSize;
-                    sampleBuf[f].ch0 = readSample(out, offset);
-                    sampleBuf[f].ch1 = readSample(out, offset + sampleBytes);
-                }
-                sampleListener.accept(sampleBuf);
             }
         } catch (Throwable th) {
             // A listener throwing must not kill the capture/consume thread,

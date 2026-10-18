@@ -18,11 +18,8 @@
 
 package org.edgo.audio.measure.sound;
 
-import java.util.function.Consumer;
-
 import javax.sound.sampled.AudioFormat;
 
-import org.edgo.audio.measure.common.StereoSample;
 import org.edgo.audio.measure.enums.Channel;
 
 /**
@@ -39,9 +36,9 @@ public interface AudioCapture extends AutoCloseable {
      * after the call returns, so the implementation must finish reading
      * before returning and must not retain the array reference.
      *
-     * <p>Replaces the intermediate {@code StereoSample[]} decode for hot
-     * consumers (the scope view) - those convert PCM straight into floats
-     * for the ring buffer, so the StereoSample dance is pure overhead.
+     * <p>The bytes arrive undecoded: a consumer (the scope view) converts the
+     * PCM straight into the floats of its ring buffer, with no intermediate
+     * per-sample objects.
      */
     @FunctionalInterface
     interface PcmBatchListener {
@@ -66,25 +63,17 @@ public interface AudioCapture extends AutoCloseable {
          * block, exactly as it must not in {@link #accept}.
          *
          * <p>Default no-op: a consumer with its own lifetime bound elsewhere
-         * (a bounded CLI record) may ignore it; the ring-buffer feeder must
-         * not.
+         * may ignore it; the ring-buffer feeder must not.
          */
         default void captureEnded(CaptureEndReason reason) { }
     }
 
-    /** Receives decoded stereo samples on the capture thread. */
-    void setSampleListener(Consumer<StereoSample[]> listener);
-
     /**
-     * Direct PCM-bytes path that skips the {@code StereoSample[]} decode.
-     * Preferred over {@link #setSampleListener(Consumer)} for consumers that
-     * convert to {@code float} themselves - avoids one full pass over the
-     * data plus all the per-sample object allocations.
+     * The capture's data path: the PCM bytes as captured, which the consumer
+     * converts to {@code float} itself - one pass over the data and no
+     * per-sample object allocations.
      */
     void setPcmBatchListener(PcmBatchListener listener);
-
-    /** Receives raw little-endian PCM bytes (interleaved L/R) on the capture thread. */
-    void setRawBytesListener(Consumer<byte[]> listener);
 
     void open() throws Exception;
 

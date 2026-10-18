@@ -100,17 +100,6 @@ public final class Qa40xGenerator implements AudioPlayback,
         log.info("QA40x generator opened : {} Hz / 32 bit", sampleRate);
     }
 
-    @Override
-    public void play(SignalGenerator generator, int durationSeconds) {
-        startLane(generator);
-        try {
-            Thread.sleep((long) durationSeconds * 1000L);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
-        stopLane();
-    }
-
     /**
      * {@inheritDoc}
      *

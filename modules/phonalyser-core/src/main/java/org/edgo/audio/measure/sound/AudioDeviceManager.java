@@ -155,10 +155,6 @@ public interface AudioDeviceManager {
         return false;
     }
 
-    /** The device at {@code index} of the input or output list; throws
-     *  {@link IllegalArgumentException} when out of range. */
-    DeviceRef getDeviceByIndex(int index, boolean isOutput);
-
     /** The formats the device reports usable for capture ({@code output} =
      *  {@code false}) or playback ({@code true}); empty for a
      *  {@link DeviceRef} belonging to another backend. */

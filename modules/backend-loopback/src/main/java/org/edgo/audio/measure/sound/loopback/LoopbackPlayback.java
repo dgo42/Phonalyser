@@ -132,17 +132,6 @@ public final class LoopbackPlayback implements AudioPlayback,
     }
 
     @Override
-    public void play(SignalGenerator generator, int durationSeconds) {
-        startLane(generator);
-        try {
-            Thread.sleep((long) durationSeconds * 1000L);
-        } catch (InterruptedException ex) {
-            Thread.currentThread().interrupt();
-        }
-        stopLane();
-    }
-
-    @Override
     public void play(SignalGenerator generator, AtomicBoolean stopFlag, CountDownLatch readyLatch) {
         startLane(generator);
         if (readyLatch != null) {

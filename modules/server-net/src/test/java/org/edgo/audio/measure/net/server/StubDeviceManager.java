@@ -384,11 +384,6 @@ final class StubDeviceManager implements AudioDeviceManager, Qa40xControl {
     }
 
     @Override
-    public DeviceRef getDeviceByIndex(int index, boolean isOutput) {
-        return (isOutput ? listOutputDevices() : listInputDevices()).get(index);
-    }
-
-    @Override
     public List<AudioFormat> listSupportedFormats(DeviceRef device, boolean output) {
         List<AudioFormat> formats = new ArrayList<>();
         int[] depths = output ? new int[] {BITS_24, BITS_32} : new int[] {BITS_24};

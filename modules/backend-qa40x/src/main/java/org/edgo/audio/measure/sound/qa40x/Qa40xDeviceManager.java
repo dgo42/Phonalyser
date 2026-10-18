@@ -370,16 +370,6 @@ public class Qa40xDeviceManager extends AbstractLocalDeviceManager implements Qa
         }
     }
 
-    @Override
-    public DeviceRef getDeviceByIndex(int index, boolean isOutput) {
-        List<DeviceRef> all = listDevices();
-        if (index < 0 || index >= all.size()) {
-            throw new IllegalArgumentException("QA40x device index out of range: " + index
-                    + " (have " + all.size() + " device" + (all.size() == 1 ? "" : "s") + ")");
-        }
-        return all.get(index);
-    }
-
     /**
      * The QA402/QA403 format set - 32-bit, stereo, little-endian, identical for
      * both directions.  The rate list follows the model: 48/96/192&nbsp;kHz on
@@ -726,8 +716,8 @@ public class Qa40xDeviceManager extends AbstractLocalDeviceManager implements Qa
      * <p>The live store object is mutated and saved rather than re-put: it is
      * already in the list, so an add/replace would only move it to the end and
      * churn {@code devices.yaml} on every range change.  {@code saveDevices()} is
-     * a no-op in transient (CLI) mode and on a detached copy, so a headless run
-     * and a test never write the file.
+     * a no-op in transient mode and on a detached copy, so a test never
+     * writes the file.
      */
     private void storeActiveRange(boolean input, int dbv) {
         Preferences prefs = Preferences.instance();
@@ -1251,8 +1241,8 @@ public class Qa40xDeviceManager extends AbstractLocalDeviceManager implements Qa
      * <p>Runs once per session - {@link #ensureOpen()} opens the device (and calls
      * this) only on the first {@link #acquireEngine}, i.e. a user-started capture /
      * playback, so the app is already running.  The persist is guarded by
-     * {@link Preferences#saveDevices()}, a no-op in transient (CLI) mode and on a
-     * detached copy, so a headless run or a test never writes the store - only a
+     * {@link Preferences#saveDevices()}, a no-op in transient mode and on a
+     * detached copy, so a test never writes the store - only a
      * live GUI session records the device's calibration.
      */
     private void refreshDeviceCard() {
@@ -1264,7 +1254,7 @@ public class Qa40xDeviceManager extends AbstractLocalDeviceManager implements Qa
         AudioDeviceProfile card = buildProfile(cardName, inHand.page,
                 prefs.findAudioDeviceProfile(cardName));
         prefs.putAudioDeviceProfile(card);
-        prefs.saveDevices();     // persist the device-read calibration; no-op in CLI / tests
+        prefs.saveDevices();     // persist the device-read calibration; no-op in tests
         inputRangeDbv  = Qa40xProtocol.rangeDbv(card.getInput().getActiveRangeLeft(),  Qa40xProtocol.inputRangeDbvValues(),  DEFAULT_INPUT_DBV);
         outputRangeDbv = Qa40xProtocol.rangeDbv(card.getOutput().getActiveRangeLeft(), Qa40xProtocol.outputRangeDbvValues(), DEFAULT_OUTPUT_DBV);
     }

@@ -201,15 +201,6 @@ public class CoreAudioDeviceManager extends AbstractLocalDeviceManager {
         return out;
     }
 
-    public DeviceRef getDeviceByIndex(int index, boolean isOutput) {
-        List<DeviceRef> all = isOutput ? listOutputDevices() : listInputDevices();
-        if (index < 0 || index >= all.size()) {
-            throw new IllegalArgumentException("CoreAudio device index out of range: " + index
-                    + " (have " + all.size() + " " + (isOutput ? "output" : "input") + " devices)");
-        }
-        return all.get(index);
-    }
-
     /**
      * What the DEVICE declares, read from the CoreAudio HAL - the real (rate,
      * bit width) pairs of its physical stream formats, never a probe and never

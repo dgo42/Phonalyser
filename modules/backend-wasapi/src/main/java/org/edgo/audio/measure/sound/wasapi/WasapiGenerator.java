@@ -44,9 +44,8 @@ import static org.edgo.audio.measure.sound.wasapi.WasapiNative.*;
  * writes them via {@code IAudioRenderClient::GetBuffer / ReleaseBuffer}
  * on every event-handle wake-up.
  *
- * <p>Mirrors {@link WdmksGenerator}'s public surface so the GUI play
- * button and CLI flows drive it identically through
- * {@link AudioBackend}.
+ * <p>Mirrors {@link WdmksGenerator}'s public surface so every caller
+ * drives it identically through {@link AudioBackend}.
  */
 @Log4j2
 public class WasapiGenerator implements AudioPlayback {
@@ -249,29 +248,7 @@ public class WasapiGenerator implements AudioPlayback {
     }
 
     @Override
-    public void play(SignalGenerator generator, int durationSeconds) {
-        AtomicBoolean stop = new AtomicBoolean(false);
-        CountDownLatch ready = new CountDownLatch(1);
-        long totalFrames = (long) sampleRate * durationSeconds;
-        renderLoop(generator, stop, ready, totalFrames);
-    }
-
-    @Override
     public void play(SignalGenerator generator, AtomicBoolean stopFlag, CountDownLatch readyLatch) {
-        renderLoop(generator, stopFlag, readyLatch, 0);
-    }
-
-    /**
-     * Core render loop: prime the buffer, signal {@code readyLatch},
-     * then on each event-handle wake-up fill whatever space the device
-     * has freed via {@code GetBuffer/ReleaseBuffer}.  Stops cleanly when
-     * either {@code stopFlag} is raised or {@code totalFrames} (when
-     * non-zero) have been delivered.
-     */
-    private void renderLoop(SignalGenerator generator,
-                            AtomicBoolean stopFlag,
-                            CountDownLatch readyLatch,
-                            long totalFrames) {
         if (audioClient == null || renderClient == null) {
             throw new IllegalStateException("Call open() before play()");
         }
@@ -280,7 +257,6 @@ public class WasapiGenerator implements AudioPlayback {
         // Reusable scratch - one allocation outside the hot path so the
         // audio thread doesn't churn the young generation every tick.
         byte[] scratch = new byte[bufferFrames * bytesPerFrame];
-        long framesProduced = 0;
 
         // JIT warmup: exercise the encode hot path before the device
         // starts pulling real audio.  See CsjsoundGenerator#warmupJit
@@ -298,7 +274,7 @@ public class WasapiGenerator implements AudioPlayback {
         // Pre-fill the entire hardware buffer once so the device has
         // something to play the instant Start() is called.  Without
         // this, exclusive mode glitches on the very first event tick.
-        framesProduced += fillNextBlock(generator, scratch, bufferFrames);
+        fillNextBlock(generator, scratch, bufferFrames);
         int hr = callHR(audioClient, VT_AC_START);
         if (hr != S_OK) {
             throw new IllegalStateException(
@@ -332,7 +308,6 @@ public class WasapiGenerator implements AudioPlayback {
             long ticksSinceLog        = 0;
             final long LOG_INTERVAL_NANOS = 5_000_000_000L;  // every 5 s
             while (!stopFlag.get()) {
-                if (totalFrames > 0 && framesProduced >= totalFrames) break;
                 int waitRc = Kernel32.INSTANCE.WaitForSingleObject(eventHandle, 200);
                 if (waitRc != WAIT_OBJECT_0) {
                     // A timeout must still ASK the device.  WASAPI stops
@@ -378,13 +353,8 @@ public class WasapiGenerator implements AudioPlayback {
                 if (avail > 0 && avail < bufferFrames) partialFillCount++;
                 if (avail <= 0) continue;
 
-                int frames = avail;
-                if (totalFrames > 0) {
-                    long remaining = totalFrames - framesProduced;
-                    if (remaining < frames) frames = (int) remaining;
-                }
                 long fillStart = System.nanoTime();
-                framesProduced += fillNextBlock(generator, scratch, frames);
+                fillNextBlock(generator, scratch, avail);
                 long fillNanos = System.nanoTime() - fillStart;
                 if (fillNanos > fillBudgetNanos) {
                     slowFillCount++;
@@ -420,13 +390,6 @@ public class WasapiGenerator implements AudioPlayback {
     }
 
     /**
-     * Fills {@code frames} of audio into a WASAPI render-side buffer
-     * (acquired with {@code GetBuffer}, released with
-     * {@code ReleaseBuffer}) using a native scratch {@link Memory} as
-     * staging.  Returns the frame count actually written so the caller
-     * can advance its totals.
-     */
-    /**
      * Pre-runs {@link #encodeIntoScratch} for ~500 ms so C2 finishes
      * compiling (and any speculation-driven deopts settle) before the
      * device starts pulling real audio.  Uses the same scratch buffer
@@ -444,12 +407,19 @@ public class WasapiGenerator implements AudioPlayback {
                  iterations, iterations * bufferFrames);
     }
 
-    private int fillNextBlock(SignalGenerator gen, byte[] scratch, int frames) {
+    /**
+     * Fills {@code frames} of audio into a WASAPI render-side buffer
+     * (acquired with {@code GetBuffer}, released with
+     * {@code ReleaseBuffer}): encoded into the reusable {@code scratch}
+     * array, then copied into the mapped buffer - widened per sample when
+     * the device container is wider than the encode.
+     */
+    private void fillNextBlock(SignalGenerator gen, byte[] scratch, int frames) {
         PointerByReference ppBuf = new PointerByReference();
         int hr = callHR(renderClient, VT_RC_GET_BUFFER, frames, ppBuf);
         if (hr != S_OK || ppBuf.getValue() == null) {
             log.warn("IAudioRenderClient.GetBuffer: 0x{}", Integer.toHexString(hr));
-            return 0;
+            return;
         }
         Pointer dst = ppBuf.getValue();
         encodeIntoScratch(gen, scratch, frames);
@@ -472,7 +442,6 @@ public class WasapiGenerator implements AudioPlayback {
             dst.write(0, containerScratch, 0, frames * containerBytesPerFrame);
         }
         callHR(renderClient, VT_RC_RELEASE_BUFFER, frames, 0);
-        return frames;
     }
 
     /**

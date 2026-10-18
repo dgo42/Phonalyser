@@ -149,15 +149,6 @@ public class WdmksDeviceManager extends AbstractLocalDeviceManager {
         return out;
     }
 
-    public DeviceRef getDeviceByIndex(int index, boolean isOutput) {
-        List<DeviceRef> all = isOutput ? listOutputDevices() : listInputDevices();
-        if (index < 0 || index >= all.size()) {
-            throw new IllegalArgumentException("WDM-KS device index out of range: " + index
-                    + " (have " + all.size() + " " + (isOutput ? "output" : "input") + " devices)");
-        }
-        return all.get(index);
-    }
-
     /**
      * Probes a small set of standard rates × bit depths and returns the
      * AudioFormats that PortAudio reports as supported on the given device.

@@ -52,9 +52,8 @@ import static org.edgo.audio.measure.sound.wasapi.WasapiNative.*;
  * {@code WaitForSingleObject} past the event deadline, however expensive a
  * consumer gets.
  *
- * <p>Mirrors {@link WdmksRecorder}'s public surface so the GUI scope
- * view and CLI tools can drive it identically through
- * {@link AudioBackend}.
+ * <p>Mirrors {@link WdmksRecorder}'s public surface so every caller
+ * drives it identically through {@link AudioBackend}.
  */
 @Log4j2
 public class WasapiRecorder extends AbstractPcmCapture {

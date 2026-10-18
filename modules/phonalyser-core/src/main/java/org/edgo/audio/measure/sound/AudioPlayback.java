@@ -56,9 +56,6 @@ public interface AudioPlayback extends AutoCloseable {
                 + " has no write of its own to time a pulse on");
     }
 
-    /** Plays a fixed duration, then drains and stops. */
-    void play(SignalGenerator generator, int durationSeconds);
-
     /**
      * Plays continuously until {@code stopFlag} is raised. {@code readyLatch}
      * is counted down after the hardware buffer is fully pre-filled.

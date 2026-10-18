@@ -25,8 +25,9 @@ import org.edgo.audio.measure.sound.AudioDeviceManagerProvider;
 /**
  * Registers {@link DyingLaneStub} in this test class path's LOCAL slot.
  *
- * <p>Unlike the net carrier's stub, this claim is CONTESTED: the CLI module puts
- * the real JavaSound backend here too, and the winner is whichever the service
+ * <p>Unlike the net carrier's stub, this claim is CONTESTED: this module depends
+ * on backend-javasound, so the real JavaSound backend is here too, and the
+ * winner is whichever the service
  * loader reaches first (test classes precede the dependency jars).  The tests
  * therefore assert the manager they were handed before they assert anything
  * about it, so a class-path order that ever changed fails as itself instead of

@@ -63,8 +63,9 @@ import lombok.Setter;
  * whole point: the net slot's manager is a remote generator, and the controller
  * COMMANDS those instead of rendering into them - so {@code ServerGeneratorStub},
  * the sibling this would otherwise extend, refuses to open a playback at all.
- * The claim is contested (the CLI module puts the real JavaSound backend on this
- * test class path), so the tests assert which manager they actually got before
+ * The claim is contested (this module depends on backend-javasound, so the real
+ * JavaSound backend is on this test class path too), so the tests assert which
+ * manager they actually got before
  * they assert anything else.
  */
 public final class DyingLaneStub implements AudioDeviceManager {
@@ -186,14 +187,6 @@ public final class DyingLaneStub implements AudioDeviceManager {
     }
 
     @Override
-    public DeviceRef getDeviceByIndex(int index, boolean isOutput) {
-        if (index != 0) {
-            throw new IllegalArgumentException("no such device: " + index);
-        }
-        return isOutput ? output : input;
-    }
-
-    @Override
     public List<AudioFormat> listSupportedFormats(DeviceRef device, boolean output) {
         return List.of();
     }
@@ -231,11 +224,6 @@ public final class DyingLaneStub implements AudioDeviceManager {
         @Override
         public void open() {
             // Nothing to open - the failure under test is not an open failure.
-        }
-
-        @Override
-        public void play(SignalGenerator generator, int durationSeconds) {
-            throw new UnsupportedOperationException("the GUI never plays a fixed duration");
         }
 
         @Override

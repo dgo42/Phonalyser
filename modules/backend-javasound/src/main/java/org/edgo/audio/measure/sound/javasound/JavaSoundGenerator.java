@@ -179,24 +179,6 @@ public class JavaSoundGenerator implements AudioPlayback {
     }
 
     @Override
-    public void play(SignalGenerator generator, int durationSeconds) {
-        byte[] buf           = new byte[BUFFER_FRAMES * bytesPerFrame];
-        long   totalFrames   = (long) sampleRate * durationSeconds;
-        long   framesWritten = 0;
-        line.start();
-        log.info("JavaSound playback started ({} s).", durationSeconds);
-        while (framesWritten < totalFrames) {
-            int frames = (int) Math.min(BUFFER_FRAMES, totalFrames - framesWritten);
-            fillBuffer(generator, buf, frames);
-            line.write(buf, 0, frames * bytesPerFrame);
-            framesWritten += frames;
-        }
-        line.drain();
-        line.stop();
-        log.info("JavaSound playback finished.");
-    }
-
-    @Override
     public void play(SignalGenerator generator, AtomicBoolean stopFlag, CountDownLatch readyLatch) {
         byte[] buf            = new byte[BUFFER_FRAMES * bytesPerFrame];
         int    hwFrames       = line.getBufferSize() / bytesPerFrame;

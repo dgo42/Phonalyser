@@ -38,10 +38,10 @@ import org.edgo.audio.measure.preferences.Preferences;
 import lombok.extern.log4j.Log4j2;
 
 /**
- * Process-wide audio backend selection and the dispatch point used by
- * {@code Main}.  Singleton - access via {@link #instance()}.  Set the
- * active backend with {@link #setActive}; the CLI resolves it from
- * {@code --backend wdmks|wasapi} and the default comes from the host OS.
+ * Process-wide audio backend selection and the dispatch point for every
+ * stream open.  Singleton - access via {@link #instance()}.  Set the
+ * active backend with {@link #setActive}; the startup restores the saved
+ * one and the default comes from the host OS.
  *
  * <p>All discovery and stream-open calls below dispatch to the active
  * backend, so the rest of the code can stay backend-agnostic by
@@ -210,8 +210,7 @@ public final class AudioBackend {
         }
     }
 
-    /** A LOCAL selection by bare type - the CLI's and the startup restore's
-     *  form.  A dual-level carrier is refused by {@link BackendKey}: a remote
+    /** A LOCAL selection by bare type - the startup restore's form.  A dual-level carrier is refused by {@link BackendKey}: a remote
      *  bench is activated by its full key, never by the carrier alone. */
     public void setActive(AudioBackendType type) {
         setActive(BackendKey.of(type));
@@ -330,10 +329,6 @@ public final class AudioBackend {
         return null;
     }
 
-    public DeviceRef getDeviceByIndex(int index, boolean isOutput) {
-        return activeManager().getDeviceByIndex(index, isOutput);
-    }
-
     // -------------------------------------------------------------------------
     // Calibration - where a measured full scale goes
     // -------------------------------------------------------------------------
@@ -426,8 +421,8 @@ public final class AudioBackend {
     }
 
     /** The calibration in force for an EXPLICIT device - one a caller chose
-     *  itself rather than the preferences' active one (the CLI's device flags)
-     *  - read through the manager of the backend it is on, with
+     *  itself rather than the preferences' active one - read through the
+     *  manager of the backend it is on, with
      *  {@link DeviceCalibration#DEFAULT} for an uncalibrated device. */
     public DeviceCalibration calibrationOrDefault(DeviceRef device, boolean input) {
         DeviceCalibration cal = manager(device.carrier()).calibration(device, input);
@@ -462,14 +457,6 @@ public final class AudioBackend {
         DeviceRef active = activeDevice(input);
         return active != null && active.carrier() == device.carrier()
                 && active.name().equals(device.name());
-    }
-
-    public List<AudioFormat> listSupportedInputFormats(DeviceRef device) {
-        return manager(device.carrier()).listSupportedFormats(device, false);
-    }
-
-    public List<AudioFormat> listSupportedOutputFormats(DeviceRef device) {
-        return manager(device.carrier()).listSupportedFormats(device, true);
     }
 
     // -------------------------------------------------------------------------
@@ -517,8 +504,8 @@ public final class AudioBackend {
     /** Opens {@code device} at the rate and depth the active backend's
      *  preferences carry - the device's format IS the preferences, so there is
      *  nothing for a caller to pass beside the handle.  A path that must open
-     *  at an EXPLICIT rate (the net server honouring a wire request, the CLI
-     *  honouring an argument, file playback at the file's own rate) goes to
+     *  at an EXPLICIT rate (the net server honouring a wire request, file
+     *  playback at the file's own rate) goes to
      *  the {@link AudioDeviceManager} SPI: {@code manager(device.backend())}
      *  for capture, {@link #playbackManager} for playback. */
     public AudioCapture openCapture(DeviceRef device) {
