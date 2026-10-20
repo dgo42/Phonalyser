@@ -604,16 +604,22 @@ public final class FftPane extends AbstractPane {
         // No result yet - assume a typical 384 kHz capture and the
         // configured FFT length.  Worst case the user sees the bin-size
         // lower bound jump once after the first analysis publishes.
-        int sr = 384_000;
-        int fftLen = Math.max(8, Preferences.instance().getFftLength());
+        Preferences prefs = Preferences.instance();
+        int sr = prefs.current().getInputSampleRate();
+        int fftLen = Math.max(8, prefs.getFftLength());
         return (double) sr / fftLen;
     }
 
     /** Nyquist upper bound on the visible freq range. */
     private double currentNyquist() {
         FftResult r = view.getLastResult();
-        if (r != null) return r.sampleRate / 2.0;
-        return 192_000;
+        double sr = 0;
+        if (r != null) {
+            sr = r.sampleRate / 2.0;
+        } else {
+            sr = Preferences.instance().current().getInputSampleRate();
+        }
+        return sr;
     }
 
     /** Clamps the persisted freq + mag window to the current hardware

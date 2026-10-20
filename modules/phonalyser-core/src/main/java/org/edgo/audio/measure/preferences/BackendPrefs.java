@@ -31,9 +31,9 @@ import lombok.Setter;
 public class BackendPrefs {
     private String inputDeviceName;
     private String outputDeviceName;
-    private int    inputSampleRate  = 384000;
+    private int    inputSampleRate  = 48000;
     private int    inputBitDepth    = 24;
-    private int    outputSampleRate = 384000;
+    private int    outputSampleRate = 48000;
     private int    outputBitDepth   = 24;
 
     /** Copies all fields from {@code src} into this instance. */
