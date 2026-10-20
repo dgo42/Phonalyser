@@ -41,7 +41,6 @@ import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.FilterResponse;
 import org.edgo.audio.measure.enums.FilterType;
 import org.edgo.audio.measure.enums.UnevenMode;
-import org.edgo.audio.measure.fft.MathUtil;
 import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.common.AbstractFreqDomainView;
 import org.edgo.audio.measure.gui.common.AbstractMeasurementView.ColorRole;
@@ -102,6 +101,8 @@ public final class FreqRespView extends AbstractFreqDomainView {
      *  The banners are transparent but still capture clicks across their full
      *  width, so they must never extend left over the L/R/phase/max buttons. */
     private static final int BANNER_BTN_GAP  = 8;
+    /** Half-width of the mains notch around each harmonic, in Hz. */
+    private static final double MAINS_NOTCH_HALF_WIDTH_HZ = 2.0;
 
     // --- Colours -------------------------------------------------------------
     // All FreqResp palette colours live in the AbstractMeasurementView
@@ -667,39 +668,17 @@ public final class FreqRespView extends AbstractFreqDomainView {
             }
         }
         if (wantNotch) {
-            // Half-width scales with the deconvolution's FFT length so the
-            // notch always spans a fixed number of bin-widths regardless
-            // of sweep duration / sample rate.  Formula per spec:
-            //   halfWidth = 3 · fftSize / sampleRate
-            // - i.e. for the typical 48 kHz / 1.1 s capture (M ≈ 131 072
-            // bins, ~0.37 Hz/bin) the notch covers ±8 Hz around each
-            // harmonic.
-            int    fftSize     = deconvFftSize(raw);
-            double halfWidthHz = 1.2 * (double) raw.getSampleRate() / fftSize;
+            // +-2 Hz around each harmonic, rounded up to whole bins of the
+            // measurement's FFT (sampleRate / fftSize): a band narrower than
+            // one bin would cover no point of the bin-aligned trace.
+            double binHz       = (double) raw.getSampleRate() / raw.getFftSize();
+            double halfWidthHz = Math.ceil(MAINS_NOTCH_HALF_WIDTH_HZ / binHz) * binHz;
             applyMainsNotches(freqs, outMag, outPhase,
                     prefs.getFreqRespNotchBaseHz(), raw.getSampleRate(), halfWidthHz);
         }
-        return new FreqRespResult(raw.getChannel(), raw.getSampleRate(),
+        return new FreqRespResult(raw.getChannel(), raw.getSampleRate(), raw.getFftSize(),
                 freqs, outMag, outPhase, raw.getSweepParams(),
                 raw.getSourceFilePath(), true);
-    }
-
-    /** Recovers the FFT length the deconvolution used for this measurement
-     *  so the notch half-width can scale with it.  Mirrors the analyzer's
-     *  capture-length math: lead-in + sweep + ½-second tail, rounded up
-     *  to the next power of two.  Falls back to {@code nextPow2(2 · sr)}
-     *  when sweep params are missing - e.g. on a result loaded from disk. */
-    private int deconvFftSize(FreqRespResult raw) {
-        int sr = raw.getSampleRate();
-        FreqRespSweepParams p = raw.getSweepParams();
-        if (p == null || p.getDurationSec() <= 0.0) {
-            return MathUtil.nextPow2(Math.max(1, 2 * sr));
-        }
-        long total = (long) Math.round(p.getLeadInSec()   * sr)
-                   + (long) Math.round(p.getDurationSec() * sr)
-                   + sr / 2;
-        if (total <= 0 || total > Integer.MAX_VALUE / 2) return 1 << 17;
-        return MathUtil.nextPow2((int) total);
     }
 
     /** Spectral notch: walks the harmonics of {@code baseHz} (50 or 60 Hz)

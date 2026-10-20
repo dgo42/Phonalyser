@@ -66,6 +66,9 @@ public final class FreqRespAnalyzerConfig {
     /** Number of linearly-spaced output points emitted by the deconvolution.
      *  Step size = {@code (stopHz - startHz) / (sweepPoints - 1)}. */
     private final int sweepPoints;
+    /** Deconvolution FFT length (power of 2) - the FFT-size setting the sweep
+     *  duration is derived from; the result carries it. */
+    private final int fftSize;
     /** Sweep duration in seconds, excluding lead-in. */
     private final double durationSec;
     /** Silence before the chirp, in seconds: the fixed

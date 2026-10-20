@@ -249,11 +249,11 @@ public final class FreqRespAnalyzer {
         // The result carries the CAPTURE rate: it is the measurement's own
         // Nyquist, the one every consumer draws and saves the trace against.
         FreqRespResult left  = new FreqRespResult(
-                Channel.L, cfg.getCaptureRateHz(),
+                Channel.L, cfg.getCaptureRateHz(), cfg.getFftSize(),
                 calL.freqs, calL.magLin, calL.phaseRad,
                 params, null, false);
         FreqRespResult right = new FreqRespResult(
-                Channel.R, cfg.getCaptureRateHz(),
+                Channel.R, cfg.getCaptureRateHz(), cfg.getFftSize(),
                 calR.freqs, calR.magLin, calR.phaseRad,
                 params, null, false);
         return new StereoFreqRespResult(left, right, rawPeakLin);

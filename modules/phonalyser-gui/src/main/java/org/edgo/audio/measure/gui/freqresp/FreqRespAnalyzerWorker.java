@@ -240,6 +240,7 @@ public final class FreqRespAnalyzerWorker {
                 .startHz(prefs.getFreqRespStartHz())
                 .stopHz(prefs.getFreqRespStopHz())
                 .sweepPoints(prefs.getFreqRespSweepPoints())
+                .fftSize(prefs.getFreqRespFftSize())
                 .durationSec(prefs.getFreqRespDurationSec())
                 .leadInSec(leadInSec)
                 .amplitudeVrms(sweepAmplitudeVrms)

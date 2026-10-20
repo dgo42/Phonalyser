@@ -44,6 +44,11 @@ public final class FreqRespResult {
     /** Sample rate at which the sweep was captured (Hz). */
     private final int sampleRate;
 
+    /** FFT length the deconvolution ran with (power of 2) - the bin spacing
+     *  is {@code sampleRate / fftSize}.  0 for a result loaded from a file,
+     *  which does not record it. */
+    private final int fftSize;
+
     /** Log-spaced frequency points where the response was evaluated, in Hz,
      *  strictly ascending.  All three arrays ({@link #freqs}, {@link #magLin},
      *  {@link #phaseRad}) share this length. */

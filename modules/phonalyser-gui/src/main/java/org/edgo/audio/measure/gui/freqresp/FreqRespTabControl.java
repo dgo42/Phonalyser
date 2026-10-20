@@ -1926,11 +1926,12 @@ public final class FreqRespTabControl extends AbstractCalibrationTabControl<Freq
             // still guards those).
             int fileSr = readSampleRateHz(picked);
             int sr = fileSr > 0 ? fileSr : prefs.current().getInputSampleRate();
+            // The file does not record the FFT size.
             view.setLeftResult(new FreqRespResult(
-                    Channel.L, sr, cL.freqs, cL.magLin, cL.phaseRad,
+                    Channel.L, sr, 0, cL.freqs, cL.magLin, cL.phaseRad,
                     params, picked, true));
             view.setRightResult(new FreqRespResult(
-                    Channel.R, sr, cR.freqs, cR.magLin, cR.phaseRad,
+                    Channel.R, sr, 0, cR.freqs, cR.magLin, cR.phaseRad,
                     params, picked, true));
             view.refreshFromCurves();
             view.setSourceFilePath(picked);

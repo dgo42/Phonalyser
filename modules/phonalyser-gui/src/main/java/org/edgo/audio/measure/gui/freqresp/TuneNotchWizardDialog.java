@@ -727,7 +727,7 @@ public final class TuneNotchWizardDialog {
                 // Hand the deconvolution to the worker and immediately loop back;
                 // it overlaps the continuous capture.
                 deconvExecutor.submit(() -> deconvolveAndPublish(
-                        window, sweepRef, fadeSamples, freqs, captureRate,
+                        window, sweepRef, fadeSamples, freqs, captureRate, prefs.getFreqRespFftSize(),
                         startHz, stopHz, ampVrms, adcFsVrmsLeft, adcFsVrmsRight, ditherBits, grabMs));
 
                 // Spread the percentage across the loop period (progress toward
@@ -804,7 +804,7 @@ public final class TuneNotchWizardDialog {
      *  phase-invariant so its alignment to the sweep-cycle start doesn't
      *  matter. */
     private void deconvolveAndPublish(StereoSamples window, double[] sweepRef, int fade,
-                                      double[] freqs, int captureRate,
+                                      double[] freqs, int captureRate, int fftSize,
                                       double startHz, double stopHz,
                                       double ampVrms, double adcFsVrmsLeft, double adcFsVrmsRight,
                                       int ditherBits, long grabMs) {
@@ -839,10 +839,10 @@ public final class TuneNotchWizardDialog {
                     SWEEP_DURATION_SEC, SWEEP_LEAD_IN_SEC, ampVrms, ditherBits);
             FreqRespResult left = new FreqRespResult(
                     Channel.L,
-                    captureRate, calL.freqs, calL.magLin, calL.phaseRad, params, null, false);
+                    captureRate, fftSize, calL.freqs, calL.magLin, calL.phaseRad, params, null, false);
             FreqRespResult right = new FreqRespResult(
                     Channel.R,
-                    captureRate, calR.freqs, calR.magLin, calR.phaseRad, params, null, false);
+                    captureRate, fftSize, calR.freqs, calR.magLin, calR.phaseRad, params, null, false);
             if (!running) return;
             GuiUtil.marshal(() -> onSweepResult(left, right));
         } catch (Exception ex) {
