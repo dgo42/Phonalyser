@@ -35,6 +35,7 @@ import javax.sound.sampled.SourceDataLine;
 import javax.sound.sampled.TargetDataLine;
 
 import org.edgo.audio.measure.common.Closeables;
+import org.edgo.audio.measure.common.Constants;
 import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.enums.DeviceFailureReason;
 import org.edgo.audio.measure.sound.AbstractLocalDeviceManager;
@@ -113,16 +114,6 @@ public final class JavaSoundDeviceManager extends AbstractLocalDeviceManager {
             return displayName();
         }
     }
-
-    /** Playback buffer scales with the sample rate - {@value #BASE_BUFFER_FRAMES}
-     *  frames per {@value #BASE_SAMPLE_RATE} Hz (so 8192 @ 768 kHz, 16384 @
-     *  1536 kHz) - keeping the underrun margin constant in TIME (a fixed frame
-     *  count would halve it each time the rate doubles: the ~108 µs dropouts seen
-     *  on a scope at 768 kHz).  It is also the floor for rates at/below the base.
-     *  Derived from the line format's sample rate, recomputed on each open so it
-     *  tracks the bidi-bound output-rate changes. */
-    /*private static final int BASE_BUFFER_FRAMES = 8192;
-    private static final int BASE_SAMPLE_RATE   = 384000;*/
 
     /**
      * Cached probe results per mixer name.  Probing actually opens lines
@@ -444,15 +435,9 @@ public final class JavaSoundDeviceManager extends AbstractLocalDeviceManager {
         } else {
             line.open(fmt);
         }
-        /*int bufferFrames = Math.max(BASE_BUFFER_FRAMES,
-                (int) Math.round(fmt.getSampleRate() * (double) BASE_BUFFER_FRAMES / BASE_SAMPLE_RATE));
-        line.open(fmt, bufferFrames * fmt.getFrameSize());*/
         if (log.isInfoEnabled()) {
             log.info("JavaSound output line opened: format={}, mixer={}",
                     fmt, chosen != null ? chosen.getName() : "<JavaSound default>");
-            /*log.info("JavaSound output line opened: format={}, mixer={}, buffer={} frames ({} ms)",
-                    fmt, chosen != null ? chosen.getName() : "<JavaSound default>",
-                    bufferFrames, bufferFrames * 1000L / (long) fmt.getSampleRate());*/
         }
         if (chosen != null) {
             // The card's own volumes are hardware gain INSIDE the calibrated
@@ -633,12 +618,9 @@ public final class JavaSoundDeviceManager extends AbstractLocalDeviceManager {
             return probeFormatsLinux(d, m, output);
         }
 
-        int[] rates  = {8000, 11025, 16000, 22050, 44100, 48000, 88200,
-                        96000, 176400, 192000, 352800, 384000, 705600, 768000};
-        int[] depths = {16, 24, 32};
         List<AudioFormat> result = new ArrayList<>();
-        for (int rate : rates) {
-            for (int bits : depths) {
+        for (int rate : Constants.SAMPLE_RATES_HZ) {
+            for (int bits : Constants.BIT_DEPTHS) {
                 AudioFormat fmt = buildFormat(rate, bits);
                 boolean ok = canOpen(m, cls, fmt);
                 if (!ok && !output) {

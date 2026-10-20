@@ -61,6 +61,7 @@ import java.util.regex.Pattern;
 
 import javax.sound.sampled.AudioFormat;
 
+import org.edgo.audio.measure.common.Constants;
 import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.enums.DeviceFailureReason;
 import org.edgo.audio.measure.sound.AbstractLocalDeviceManager;
@@ -299,15 +300,12 @@ public class WasapiDeviceManager extends AbstractLocalDeviceManager {
 
     private List<AudioFormat> probeFormats(WasapiDeviceRef d) {
         List<AudioFormat> result = new ArrayList<>();
-        int[] rates  = {8000, 11025, 16000, 22050, 44100, 48000, 88200, 
-                        96000, 176400, 192000, 352800, 384000, 705600, 768000};
-        int[] depths = {16, 24, 32};
 
         Pointer dev = openDevice(d.endpointId());
         if (dev == null) return result;
         try {
-            for (int rate : rates) {
-                for (int bits : depths) {
+            for (int rate : Constants.SAMPLE_RATES_HZ) {
+                for (int bits : Constants.BIT_DEPTHS) {
                     // The reported depth is the VALID bits - the exact
                     // capability.  24 is genuinely 24 whether the device takes
                     // it 3-byte packed or only inside a 32-bit container (the

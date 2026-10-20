@@ -27,6 +27,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import javax.sound.sampled.AudioFormat;
 
+import org.edgo.audio.measure.common.Constants;
 import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.enums.DeviceFailureReason;
 import org.edgo.audio.measure.sound.AbstractLocalDeviceManager;
@@ -183,9 +184,6 @@ public class WdmksDeviceManager extends AbstractLocalDeviceManager {
 
     private List<AudioFormat> probeFormats(WdmksDeviceRef d, boolean output) {
         List<AudioFormat> result = new ArrayList<>();
-        int[] rates  = {8000, 11025, 16000, 22050, 44100, 48000, 88200, 
-                        96000, 176400, 192000, 352800, 384000, 705600, 768000};
-        int[] depths = {16, 24, 32};
 
         // Probe inputs at the device's real channel count (a mono input can't
         // open as 2 channels); the recorder upmixes mono to the stereo
@@ -197,8 +195,8 @@ public class WdmksDeviceManager extends AbstractLocalDeviceManager {
         params.suggestedLatency          = 0.0;
         params.hostApiSpecificStreamInfo = null;
 
-        for (int rate : rates) {
-            for (int bits : depths) {
+        for (int rate : Constants.SAMPLE_RATES_HZ) {
+            for (int bits : Constants.BIT_DEPTHS) {
                 params.sampleFormat = PortAudio.paSampleFormatFor(bits);
                 params.write();
                 int rc = output

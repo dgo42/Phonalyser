@@ -41,6 +41,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import org.edgo.audio.measure.common.Constants;
+
 /**
  * Reads {@code /proc/asound} to discover what each detected sound card's
  * hardware actually supports - the sample rates and bit depths of the silicon,
@@ -161,10 +163,6 @@ public final class ProcAsound {
     private static final String  HW_RATE_PREFIX   = "RATE:";
     private static final Pattern HW_RATE_RANGE    = Pattern.compile("\\[(\\d+)\\s+(\\d+)\\]");
     private static final Pattern HW_RATE_VALUE    = Pattern.compile("(\\d+)");
-    /** The ladder a continuous {@code RATE: [min max]} range is sampled on -
-     *  the same candidates every open-probing backend walks. */
-    private static final int[] HW_PROBE_RATES = {8000, 11025, 16000, 22050, 32000, 44100,
-            48000, 88200, 96000, 176400, 192000, 352800, 384000, 705600, 768000};
     /** How long the dump tool may take before it is killed. */
     private static final int HW_PARAMS_TIMEOUT_SECONDS = 5;
 
@@ -492,7 +490,9 @@ public final class ProcAsound {
                 if (range.find()) {
                     int min = Integer.parseInt(range.group(1));
                     int max = Integer.parseInt(range.group(2));
-                    for (int rate : HW_PROBE_RATES) {
+                    // A continuous range is sampled on the same ladder every
+                    // open-probing backend walks.
+                    for (int rate : Constants.SAMPLE_RATES_HZ) {
                         if (rate >= min && rate <= max) {
                             rates.add(rate);
                         }

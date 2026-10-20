@@ -23,6 +23,7 @@ import java.util.List;
 
 import javax.sound.sampled.AudioFormat;
 
+import org.edgo.audio.measure.common.Constants;
 import org.edgo.audio.measure.sound.AbstractLocalDeviceManager;
 import org.edgo.audio.measure.sound.AudioCapture;
 import org.edgo.audio.measure.sound.AudioPlayback;
@@ -40,13 +41,6 @@ import org.edgo.audio.measure.sound.DeviceRef;
  */
 public final class LoopbackDeviceManager extends AbstractLocalDeviceManager {
 
-    /** The standard sample-rate ladder, 8 k to 768 k.  Both directions offer
-     *  the same list - the loop has ONE clock, so an input and an output rate
-     *  that differ cannot exist here. */
-    private static final int[] SAMPLE_RATES = {
-        8000, 11025, 16000, 22050, 32000, 44100, 48000, 88200, 96000,
-        176400, 192000, 352800, 384000, 705600, 768000
-    };
     /** 20 bits is a real card format (right-aligned in a 3-byte container),
      *  not a rounding of 24. */
     private static final int[] BIT_DEPTHS = { 16, 20, 24, 32 };
@@ -73,8 +67,10 @@ public final class LoopbackDeviceManager extends AbstractLocalDeviceManager {
         if (!(ref instanceof LoopbackDeviceRef)) {
             return List.of();
         }
-        List<AudioFormat> formats = new ArrayList<>(SAMPLE_RATES.length * BIT_DEPTHS.length);
-        for (int rate : SAMPLE_RATES) {
+        // Both directions offer the standard ladder - the loop has ONE clock, so
+        // an input and an output rate that differ cannot exist here.
+        List<AudioFormat> formats = new ArrayList<>(Constants.SAMPLE_RATES_HZ.length * BIT_DEPTHS.length);
+        for (int rate : Constants.SAMPLE_RATES_HZ) {
             for (int depth : BIT_DEPTHS) {
                 int frameSize = ((depth + 7) / 8) * CHANNELS;
                 formats.add(new AudioFormat(AudioFormat.Encoding.PCM_SIGNED,

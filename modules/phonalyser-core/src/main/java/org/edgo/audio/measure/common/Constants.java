@@ -54,4 +54,16 @@ public class Constants {
      *  quantity it is stated against (a frequency's ppm into hertz, times the
      *  frequency). */
     public final double PPM = 1e-6;
+
+    /** The standard sample-rate ladder, 8 kHz to 768 kHz: the candidates every
+     *  format probe walks, and the rate combos' fallback when a device reports
+     *  none. */
+    public final int[] SAMPLE_RATES_HZ = {
+            8000, 11025, 16000, 22050, 32000, 44100, 48000, 88200,
+            96000, 176400, 192000, 352800, 384000, 705600, 768000
+    };
+
+    /** The standard bit depths: the candidates every format probe walks, and
+     *  the depth combos' fallback when a device reports none. */
+    public final int[] BIT_DEPTHS = {16, 24, 32};
 }

@@ -120,12 +120,6 @@ import java.util.function.Supplier;
 @Log4j2
 public final class PreferencesDialog {
 
-    private static final int[] DEFAULT_SAMPLE_RATES = {
-            8000, 11025, 16000, 22050, 44100, 48000, 88200, 
-            96000, 176400, 192000, 352800, 384000, 705600, 768000
-    };
-    private static final int[] DEFAULT_BIT_DEPTHS = {16, 24, 32};
-
     /** Factory-default ADC full-scale RMS voltage, used for new created card until the user calibrates. */
     private static final double DEFAULT_ADC_FS_VRMS = 1.0;
 
@@ -1386,16 +1380,16 @@ public final class PreferencesDialog {
         // device is on another machine - and a bench's "no rates" must stay "no
         // rates" rather than becoming the built-in table.
         boolean remote = edit.getSelectedBackend().carrier() == AudioBackendType.NET;
-        populateIntCombo(inputRateCombo,  fallback(ratesOf(formats),  DEFAULT_SAMPLE_RATES, remote), " Hz",   bp.getInputSampleRate());
-        populateIntCombo(inputDepthCombo, fallback(depthsOf(formats), DEFAULT_BIT_DEPTHS, remote),   " bits", bp.getInputBitDepth());
+        populateIntCombo(inputRateCombo,  fallback(ratesOf(formats),  Constants.SAMPLE_RATES_HZ, remote), " Hz",   bp.getInputSampleRate());
+        populateIntCombo(inputDepthCombo, fallback(depthsOf(formats), Constants.BIT_DEPTHS, remote),      " bits", bp.getInputBitDepth());
     }
 
     /** Output twin of {@link #showInputFormats}. */
     private void showOutputFormats(List<AudioFormat> formats) {
         BackendPrefs bp = edit.current();
         boolean remote = edit.getSelectedBackend().carrier() == AudioBackendType.NET;
-        populateIntCombo(outputRateCombo,  fallback(ratesOf(formats),  DEFAULT_SAMPLE_RATES, remote), " Hz",   bp.getOutputSampleRate());
-        populateIntCombo(outputDepthCombo, fallback(depthsOf(formats), DEFAULT_BIT_DEPTHS, remote),   " bits", bp.getOutputBitDepth());
+        populateIntCombo(outputRateCombo,  fallback(ratesOf(formats),  Constants.SAMPLE_RATES_HZ, remote), " Hz",   bp.getOutputSampleRate());
+        populateIntCombo(outputDepthCombo, fallback(depthsOf(formats), Constants.BIT_DEPTHS, remote),      " bits", bp.getOutputBitDepth());
     }
 
     // Captures the current UI state into the prefs of {@code active[0]} so
