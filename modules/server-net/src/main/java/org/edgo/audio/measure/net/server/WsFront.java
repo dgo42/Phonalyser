@@ -86,8 +86,8 @@ public final class WsFront {
 
     /** Longest capture batch spec 5 describes ("~10 - 100 ms"). */
     private static final int MAX_BATCH_MS = 100;
-    /** Highest sample rate a served backend offers - the QA40x's. */
-    private static final int MAX_BATCH_RATE_HZ = 384_000;
+    /** Highest sample rate a served backend offers */
+    private static final int MAX_BATCH_RATE_HZ = 1_536_000;
     /** Widest stereo frame a device can be opened at: two 32-bit samples. */
     private static final int MAX_BATCH_FRAME_BYTES = 8;
     private static final int MILLIS_PER_SECOND = 1_000;
