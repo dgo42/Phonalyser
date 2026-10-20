@@ -103,7 +103,7 @@ export class ScopeController {
    *  window length or a period is still asked for then). */
   _rate() {
     const live = this._capture.refCount > 0 ? this._capture.inSampleRate : 0;
-    return live > 0 ? live : (this._prefs.current().inputSampleRate || 384000);
+    return live > 0 ? live : (this._prefs.current().inputSampleRate || 48000);
   }
 
   /** Why the capture ended from below, if THIS consumer claimed the one operator report

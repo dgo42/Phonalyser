@@ -230,9 +230,9 @@ export class BackendPrefs {
   constructor() {
     /** @type {?string} */ this.inputDeviceName = null;
     /** @type {?string} */ this.outputDeviceName = null;
-    this.inputSampleRate = 384000;
+    this.inputSampleRate = 48000;
     this.inputBitDepth = 24;
-    this.outputSampleRate = 384000;
+    this.outputSampleRate = 48000;
     this.outputBitDepth = 24;
   }
 

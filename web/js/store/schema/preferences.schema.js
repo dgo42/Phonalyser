@@ -1669,7 +1669,7 @@ export const PREFERENCES_SCHEMA = {
           },
           "inputSampleRate": {
             "type": "integer",
-            "default": 384000,
+            "default": 48000,
             "description": "Capture sample rate in hertz. It sets the analysable bandwidth (half of it) and, together with the block length, the FFT bin spacing. Must be an integer, and a fractional value is ignored when read."
           },
           "inputBitDepth": {
@@ -1679,7 +1679,7 @@ export const PREFERENCES_SCHEMA = {
           },
           "outputSampleRate": {
             "type": "integer",
-            "default": 384000,
+            "default": 48000,
             "description": "Playback sample rate in hertz for the generator and the sweep. Some hardware, the QA40x among it, runs one clock for both directions and requires this to equal the input rate."
           },
           "outputBitDepth": {

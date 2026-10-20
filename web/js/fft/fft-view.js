@@ -1271,8 +1271,8 @@ export class FftView {
 
   /** Master oscillator the sample-rate family is derived from (Java FftView). */
   _osc(sampleRate) {
-    if (sampleRate > 0 && sampleRate % 44100 === 0) return { hz: 22.5792e6, name: '22.5792 MHz' };
-    if (sampleRate > 0 && sampleRate % 48000 === 0) return { hz: 24.576e6, name: '24.576 MHz' };
+    if (sampleRate > 0 && sampleRate % 11025 === 0) return { hz: 22.5792e6, name: '22.5792 MHz' };
+    if (sampleRate > 0 && sampleRate % 8000 === 0) return { hz: 24.576e6, name: '24.576 MHz' };
     return { hz: NaN, name: '?' };
   }
 

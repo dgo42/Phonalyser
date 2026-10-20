@@ -172,7 +172,7 @@ export class SharedCapture {
    *  the ring before any consumer has acquired it). */
   getCapacity() {
     if (this._buffer) return this._buffer.getCapacity();
-    return Math.round((this._prefs.current().inputSampleRate || 384000) * BUFFER_SECONDS);
+    return Math.round((this._prefs.current().inputSampleRate || 48000) * BUFFER_SECONDS);
   }
 
   /** The last input-device open failure message. */

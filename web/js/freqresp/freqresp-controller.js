@@ -167,7 +167,7 @@ export class FreqRespController {
    *  (Java FreqRespAnalyzerConfig.captureRateHz, read off BackendPrefs.getInputSampleRate). The
    *  FFT window deriveDuration solves for is in these samples too. */
   captureRateHz() {
-    return this.prefs.current().inputSampleRate || 384000;
+    return this.prefs.current().inputSampleRate || 48000;
   }
 
   /** The DAC's configured rate (Hz) - the format the output line is opened with and the clock the
@@ -176,7 +176,7 @@ export class FreqRespController {
    *  capture rate is whatever the device runs at while the playback rate is configurable, so the
    *  two differ exactly as on a card whose sides are set differently. */
   playbackRateHz() {
-    return this.prefs.current().outputSampleRate || 384000;
+    return this.prefs.current().outputSampleRate || 48000;
   }
 
   /** Ceiling for the SWEPT BAND's two edges: the lower of the two configured Nyquist limits (Java

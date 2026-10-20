@@ -470,8 +470,8 @@ export class TuneNotchWizard {
    *  is not what leaves the card, above the ADC's it is not what comes back. */
   _nyquistHz() {
     const bp = this.prefs.current();
-    const capture = bp.inputSampleRate || 384000;
-    const playback = bp.outputSampleRate || 384000;
+    const capture = bp.inputSampleRate || 48000;
+    const playback = bp.outputSampleRate || 48000;
     return Math.min(capture, playback) / 2;
   }
 
