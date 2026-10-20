@@ -478,14 +478,13 @@ class CoherentAccumulatorTest {
             fr = noiseFrame(random);
             acc.add(fr[0], fr[1], 1.0, FrameTurns.of(f * DELTA));
         }
-        ToneLobeLift   lobe   = new ToneLobeLift();
         int            half   = FFT_SIZE / 2;
         double         frames = acc.getFrames();
         double[]       sRe    = acc.getSumRe();
         double[]       sIm    = acc.getSumIm();
         final double[][] last = fr;
-        double raw = lobe.lineFloor(k -> Math.hypot(last[0][k], last[1][k]), H2_BIN, half, BAND_BIN_HZ, BAND_NENBW);
-        double avg = lobe.lineFloor(k -> Math.hypot(sRe[k], sIm[k]) / frames, H2_BIN, half, BAND_BIN_HZ, BAND_NENBW);
+        double raw = ToneLobeLift.lineFloor(k -> Math.hypot(last[0][k], last[1][k]), H2_BIN, half, BAND_BIN_HZ, BAND_NENBW);
+        double avg = ToneLobeLift.lineFloor(k -> Math.hypot(sRe[k], sIm[k]) / frames, H2_BIN, half, BAND_BIN_HZ, BAND_NENBW);
         int row = acc.statisticsRowCount() - 1;
         assertEquals(raw, acc.statistic(row, column(acc, "(2,0) raw band top")), raw * 1e-12,
                 "the band top over the frame's own bins beside H2");

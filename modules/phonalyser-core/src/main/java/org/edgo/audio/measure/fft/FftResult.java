@@ -37,11 +37,13 @@ public class FftResult {
 
     static final long serialVersionUID = 42L;
 
-    /** Width (bins) of each flank {@link #localNoiseFloorDbFs()} samples just
-     *  beyond the fundamental's skirt - the "near range".  Wide enough to clear a
-     *  broad skirt (which can run ±32-50 bins) and give a stable median: a true
-     *  tone has dropped to the floor here, a broadband hump has not. */
-    private static final int LOCAL_FLOOR_FLANK_BINS = 64;
+    /** Width (Hz) of each flank {@link #localNoiseFloorDbFs()} samples just
+     *  beyond the fundamental's skirt - the "near range" - converted to bins
+     *  with the spectrum's own resolution, so the flank covers the same
+     *  stretch of spectrum at every sample rate and FFT size.  Wide enough to
+     *  give a stable median: a true tone has dropped to the floor here, a
+     *  broadband hump has not. */
+    private static final double LOCAL_FLOOR_FLANK_HZ = 12.0;
 
     /** FFT frame length (power of 2). */
     public int fftSize;
@@ -117,8 +119,8 @@ public class FftResult {
      *  carries no pilot. */
     public int pilot2Bin = -1;
     /** The bins the first pilot's line covers, INCLUSIVE: its bin and the
-     *  window's own main-lobe half-width on either side, clamped to the
-     *  spectrum.  The span is empty whenever {@link #pilot1MaskHiBin} is
+     *  window's own main-lobe half-width plus the leakage guard on either
+     *  side, clamped to the spectrum.  The span is empty whenever {@link #pilot1MaskHiBin} is
      *  below {@link #pilot1MaskLoBin}, which is what a result with no first
      *  pilot carries.  A generated pilot is neither signal nor distortion, so
      *  every readout that integrates bins leaves both spans out - the noise
@@ -576,7 +578,7 @@ public class FftResult {
 
     /**
      * Robust noise floor (dBFS) in the NEAR RANGE of the fundamental - the median
-     * of two {@link #LOCAL_FLOOR_FLANK_BINS}-wide flanks placed immediately beyond
+     * of two {@link #LOCAL_FLOOR_FLANK_HZ}-wide flanks placed immediately beyond
      * the fundamental's dynamic skirt.  This is a SHARPNESS probe, not a wide-band
      * floor: a genuine tone has dropped to the noise floor a few lobes out (so it
      * towers over this), whereas the "peak" of a broadband hump (speech) or a
@@ -587,12 +589,13 @@ public class FftResult {
         if (amplitudeDbFs == null || !(freqResolution > 0) || fundamentalBin <= 0) return Double.NaN;
         int n = amplitudeDbFs.length;
         int skirt = (int) Math.max(1, Math.ceil(fundamentalDynExclusionHz / freqResolution));
-        double[] band = new double[2 * LOCAL_FLOOR_FLANK_BINS];
+        int flank = (int) Math.round(LOCAL_FLOOR_FLANK_HZ / freqResolution);
+        double[] band = new double[2 * flank];
         int cnt = 0;
-        for (int b = fundamentalBin - skirt - LOCAL_FLOOR_FLANK_BINS; b < fundamentalBin - skirt; b++) {
+        for (int b = fundamentalBin - skirt - flank; b < fundamentalBin - skirt; b++) {
             if (b >= 1 && b < n && Double.isFinite(amplitudeDbFs[b])) band[cnt++] = amplitudeDbFs[b];
         }
-        for (int b = fundamentalBin + skirt + 1; b <= fundamentalBin + skirt + LOCAL_FLOOR_FLANK_BINS; b++) {
+        for (int b = fundamentalBin + skirt + 1; b <= fundamentalBin + skirt + flank; b++) {
             if (b >= 1 && b < n && Double.isFinite(amplitudeDbFs[b])) band[cnt++] = amplitudeDbFs[b];
         }
         if (cnt == 0) return Double.NaN;

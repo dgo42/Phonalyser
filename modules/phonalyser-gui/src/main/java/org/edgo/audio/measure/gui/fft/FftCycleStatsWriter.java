@@ -27,6 +27,8 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Locale;
 
+import org.edgo.audio.measure.dsp.FftDsp;
+import org.edgo.audio.measure.enums.WindowType;
 import org.edgo.audio.measure.fft.FftResult;
 
 import lombok.extern.log4j.Log4j2;
@@ -66,7 +68,7 @@ public final class FftCycleStatsWriter {
     /** Bins recorded either side of the pinned fundamental bin - wide enough
      *  for the widest supported window main lobe (the HFT248D flat top spans
      *  about 7 bins each side) with margin for its first sidelobes. */
-    private static final int LOBE_SLICE_HALF_WIDTH = 12;
+    //private static final int LOBE_SLICE_HALF_WIDTH = 12;
 
     private static final DateTimeFormatter STAMP =
             DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss");
@@ -88,7 +90,7 @@ public final class FftCycleStatsWriter {
     /** Creates and opens this accumulator run's file in {@code logsDir},
      *  writing a configuration line and the column header.  A failure here
      *  disables the record; it never throws. */
-    public FftCycleStatsWriter(Path logsDir, int fftSize, int sampleRate, double freqResolution) {
+    public FftCycleStatsWriter(Path logsDir, int fftSize, int sampleRate, WindowType window, double freqResolution) {
         this.file = logsDir.resolve(FILE_PREFIX + LocalDateTime.now().format(STAMP) + FILE_SUFFIX);
         try {
             Files.createDirectories(logsDir);
@@ -97,10 +99,11 @@ public final class FftCycleStatsWriter {
             disable(e);
             return;
         }
+        int mainLobeBins = FftDsp.mainLobeBins(window);
         write("# fftSize=" + fftSize + " sampleRate=" + sampleRate
                 + " freqRes=" + String.format(Locale.GERMAN, "%.6f", freqResolution)
-                + " lobeHalfWidth=" + LOBE_SLICE_HALF_WIDTH);
-        write(header());
+                + " lobeHalfWidth=" + mainLobeBins);
+        write(header(mainLobeBins));
         if (log.isInfoEnabled()) {
             log.info("FFT cycle statistics file: {}", file);
         }
@@ -130,22 +133,23 @@ public final class FftCycleStatsWriter {
           .append(SEP).append(value(r.fundamentalHzRefined))
           .append(SEP).append(value(r.fundamentalDbFs))
           .append(SEP).append(accumFramesAfter);
-        appendLobe(sb, r.re, r.im, k0, r.fftSize / 2);
-        appendLobe(sb, accumRe, accumIm, k0, r.fftSize / 2);
+        int mainLobeBins = FftDsp.mainLobeBins(r.windowType);
+        appendLobe(sb, r.re, r.im, k0, r.fftSize / 2, mainLobeBins);
+        appendLobe(sb, accumRe, accumIm, k0, r.fftSize / 2, mainLobeBins);
         write(sb.toString());
     }
 
-    private String header() {
+    private String header(int mainLobeBins) {
         StringBuilder sb = new StringBuilder(
                 "cycle;abs_start;step_samples;frames_in_call;delta;dropped_samples;"
                 + "kappa;k0;theta_rad;fund_hz;fund_dbfs;accum_frames");
-        appendLobeHeader(sb, "t");      // fresh cycle spectrum
-        appendLobeHeader(sb, "a");      // accumulated running sum
+        appendLobeHeader(sb, "t", mainLobeBins);      // fresh cycle spectrum
+        appendLobeHeader(sb, "a", mainLobeBins);      // accumulated running sum
         return sb.toString();
     }
 
-    private void appendLobeHeader(StringBuilder sb, String prefix) {
-        for (int m = -LOBE_SLICE_HALF_WIDTH; m <= LOBE_SLICE_HALF_WIDTH; m++) {
+    private void appendLobeHeader(StringBuilder sb, String prefix, int mainLobeBins) {
+        for (int m = -mainLobeBins; m <= mainLobeBins; m++) {
             String tag = prefix + (m < 0 ? "m" + (-m) : "p" + m);
             sb.append(SEP).append(tag).append("_re")
               .append(SEP).append(tag).append("_im");
@@ -154,8 +158,8 @@ public final class FftCycleStatsWriter {
 
     /** The complex slice {@code [k0 - half .. k0 + half]}; bins outside the
      *  spectrum (or a null array) leave their two cells empty. */
-    private void appendLobe(StringBuilder sb, double[] re, double[] im, int k0, int maxBin) {
-        for (int m = -LOBE_SLICE_HALF_WIDTH; m <= LOBE_SLICE_HALF_WIDTH; m++) {
+    private void appendLobe(StringBuilder sb, double[] re, double[] im, int k0, int maxBin, int mainLobeBins) {
+        for (int m = -mainLobeBins; m <= mainLobeBins; m++) {
             int k = k0 + m;
             if (re == null || im == null || k < 0 || k > maxBin || k >= re.length) {
                 sb.append(SEP).append(SEP);

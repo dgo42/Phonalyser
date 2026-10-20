@@ -58,11 +58,6 @@ public class FreqRespCalHelper {
      *  top of it, so the offset window never shrinks with a short lead-in. */
     public static final double OFFSET_LEAD_IN_SEC = 0.1;
 
-    /** Shared per-tone lobe geometry (robust local floor + data-derived lobe
-     *  extent) - also used by the manual-fundamental display, so both agree on
-     *  where a tone ends and the noise begins. */
-    private static final ToneLobeLift LOBE = new ToneLobeLift();
-
     /** dB per decade of an AMPLITUDE ratio. */
     private static final double AMPLITUDE_DB_FACTOR = 20.0;
     /** dB per decade of a POWER ratio - a squared magnitude is read in this
@@ -637,8 +632,8 @@ public class FreqRespCalHelper {
             if (!(hz > 0.0)) continue;
             int peak = (int) Math.round(hz / binWidth);
             if (peak < 1 || peak > half) continue;
-            double floor = LOBE.localFloor(mag, peak, half);
-            int[] edges  = LOBE.lobeBins(mag, peak, half, floor);
+            double floor = ToneLobeLift.localFloor(mag, peak, half, binWidth, r.windowType);
+            int[] edges  = ToneLobeLift.lobeBins(mag, peak, half, floor, binWidth, r.windowType);
             lobes[t] = new ToneLobe(peak, edges[0], edges[1], floor, mag.applyAsDouble(peak));
         }
         return lobes;
@@ -813,7 +808,7 @@ public class FreqRespCalHelper {
             for (int k = Math.max(1, lobe.lo()); k <= Math.min(half, lobe.hi()); k++) {
                 if (written[k]) continue;
                 double mag = Math.hypot(r.re[k], r.im[k]);
-                double t = LOBE.stretchExponent(mag, lobe.floorMag(), lobe.peakMag());
+                double t = ToneLobeLift.stretchExponent(mag, lobe.floorMag(), lobe.peakMag());
                 double scale = Math.pow(full, t);
                 restateBin(r, k, uRe * scale, uIm * scale, linPerMag);
                 written[k] = true;

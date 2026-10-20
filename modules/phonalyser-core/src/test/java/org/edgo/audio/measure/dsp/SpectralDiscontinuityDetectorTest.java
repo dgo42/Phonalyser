@@ -18,6 +18,7 @@
 
 package org.edgo.audio.measure.dsp;
 
+import org.edgo.audio.measure.enums.WindowType;
 import org.junit.jupiter.api.Test;
 
 import java.util.Random;
@@ -35,7 +36,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class SpectralDiscontinuityDetectorTest {
 
     private static final int    HALF         = 2048;
-    private static final double BIN_WIDTH_HZ = 0.1875;   // -> skirt ≈ 47 bins, exclusion 6 bins
+    private static final double BIN_WIDTH_HZ = 0.1875;   // -> skirt ≈ 47 bins
+    private static final WindowType WINDOW   = WindowType.HANN;   // -> exclusion 4 bins (lobe 2 + guard 2)
     private static final int   TONE  = 200;
     private static final int[] PEAKS = { TONE };
 
@@ -75,7 +77,7 @@ class SpectralDiscontinuityDetectorTest {
         SpectralDiscontinuityDetector d = fresh();
         for (int i = 0; i < 24; i++) {
             double[][] b = block(rng, amp, false, false, false);
-            d.reject(b[0], b[1], HALF, BIN_WIDTH_HZ, PEAKS);
+            d.reject(b[0], b[1], HALF, BIN_WIDTH_HZ, WINDOW, PEAKS);
         }
         return d;
     }
@@ -86,7 +88,7 @@ class SpectralDiscontinuityDetectorTest {
         SpectralDiscontinuityDetector d = warmed(rng, 1.0);
         for (int i = 0; i < 40; i++) {
             double[][] b = block(rng, 1.0, false, false, false);
-            assertFalse(d.reject(b[0], b[1], HALF, BIN_WIDTH_HZ, PEAKS), "clean block #" + i + " falsely rejected");
+            assertFalse(d.reject(b[0], b[1], HALF, BIN_WIDTH_HZ, WINDOW, PEAKS), "clean block #" + i + " falsely rejected");
         }
     }
 
@@ -95,7 +97,7 @@ class SpectralDiscontinuityDetectorTest {
         Random rng = new Random(2);
         SpectralDiscontinuityDetector d = warmed(rng, 1.0);
         double[][] g = block(rng, 1.0, true, false, false);
-        assertTrue(d.reject(g[0], g[1], HALF, BIN_WIDTH_HZ, PEAKS), "broadband glitch not rejected");
+        assertTrue(d.reject(g[0], g[1], HALF, BIN_WIDTH_HZ, WINDOW, PEAKS), "broadband glitch not rejected");
     }
 
     @Test
@@ -103,7 +105,7 @@ class SpectralDiscontinuityDetectorTest {
         Random rng = new Random(4);
         SpectralDiscontinuityDetector d = warmed(rng, 1.0);
         double[][] p = block(rng, 1.0, false, true, false);
-        assertTrue(d.reject(p[0], p[1], HALF, BIN_WIDTH_HZ, PEAKS), "near-carrier pedestal lift not rejected");
+        assertTrue(d.reject(p[0], p[1], HALF, BIN_WIDTH_HZ, WINDOW, PEAKS), "near-carrier pedestal lift not rejected");
     }
 
     @Test
@@ -111,7 +113,7 @@ class SpectralDiscontinuityDetectorTest {
         Random rng = new Random(3);
         SpectralDiscontinuityDetector d = warmed(rng, 1.0);
         double[][] s = block(rng, 1.0, false, false, true);
-        assertTrue(d.reject(s[0], s[1], HALF, BIN_WIDTH_HZ, PEAKS), "power-collapse stall not rejected");
+        assertTrue(d.reject(s[0], s[1], HALF, BIN_WIDTH_HZ, WINDOW, PEAKS), "power-collapse stall not rejected");
     }
 
     @Test
@@ -124,8 +126,8 @@ class SpectralDiscontinuityDetectorTest {
             boolean glitch = (i == 8), pedestal = (i == 16), stall = (i == 24);
             double[][] a = block(ra, ampA, glitch, pedestal, stall);
             double[][] b = block(rb, ampB, glitch, pedestal, stall);
-            boolean ja = da.reject(a[0], a[1], HALF, BIN_WIDTH_HZ, PEAKS);
-            boolean jb = db.reject(b[0], b[1], HALF, BIN_WIDTH_HZ, PEAKS);
+            boolean ja = da.reject(a[0], a[1], HALF, BIN_WIDTH_HZ, WINDOW, PEAKS);
+            boolean jb = db.reject(b[0], b[1], HALF, BIN_WIDTH_HZ, WINDOW, PEAKS);
             assertTrue(ja == jb, "amplitude changed decision at block #" + i);
         }
     }

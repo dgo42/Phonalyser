@@ -44,7 +44,7 @@ class PilotToneSelectorTest {
     @Test
     void aPairIsElectedWhereverOneExists() {
         for (int tone : TONE_BINS) {
-            PilotToneSelector.PilotPair pair = new PilotToneSelector(new FftAnalyzer(),
+            PilotToneSelector.PilotPair pair = new PilotToneSelector(
                     SAMPLE_RATE_HZ, SAMPLE_RATE_HZ, FFT_SIZE, new int[] { tone }, PROTECTED_ORDER,
                     WindowType.BH7, CEILING_HZ).selectPair();
             assertNull(pair.reason(), "both pilots are elected, tone bin " + tone);

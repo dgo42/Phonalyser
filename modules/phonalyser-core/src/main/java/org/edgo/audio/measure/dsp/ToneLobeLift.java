@@ -21,6 +21,8 @@ package org.edgo.audio.measure.dsp;
 import java.util.Arrays;
 import java.util.function.IntToDoubleFunction;
 
+import org.edgo.audio.measure.enums.WindowType;
+
 /**
  * Shared "lift a tone's main lobe" DSP, used by both the {@code .frc}
  * frequency-response compensation and the manual-fundamental display.
@@ -31,18 +33,20 @@ import java.util.function.IntToDoubleFunction;
  * lobe</b> stretched up, its <b>feet pinned to the noise floor</b> (a smooth
  * dome sitting on the grass), NOT a flat-topped box with vertical cliffs.
  *
- * <h2>1. The noise floor - measured FAR from the lobe, robustly</h2>
- * <p>A wide window (e.g. BH7) has a main lobe hundreds of bins across, so the
- * flank band used to estimate the noise must reach well past it AND tolerate a
- * chunk of lobe falling inside it.  The estimate is therefore
- * {@code median + K·MAD} over a wide flank band: the median + MAD ignore the
- * lobe (and any harmonics / mains / spurs) as outliers, returning the true
- * noise-floor ceiling regardless of how wide the lobe is.
+ * <h2>1. The noise floor - measured past the main lobe, robustly</h2>
+ * <p>Each flank band starts past the window's main lobe plus the leakage
+ * guard - a width in bins set by the window alone, the same at every FFT
+ * size - and runs {@link #FLOOR_SPAN_HZ} on, the same stretch of spectrum at
+ * every sample rate and FFT size.  The tone's skirt above the floor still
+ * reaches into that band, so the estimate is {@code median + K·MAD} over it:
+ * the median + MAD ignore the skirt (and any harmonics / mains / spurs) as
+ * outliers, returning the noise-floor ceiling.
  *
  * <h2>2. Lobe extent - out to where the lobe meets the noise</h2>
  * <p>The lobe is walked out from the peak until it drops to that noise floor,
- * so the <em>entire</em> main lobe is covered (a bin or two for a coherent
- * rectangular tone; ±~190 bins for BH7).
+ * so the <em>entire</em> main lobe and the skirt above the floor are covered
+ * (a bin or two for a coherent rectangular tone), at most out to the flank
+ * band's outer end.
  *
  * <h2>3. The stretch - pin the feet, pull the peak up</h2>
  * <p>{@link #stretch} is a vertical stretch anchored on the noise floor: the
@@ -56,6 +60,11 @@ public final class ToneLobeLift {
 
     /** Noise ceiling = median + {@code CEIL_K}·MAD of the flank band. */
     private static final double CEIL_K = 4.0;
+    /** Width of each flank band {@link #localFloor} reads the noise on, in
+     *  Hz - converted to bins with the spectrum's own resolution, so the band
+     *  covers the same stretch of spectrum at every sample rate and FFT size
+     *  (about 983 bins at 384 kHz with a 2 M-point FFT). */
+    private static final double FLOOR_SPAN_HZ = 180.0;
     /** Half-width of a distortion line's floor window, in Hz - converted to
      *  bins with the spectrum's own resolution, so the window covers the same
      *  spectral neighbourhood at every sample rate and FFT size. */
@@ -70,33 +79,48 @@ public final class ToneLobeLift {
      *  read a floor from. */
     private static final int LINE_FLOOR_MIN_BINS = 16;
 
-    private final int floorGap;      // bins skipped each side before sampling the flanks
+    /*private final int floorGap;      // bins skipped each side before sampling the flanks
     private final int floorSpan;     // bins sampled each side for the noise estimate
-    private final int maxLobeBins;   // safety cap on the lobe half-width
+    private final int maxLobeBins;   // safety cap on the lobe half-width*/
 
-    public ToneLobeLift() {
-        this(10, 2048, 2048);
+    private ToneLobeLift() {}
+
+/*    public ToneLobeLift() {
+        //this(10, 2048, 2048);
     }
-
-    public ToneLobeLift(int floorGap, int floorSpan, int maxLobeBins) {
+*/
+/*     public ToneLobeLift(int floorGap, int floorSpan, int maxLobeBins) {
         this.floorGap    = Math.max(1, floorGap);
         this.floorSpan   = Math.max(1, floorSpan);
         this.maxLobeBins = Math.max(1, maxLobeBins);
-    }
+    }*/
 
     /** Noise-floor <b>ceiling</b> (same units as {@code mag}) near {@code peak}:
      *  {@code median + CEIL_K·MAD} of the bins flanking the tone.  Robust - a
      *  wide main lobe, harmonics, mains lines or spurs falling inside the band
      *  are outliers the median/MAD ignore.  Returns 0 when no flanks are in
      *  range.  (Named "floor" because it is the level a bin must rise ABOVE to
-     *  count as part of the lobe, and the level the lobe's feet taper back to.) */
-    public double localFloor(IntToDoubleFunction mag, int peak, int maxBin) {
-        double[] buf = new double[2 * floorSpan];
+     *  count as part of the lobe, and the level the lobe's feet taper back to.)
+     *  Each flank starts past the window's main lobe and the leakage guard -
+     *  a width in bins, the same at every FFT size - and runs
+     *  {@link #FLOOR_SPAN_HZ} on.
+     *
+     * @param mag    a bin's magnitude, by bin index
+     * @param peak   the tone's peak bin
+     * @param maxBin highest bin index {@code mag} may be read at
+     * @param binHz  the spectrum's bin width in Hz
+     * @param window the spectrum's window function
+     */
+    public static double localFloor(IntToDoubleFunction mag, int peak, int maxBin,
+            double binHz, WindowType window) {
+        int gap  = FftDsp.mainLobeBins(window) + FftDsp.LEAKAGE_GUARD_BINS;
+        int span = (int) Math.round(FLOOR_SPAN_HZ / binHz);
+        double[] buf = new double[2 * span];
         int m = 0;
-        for (int k = peak - floorGap - floorSpan; k < peak - floorGap; k++) {
+        for (int k = peak - gap - span; k < peak - gap; k++) {
             if (k >= 1 && k <= maxBin) buf[m++] = mag.applyAsDouble(k);
         }
-        for (int k = peak + floorGap + 1; k <= peak + floorGap + floorSpan; k++) {
+        for (int k = peak + gap + 1; k <= peak + gap + span; k++) {
             if (k >= 1 && k <= maxBin) buf[m++] = mag.applyAsDouble(k);
         }
         if (m == 0) return 0.0;
@@ -111,10 +135,10 @@ public final class ToneLobeLift {
      *  of the window.  The window is half the mains spacing wide to either
      *  side, so it always holds one mains harmonic, which the median and MAD
      *  ignore as an outlier.  Unlike {@link #localFloor}, whose flank band
-     *  reaches past a strong tone's whole lobe for the lobe walk, this reads
-     *  the floor in the line's own neighbourhood.  A bin whose magnitude is
-     *  not finite is left out.  Returns 0 when the window leaves too few
-     *  floor bins to mean anything.
+     *  runs {@link #FLOOR_SPAN_HZ} out past the window's main lobe for the
+     *  lobe walk, this reads the floor in the line's own neighbourhood.  A bin
+     *  whose magnitude is not finite is left out.  Returns 0 when the window
+     *  leaves too few floor bins to mean anything.
      *
      * @param mag       a bin's magnitude, by bin index
      * @param bin       the line's bin
@@ -122,7 +146,7 @@ public final class ToneLobeLift {
      * @param binHz     the spectrum's bin width in Hz
      * @param nenbwBins the window's equivalent noise bandwidth in bins
      */
-    public double lineFloor(IntToDoubleFunction mag, int bin, int maxBin,
+    public static double lineFloor(IntToDoubleFunction mag, int bin, int maxBin,
             double binHz, double nenbwBins) {
         if (!(binHz > 0.0)) return 0.0;
         int exclude = (int) Math.ceil(LINE_FLOOR_EXCLUDE_NENBW * Math.max(1.0, nenbwBins));
@@ -143,7 +167,7 @@ public final class ToneLobeLift {
 
     /** {@code median + CEIL_K·MAD} of the first {@code m} values of
      *  {@code buf}. */
-    private double bandTop(double[] buf, int m) {
+    private static double bandTop(double[] buf, int m) {
         double[] c = Arrays.copyOf(buf, m);
         Arrays.sort(c);
         double median = c[m / 2];
@@ -156,13 +180,24 @@ public final class ToneLobeLift {
     /** Inclusive {@code [lo, hi]} bin span of the main lobe: the contiguous bins
      *  around {@code peak} that stand above the noise floor {@code floor}.  The
      *  peak itself is always included (so a sub-floor tone still yields its one
-     *  peak bin); the walk runs out to where the lobe drops to the noise. */
-    public int[] lobeBins(IntToDoubleFunction mag, int peak, int maxBin, double floor) {
-        return new int[]{ edge(mag, peak, -1, maxBin, floor),
-                          edge(mag, peak, +1, maxBin, floor) };
+     *  peak bin); the walk runs out to where the lobe drops to the noise, at
+     *  most to the outer end of the flank band {@link #localFloor} reads the
+     *  floor on - a lobe still above the floor there was itself inside that
+     *  band.
+     *
+     * @param binHz  the spectrum's bin width in Hz
+     * @param window the spectrum's window function
+     */
+    public static int[] lobeBins(IntToDoubleFunction mag, int peak, int maxBin, double floor,
+            double binHz, WindowType window) {
+        int maxLobeBins = FftDsp.mainLobeBins(window) + FftDsp.LEAKAGE_GUARD_BINS
+                + (int) Math.round(FLOOR_SPAN_HZ / binHz);
+        return new int[]{ edge(mag, peak, -1, maxBin, floor, maxLobeBins),
+                          edge(mag, peak, +1, maxBin, floor, maxLobeBins) };
     }
 
-    private int edge(IntToDoubleFunction mag, int peak, int dir, int maxBin, double floor) {
+    private static int edge(IntToDoubleFunction mag, int peak, int dir, int maxBin, double floor,
+            int maxLobeBins) {
         int foot = peak;
         for (int step = 1; step <= maxLobeBins; step++) {
             int k = peak + dir * step;
@@ -181,7 +216,7 @@ public final class ToneLobeLift {
      *  dome on the grass) instead of lifting the body off the floor.  A bin at or
      *  below the floor is left alone; a tone whose peak is itself buried at/below
      *  the floor is simply scaled by {@code factor}. */
-    public double stretch(double mag, double floor, double peak, double factor) {
+    public static double stretch(double mag, double floor, double peak, double factor) {
         return mag * Math.pow(factor, stretchExponent(mag, floor, peak));
     }
 
@@ -190,7 +225,7 @@ public final class ToneLobeLift {
      *  peak is itself buried at or below the floor, which is simply scaled),
      *  the log-height between - so a caller applying the factor to a complex
      *  bin can raise the magnitude alone. */
-    public double stretchExponent(double mag, double floor, double peak) {
+    public static double stretchExponent(double mag, double floor, double peak) {
         if (!(peak > floor)) return 1.0;
         if (!(mag > floor))  return 0.0;
         double t = Math.log(mag / floor) / Math.log(peak / floor);

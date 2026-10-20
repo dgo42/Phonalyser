@@ -21,6 +21,7 @@ package org.edgo.audio.measure.fft;
 import java.util.Arrays;
 import java.util.Locale;
 
+import org.edgo.audio.measure.dsp.FftDsp;
 import org.edgo.audio.measure.enums.WindowType;
 
 /**
@@ -86,8 +87,6 @@ public final class PilotToneSelector {
 
     /** Pilot harmonic orders carried through the rules. */
     private static final int PILOT_ORDERS = 8;
-    /** Bins added to the window's main-lobe half-width to form the guard. */
-    private static final double DEFAULT_GUARD_BINS = 2.0;
     /** Capture anti-alias stopband entry as a fraction of the capture rate. */
     private static final double AA_STOPBAND_FRACTION = 0.6;
     /** The frequency lock's residual relative time-base error after trim. */
@@ -129,7 +128,6 @@ public final class PilotToneSelector {
     private static final int[] DUAL_HIGH_COEF = { -1, 1, -1, 2, -2, 3, -3, 4 };
 
     /** Owner of the window definitions - consulted for the main lobe. */
-    private final FftAnalyzer analyzer;
     private final double captureRateHz;
     private final double playbackRateHz;
     private final int fftSize;
@@ -146,10 +144,6 @@ public final class PilotToneSelector {
     /** Where the capture anti-alias stopband starts, Hz: above it the device's
      *  own harmonics no longer reach the converter. */
     private final double antiAliasHz;
-    /** Bins added to the main lobe before any guard is applied. */
-    private final double guardBins = DEFAULT_GUARD_BINS;
-    /** Residual relative time-base error the frequency lock leaves. */
-    private final double lockResidual = DEFAULT_LOCK_RESIDUAL;
 
     /**
      * The elected PAIR: each pilot's whole bin on the capture grid and the
@@ -162,10 +156,9 @@ public final class PilotToneSelector {
      */
     public record PilotPair(int bin1, double hz1, int bin2, double hz2, String reason) {}
 
-    public PilotToneSelector(FftAnalyzer analyzer, double captureRateHz, double playbackRateHz,
+    public PilotToneSelector(double captureRateHz, double playbackRateHz,
                              int fftSize, int[] fundamentalBins, int highestProtectedOrder,
                              WindowType windowType, double topHz) {
-        this.analyzer        = analyzer;
         this.captureRateHz   = captureRateHz;
         this.playbackRateHz  = playbackRateHz;
         this.fftSize         = fftSize;
@@ -210,7 +203,7 @@ public final class PilotToneSelector {
             return nonePair(String.format(Locale.ROOT,
                     "the protected line at bin %d lies above Nyquist at this rate", highest));
         }
-        double guard   = analyzer.mainLobeBins(windowType) + guardBins;
+        double guard   = FftDsp.mainLobeBins(windowType) + FftDsp.LEAKAGE_GUARD_BINS;
         double thirdHz = Math.min(captureRateHz, playbackRateHz) / 3.0;
         int upperLo = (int) Math.floor(highest + guard) + 1;
         int upperHi = Math.min(Math.min((int) Math.floor(topHz / binHz),
@@ -230,7 +223,7 @@ public final class PilotToneSelector {
                         lowerLo, lowerHi, ladder, guard));
             }
         }
-        int   separation = analyzer.leakageClearBins(windowType, PILOT_LEAKAGE_DB);
+        int   separation = FftDsp.leakageClearBins(windowType, PILOT_LEAKAGE_DB);
         // The alignment runs on the PAIR, so the first pilot is elected among
         // the survivors that can carry a companion.  Ordering all survivors
         // first and constructing the companion afterwards would lose the pair
@@ -703,7 +696,7 @@ public final class PilotToneSelector {
      *  their positions, where two unfolded lines keep their separation.  In
      *  half-bin units like everything the rules compare. */
     private double widening(boolean folded, long rawHalfBins, long targetHalfBins) {
-        return folded ? lockResidual * (rawHalfBins + targetHalfBins) : 0.0;
+        return folded ? DEFAULT_LOCK_RESIDUAL * (rawHalfBins + targetHalfBins) : 0.0;
     }
 
     /** Where a line of this many half-bins appears: wrapped into one period

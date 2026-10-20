@@ -252,9 +252,6 @@ public final class CoherentAccumulator {
     private int[]        statsF2Coef = new int[0];
     private int[]        statsIndex  = new int[0];
     private double[]     statsRow    = new double[0];
-    /** Reads a line's band top: median + 4 MAD of the band beside the line's
-     *  lobe ({@link ToneLobeLift#lineFloor}). */
-    private final ToneLobeLift lobe = new ToneLobeLift();
     /** The bin width and the window's noise bandwidth the band top is read
      *  with, as {@link #bandGeometry} set them; 0 while none is set. */
     private double bandBinHz;
@@ -908,7 +905,7 @@ public final class CoherentAccumulator {
      *  none. */
     private double bandTop(int bin, IntToDoubleFunction mag) {
         if (!(bandBinHz > 0.0)) return Double.NaN;
-        double top = lobe.lineFloor(mag, bin, halfSize, bandBinHz, bandNenbw);
+        double top = ToneLobeLift.lineFloor(mag, bin, halfSize, bandBinHz, bandNenbw);
         return top > 0.0 ? top : Double.NaN;
     }
 

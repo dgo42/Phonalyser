@@ -82,8 +82,6 @@ public final class HarmonicCompensation {
      *  correction - zero where the apply gate held the harmonic. */
     private final double[]  lastDeltaRe;
     private final double[]  lastDeltaIm;
-    /** Reads each harmonic's local noise floor for the apply gate. */
-    private final ToneLobeLift lobe = new ToneLobeLift();
 
     public HarmonicCompensation(int maxHarmonics) {
         this.maxHarmonics    = maxHarmonics;
@@ -215,7 +213,7 @@ public final class HarmonicCompensation {
             // that much clearance.
             if (r.amplitudeDbFs != null && bin < r.amplitudeDbFs.length) {
                 double[] ampDb  = r.amplitudeDbFs;
-                double floorLin = lobe.lineFloor(k -> Math.pow(10.0, ampDb[k] / 20.0), bin, ampDb.length - 1,
+                double floorLin = ToneLobeLift.lineFloor(k -> Math.pow(10.0, ampDb[k] / 20.0), bin, ampDb.length - 1,
                         r.freqResolution, r.windowNenbwBins);
                 double floorDb  = floorLin > 0.0 ? 20.0 * Math.log10(floorLin) : Double.NaN;
                 if (Double.isFinite(rawDb) && Double.isFinite(floorDb)) clearance[h] = rawDb - floorDb;

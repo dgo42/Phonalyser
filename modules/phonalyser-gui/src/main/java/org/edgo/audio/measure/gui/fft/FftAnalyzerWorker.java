@@ -29,6 +29,7 @@ import java.util.function.Consumer;
 import org.edgo.audio.measure.common.AppPaths;
 import org.edgo.audio.measure.common.Constants;
 import org.edgo.audio.measure.dsp.FftBinSnap;
+import org.edgo.audio.measure.dsp.FftDsp;
 import org.edgo.audio.measure.dsp.SpectralDiscontinuityDetector;
 import org.edgo.audio.measure.dsp.TimeDiscontinuityDetector;
 import org.edgo.audio.measure.dsp.ToneLobeLift;
@@ -977,7 +978,7 @@ public final class FftAnalyzerWorker {
                     ? r.fundamental2HzRefined / r.freqResolution
                     : Double.NaN;
             accumulator.restart(fftSize, coherent, kFrac, kappa2, r.imdProductA, r.imdProductB,
-                    analyzer.mainLobeBins(r.windowType), r.pilot1Bin, r.pilot2Bin);
+                    FftDsp.mainLobeBins(r.windowType), r.pilot1Bin, r.pilot2Bin);
             // The band tops of the collection's statistics, on the bin width
             // and the noise bandwidth the collection is pinned to.
             accumulator.bandGeometry(r.freqResolution, r.windowNenbwBins);
@@ -999,7 +1000,7 @@ public final class FftAnalyzerWorker {
             cycleStats.close();
             cycleStats = (coherent && DebugSwitches.WRITE_FFT_CYCLE_STATS)
                     ? new FftCycleStatsWriter(AppPaths.instance().getLogsDir(),
-                            fftSize, r.sampleRate, r.freqResolution)
+                            fftSize, r.sampleRate, r.windowType, r.freqResolution)
                     : new FftCycleStatsWriter();
             if (log.isInfoEnabled()) {
                 log.info("FFT cross-cycle de-rotation: every bin in proportion to its frequency, "
@@ -1216,10 +1217,6 @@ public final class FftAnalyzerWorker {
      *  one the distortion readouts are built on, so the trace speaks the same
      *  set. */
     private static final int TRACE_MAX_HARMONIC = 9;
-    /** Reads each harmonic's local noise floor for the floor trace - the
-     *  upper border of the noise band beside the line, the same floor the
-     *  displayed harmonics are held at from below. */
-    private final ToneLobeLift lobe = new ToneLobeLift();
 
     /**
      * One line of the harmonic phase trace (see
@@ -1327,7 +1324,7 @@ public final class FftAnalyzerWorker {
             double amp = Math.hypot(re[kh], im[kh]) * conv / norm;
             levels.append(String.format(" H%d=%.2f", h, amp > 1e-15 ? 20.0 * Math.log10(amp) : -300.0));
             if (h >= 2) {
-                double floorLin = lobe.lineFloor(
+                double floorLin = ToneLobeLift.lineFloor(
                         k -> Math.hypot(re[k], im[k]) * conv / norm, kh, halfSize, binHz, nenbwBins);
                 floors.append(String.format(" H%d=%.2f", h,
                         floorLin > 0.0 ? 20.0 * Math.log10(floorLin) : Double.NaN));
@@ -2804,7 +2801,7 @@ public final class FftAnalyzerWorker {
             clearPilot();
             return;
         }
-        PilotToneSelector.PilotPair elected = new PilotToneSelector(analyzer, sampleRate,
+        PilotToneSelector.PilotPair elected = new PilotToneSelector(sampleRate,
                 playbackRateHz, fftSize, fundamentalBins, PILOT_PROTECTED_ORDER,
                 prefs.getFftWindow(), PILOT_CEILING_HZ).selectPair();
         if (elected.bin1() <= 0) {
@@ -3646,7 +3643,8 @@ public final class FftAnalyzerWorker {
             // Debug: snapshot this block's pre-average spectrum BEFORE the
             // accumulator overlay (below) overwrites r.amplitudeDbFs.
             double[] dbgBlock = DebugSwitches.SHOW_DISCONTINUITY_GATES ? r.amplitudeDbFs.clone() : null;
-            if (spectralDetector.reject(r.re, r.im, fftLength / 2, sampleRate / (double) fftLength, fundamentalBins(r))) {
+            if (spectralDetector.reject(r.re, r.im, fftLength / 2, sampleRate / (double) fftLength,
+                    r.windowType, fundamentalBins(r))) {
                 if (dbgBlock != null) {                                  // hold the rejected block + verdict
                     lastRejectBlockDbFs = dbgBlock;
                     lastRejectGates     = spectralDetector.gates();

@@ -20,6 +20,7 @@ package org.edgo.audio.measure.fft;
 
 import java.util.Random;
 
+import org.edgo.audio.measure.dsp.FftDsp;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.WindowType;
 import org.junit.jupiter.api.Test;
@@ -264,13 +265,14 @@ class FftAnalyzerThdTest {
     }
 
     @Test
-    void pilotSpans_coverEachPilotBinPlusTheWindowsMainLobe() {
+    void pilotSpans_coverEachPilotBinPlusTheWindowsMainLobeAndGuard() {
         // The analyser is the one place the excluded width is decided, and each
         // pilot's span is stamped on the result so that the readouts outside it
         // - the dual-tone TD+N residual - leave exactly the same bins out as
         // its own noise, SNR and ENOB sums.  One span per pilot: the bins its
         // position straddles, which for a whole bin is that bin alone, widened
-        // by the window's own main-lobe half-width on either side.
+        // by the window's own main-lobe half-width plus the leakage guard on
+        // either side.
         int sampleRate = 48_000;
         int fftSize    = 8_192;
         int pilot1Bin  = 1_500;
@@ -292,15 +294,15 @@ class FftAnalyzerThdTest {
                 WindowType.BH7, FftOverlap.PCT_0, 0.0, 0.0, true, Double.NaN, false, Double.NaN,
                 new FftResult(), FftOverlap.PCT_0.hopSamples(fftSize));
 
-        int lobe = analyzer.mainLobeBins(WindowType.BH7);
-        assertEquals(pilot1Bin - lobe, r.pilot1MaskLoBin,
-                "the first pilot's span starts a main lobe below its bin");
-        assertEquals(pilot1Bin + lobe, r.pilot1MaskHiBin,
-                "the first pilot's span ends a main lobe above its bin");
-        assertEquals(pilot2Bin - lobe, r.pilot2MaskLoBin,
-                "the second pilot's span starts a main lobe below its bin");
-        assertEquals(pilot2Bin + lobe, r.pilot2MaskHiBin,
-                "the second pilot's span ends a main lobe above its bin");
+        int half = FftDsp.mainLobeBins(WindowType.BH7) + FftDsp.LEAKAGE_GUARD_BINS;
+        assertEquals(pilot1Bin - half, r.pilot1MaskLoBin,
+                "the first pilot's span starts a main lobe and the guard below its bin");
+        assertEquals(pilot1Bin + half, r.pilot1MaskHiBin,
+                "the first pilot's span ends a main lobe and the guard above its bin");
+        assertEquals(pilot2Bin - half, r.pilot2MaskLoBin,
+                "the second pilot's span starts a main lobe and the guard below its bin");
+        assertEquals(pilot2Bin + half, r.pilot2MaskHiBin,
+                "the second pilot's span ends a main lobe and the guard above its bin");
     }
 
     @Test

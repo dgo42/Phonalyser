@@ -22,7 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
-
+import org.edgo.audio.measure.dsp.FftDsp;
 import org.edgo.audio.measure.enums.WindowType;
 
 /**
@@ -44,7 +44,7 @@ class WindowBuildTest {
     }
 
     private void checkWindow(WindowType type) {
-        double[] w = new FftAnalyzer().buildWindow(N, type);
+        double[] w = FftDsp.buildWindow(N, type);
         assertEquals(N, w.length);
 
         double max = 0.0;
@@ -80,8 +80,7 @@ class WindowBuildTest {
         // the windowed DFT magnitude at the two neighbouring bins against
         // an on-bin tone - the worst-case scalloping must stay within
         // ±0.001 dB (the published flatness is ±0.0001 dB).
-        FftAnalyzer analyzer = new FftAnalyzer();
-        double[] w = analyzer.buildWindow(N, WindowType.HFT248D);
+        double[] w = FftDsp.buildWindow(N, WindowType.HFT248D);
         double offBin = dftPeakMag(w, 100.5);
         double onBin  = dftPeakMag(w, 100.0);
         double scallopDb = 20.0 * Math.log10(offBin / onBin);

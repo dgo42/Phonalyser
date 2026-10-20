@@ -234,7 +234,8 @@ public final class ImdAnalyzer {
         // as a time base, not measured: neither is one of the tones nor a
         // distortion product, and at their level they would lay a floor of
         // their own under this residual.  The analyser stamped the bins each
-        // one covers - its bin plus the window's main lobe - and both spans
+        // one covers - its bin plus the window's main lobe and the leakage
+        // guard - and both spans
         // are left out of BOTH sums here, so the reading is the one the same
         // signal without pilots gives.  A span is empty on a result whose
         // matching pilot slot carries none.

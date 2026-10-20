@@ -92,8 +92,6 @@ public final class IntermodCompensation {
     private final double[] accRe;
     private final double[] accIm;
     private final double[] freqHz;
-    /** Reads each product's local noise floor for the apply gate. */
-    private final ToneLobeLift lobe = new ToneLobeLift();
 
     public IntermodCompensation() {
         int products = IMD_PRODUCTS.length;
@@ -320,7 +318,7 @@ public final class IntermodCompensation {
         int bin = r.imdProductBin[i];
         double[] ampDb = r.amplitudeDbFs;
         if (bin <= 0 || bin >= ampDb.length) return Double.NaN;
-        double floorLin = lobe.lineFloor(k -> Math.pow(10.0, ampDb[k] / 20.0), bin, ampDb.length - 1,
+        double floorLin = ToneLobeLift.lineFloor(k -> Math.pow(10.0, ampDb[k] / 20.0), bin, ampDb.length - 1,
                 r.freqResolution, r.windowNenbwBins);
         double floorDb  = floorLin > 0.0 ? 20.0 * Math.log10(floorLin) : Double.NaN;
         return Double.isFinite(rawDbFs) && Double.isFinite(floorDb) ? rawDbFs - floorDb : Double.NaN;

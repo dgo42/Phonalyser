@@ -53,6 +53,7 @@ import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.FundamentalPhaseAlignment;
 import org.edgo.audio.measure.enums.GenChangeCause;
 import org.edgo.audio.measure.enums.MagnitudeUnit;
+import org.edgo.audio.measure.enums.WindowType;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.fft.FftResult.DistortionLine;
@@ -234,9 +235,6 @@ public final class FftView extends AbstractFreqDomainView {
      *  scope and neither view can starve the other behind its events. */
     private boolean fftDirty;
 
-    /** Shared lobe lift for the manual-fundamental display (same algorithm the
-     *  .frc cal uses, so a tone is rescaled identically in both paths). */
-    private final ToneLobeLift LOBE = new ToneLobeLift();
     /** Re-derives the measurements (THD / SNR / N / fundamental / harmonics, all
      *  units + %) from the displayed spectrum - the same {@code recomputeStats}
      *  the worker uses, so every readout matches the plot.  Reused so its
@@ -1149,7 +1147,7 @@ public final class FftView extends AbstractFreqDomainView {
                 floors[i] = Double.NaN;
                 continue;
             }
-            double floorLin = LOBE.lineFloor(mag, bin, half, r.freqResolution, r.windowNenbwBins);
+            double floorLin = ToneLobeLift.lineFloor(mag, bin, half, r.freqResolution, r.windowNenbwBins);
             bins[i]   = bin;
             floors[i] = floorLin > 0.0 ? 20.0 * Math.log10(floorLin) : Double.NaN;
         }
@@ -1962,7 +1960,7 @@ public final class FftView extends AbstractFreqDomainView {
             double threshExc = rej != null && !Double.isNaN(rej.pedestalThreshDb)
                     ? rej.pedestalThreshDb : g.pedestalThreshDb;
             for (int pk : g.peakBins) {
-                double cf = skirtFloorDbFs(dbfs, pk);
+                double cf = skirtFloorDbFs(dbfs, pk, g.pedestalGapBins, g.pedestalSpanBins);
                 if (Double.isNaN(cf)) continue;
                 double xc = freqToX(pk * binBw, plot, freqMin, freqMax, logFreq);
                 double xL = Math.max(plot.x, xc - half);
@@ -2112,7 +2110,7 @@ public final class FftView extends AbstractFreqDomainView {
         if (manual) {
             targetDbFs = r.fundamentalTrueDbFs;
             stretchLobe(out, omag, fundBin, half,
-                    Math.pow(10.0, (targetDbFs - out[fundBin]) / 20.0));
+                    Math.pow(10.0, (targetDbFs - out[fundBin]) / 20.0), binBw, r.windowType);
         } else {
             double dispPk = Double.NEGATIVE_INFINITY;
             for (int d = -2; d <= 2; d++) {
@@ -2140,14 +2138,14 @@ public final class FftView extends AbstractFreqDomainView {
      *  shared {@link ToneLobeLift#stretch} (peak ×factor, wings pinned to the
      *  floor). */
     private void stretchLobe(double[] out, IntToDoubleFunction mag, int toneBin, int half,
-                             double factor) {
+                             double factor, double binHz, WindowType window) {
         if (toneBin < 1 || toneBin > half) return;
-        double floor   = LOBE.localFloor(mag, toneBin, half);
-        int[]  edges   = LOBE.lobeBins(mag, toneBin, half, floor);
+        double floor   = ToneLobeLift.localFloor(mag, toneBin, half, binHz, window);
+        int[]  edges   = ToneLobeLift.lobeBins(mag, toneBin, half, floor, binHz, window);
         double peakMag = mag.applyAsDouble(toneBin);
         for (int k = edges[0]; k <= edges[1]; k++) {
             if (k < 1 || k > half || k >= out.length) continue;
-            double nm = LOBE.stretch(mag.applyAsDouble(k), floor, peakMag, factor);
+            double nm = ToneLobeLift.stretch(mag.applyAsDouble(k), floor, peakMag, factor);
             out[k] = nm > 1e-15 ? 20.0 * Math.log10(nm) : -300.0;
         }
     }
@@ -2255,9 +2253,10 @@ public final class FftView extends AbstractFreqDomainView {
         return c[len / 2];
     }
 
-    /** Displayed noise floor in the skirt flanking bin {@code pk} (main lobe excluded). */
-    private double skirtFloorDbFs(double[] a, int pk) {
-        final int gap = 7, span = 56;
+    /** Displayed noise floor in the skirt flanking bin {@code pk} (main lobe
+     *  excluded): the median over the {@code span} bins past {@code gap} to
+     *  either side - the geometry the pedestal gate sampled. */
+    private double skirtFloorDbFs(double[] a, int pk, int gap, int span) {
         double[] buf = new double[2 * span];
         int n = 0;
         for (int k = pk - gap - span; k < pk - gap; k++) if (k >= 1 && k < a.length) buf[n++] = a[k];
@@ -2842,7 +2841,7 @@ public final class FftView extends AbstractFreqDomainView {
         if (bin < 1 || bin > half || !Double.isFinite(targetDbFs)) return out;
         final double[] lifted = out == r.amplitudeDbFs ? out.clone() : out;
         stretchLobe(lifted, k -> Math.pow(10.0, lifted[k] / 20.0), bin, half,
-                Math.pow(10.0, (targetDbFs - lifted[bin]) / 20.0));
+                Math.pow(10.0, (targetDbFs - lifted[bin]) / 20.0), r.freqResolution, r.windowType);
         return lifted;
     }
 
@@ -3888,15 +3887,21 @@ public final class FftView extends AbstractFreqDomainView {
      *  no result is yet available. */
     private double currentBinSize() {
         if (lastResult != null && lastResult.fftSize > 0) return (double) lastResult.sampleRate / lastResult.fftSize;
-        int sr = 384_000;
-        int fftLen = Math.max(8, Preferences.instance().getFftLength());
+        Preferences prefs = Preferences.instance();
+        int sr = prefs.current().getInputSampleRate();
+        int fftLen = Math.max(8, prefs.getFftLength());
         return (double) sr / fftLen;
     }
 
     /** Nyquist upper bound on the visible freq range (Hz). */
     private double currentNyquist() {
-        if (lastResult != null) return lastResult.sampleRate / 2.0;
-        return 192_000;
+        double sr = 0;
+        if (lastResult != null) {
+            sr = lastResult.sampleRate / 2.0;
+        } else {
+            sr = Preferences.instance().current().getInputSampleRate();
+        }
+        return sr;
     }
 
     private void onMouseMove(MouseEvent ev) {

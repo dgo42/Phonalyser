@@ -197,7 +197,6 @@ class FreqRespCalDeEmbedTest {
         boolean[] inLobe = toneLobeBins(raw, cal);
         ToneLobe fundamentalLobe = lobeSpanAt(raw, raw.fundamentalHzRefined);
         double[] h = FreqRespCalHelper.interpolate(cal, raw.fundamentalHzRefined);
-        ToneLobeLift lift = new ToneLobeLift();
 
         int reported = FreqRespCalHelper.applyInverseInPlace(corrected,
                 toneOnlyInverse(corrected, List.of(cal)));
@@ -208,7 +207,7 @@ class FreqRespCalDeEmbedTest {
         for (int k = fundamentalLobe.lo(); k <= fundamentalLobe.hi(); k++) {
             double rawMag = Math.hypot(raw.re[k], raw.im[k]);
             double newMag = Math.hypot(corrected.re[k], corrected.im[k]);
-            double t = lift.stretchExponent(rawMag, fundamentalLobe.floorMag(), fundamentalLobe.peakMag());
+            double t = ToneLobeLift.stretchExponent(rawMag, fundamentalLobe.floorMag(), fundamentalLobe.peakMag());
             double expected = rawMag * Math.pow(1.0 / h[0], t);
             assertEquals(expected, newMag, slack(expected),
                     "bin " + k + " of the fundamental lobe is divided by the response magnitude "
@@ -657,10 +656,9 @@ class FreqRespCalDeEmbedTest {
         int half = r.fftSize / 2;
         double binWidth = r.sampleRate / (double) r.fftSize;
         IntToDoubleFunction mag = k -> Math.hypot(r.re[k], r.im[k]);
-        ToneLobeLift lift = new ToneLobeLift();
         int peak = (int) Math.round(toneHz / binWidth);
-        double floor = lift.localFloor(mag, peak, half);
-        int[] edges = lift.lobeBins(mag, peak, half, floor);
+        double floor = ToneLobeLift.localFloor(mag, peak, half, binWidth, r.windowType);
+        int[] edges = ToneLobeLift.lobeBins(mag, peak, half, floor, binWidth, r.windowType);
         return new ToneLobe(peak, edges[0], edges[1], floor, mag.applyAsDouble(peak));
     }
 

@@ -51,9 +51,10 @@ class ImdAnalyzerRangeTest {
      *  used here), and far enough apart that the two spans do not touch. */
     private static final int PILOT1_BIN = 3_000;
     private static final int PILOT2_BIN = 3_500;
-    /** BH7's main-lobe half-width in bins - the width the analyser stamps
-     *  around each pilot's bin, the window having seven coefficients. */
-    private static final int BH7_LOBE_BINS = 7;
+    /** The width the analyser stamps around each pilot's bin under BH7: its
+     *  main-lobe half-width of 7 bins (seven coefficients) plus the 2-bin
+     *  leakage guard. */
+    private static final int BH7_MASK_BINS = 9;
     /** The level of each pilot.  -100 dBFS is 1e-5 of full scale: 2.4
      *  times the power of the fixture's whole noise floor per line, so a
      *  residual that counted them would read several dB high. */
@@ -80,7 +81,7 @@ class ImdAnalyzerRangeTest {
     /** The same spectrum with the alignment's two pilots pinned on it the way
      *  the analyser pins them: the window it was analysed with, each pilot's
      *  bin, and the bins that bin covers - itself plus the window's main lobe
-     *  on either side.  {@code linesOn} adds the pilot LINES at those bins.
+     *  and the leakage guard on either side.  {@code linesOn} adds the pilot LINES at those bins.
      *
      *  <p>Both spectra carry the same pinned spans, so what the comparison
      *  isolates are the lines and not the handful of floor bins the spans
@@ -89,11 +90,11 @@ class ImdAnalyzerRangeTest {
         FftResult r = spectrumWithTones(f1Hz, f2Hz);
         r.windowType      = WindowType.BH7;
         r.pilot1Bin       = PILOT1_BIN;
-        r.pilot1MaskLoBin = PILOT1_BIN - BH7_LOBE_BINS;
-        r.pilot1MaskHiBin = PILOT1_BIN + BH7_LOBE_BINS;
+        r.pilot1MaskLoBin = PILOT1_BIN - BH7_MASK_BINS;
+        r.pilot1MaskHiBin = PILOT1_BIN + BH7_MASK_BINS;
         r.pilot2Bin       = PILOT2_BIN;
-        r.pilot2MaskLoBin = PILOT2_BIN - BH7_LOBE_BINS;
-        r.pilot2MaskHiBin = PILOT2_BIN + BH7_LOBE_BINS;
+        r.pilot2MaskLoBin = PILOT2_BIN - BH7_MASK_BINS;
+        r.pilot2MaskHiBin = PILOT2_BIN + BH7_MASK_BINS;
         if (linesOn) {
             r.amplitudeDbFs[PILOT1_BIN] = PILOT_LEVEL_DBFS;
             r.amplitudeDbFs[PILOT2_BIN] = PILOT_LEVEL_DBFS;

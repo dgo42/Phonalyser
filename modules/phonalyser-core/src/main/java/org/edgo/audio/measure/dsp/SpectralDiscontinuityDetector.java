@@ -21,6 +21,8 @@ package org.edgo.audio.measure.dsp;
 import java.util.Arrays;
 import java.util.function.IntToDoubleFunction;
 
+import org.edgo.audio.measure.enums.WindowType;
+
 /**
  * Frequency-domain discontinuity / glitch rejector for the coherently
  * averaged FFT.  Where the time-domain Nth-difference test fails on weak
@@ -73,10 +75,8 @@ public final class SpectralDiscontinuityDetector {
      *  only splatter well above the leakage envelope trips the gate. */
     private static final double PEDESTAL_SIGMA_K = 10.0;
 
-    /** Minimum tone-lobe exclusion half-width, and the pedestal sampling span,
-     *  in HZ - converted to bins via {@link #binWidthHz} so they don't drift
-     *  with FFT size / sample rate. */
-    private static final double PEAK_HALFWIDTH_HZ = 1.1;
+    /** The pedestal sampling span, in HZ - converted to bins via
+     *  {@link #binWidthHz} so it doesn't drift with FFT size / sample rate. */
     private static final double SKIRT_WIDTH_HZ    = 8.8;
 
     /** Around each fundamental the floor keeps out only the tone's OWN band plus
@@ -86,11 +86,6 @@ public final class SpectralDiscontinuityDetector {
      *  bounded to ±2 bands so a tone's leakage can't pull in far-out bands.
      *  Applied around every fundamental. */
     private static final double FLOOR_GUARD_HZ = 100.0;
-
-    /** Data-derived main-lobe finder (the same one the .frc stretch uses): the
-     *  pedestal excludes the fundamental's ACTUAL lobe, not a fixed width, so
-     *  normal window leakage isn't read as a near-carrier pedestal. */
-    private final ToneLobeLift lobe = new ToneLobeLift();
 
     /** Hz per bin, supplied per block via {@link #reject}; converts the Hz
      *  pedestal constants to bins. */
@@ -176,8 +171,11 @@ public final class SpectralDiscontinuityDetector {
     /** Ingests one block's complex spectrum (bins {@code 0..halfSize-1}) and
      *  returns {@code true} if the block is an outlier to be REJECTED.
      *  {@code peakBins} are the known fundamental bin(s) whose near-carrier
-     *  pedestal excess is gated (may be null/empty to skip that gate). */
-    public boolean reject(double[] re, double[] im, int halfSize, double binWidthHz, int[] peakBins) {
+     *  pedestal excess is gated (may be null/empty to skip that gate);
+     *  {@code window} is the block's window function: the local floor the
+     *  pedestal's lobe walk stops at is read past its main lobe. */
+    public boolean reject(double[] re, double[] im, int halfSize, double binWidthHz,
+                          WindowType window, int[] peakBins) {
         this.binWidthHz = binWidthHz > 0.0 ? binWidthHz : 1.0;
         configure(halfSize);
         buildBands(halfSize, peakBins);   // re-apply the ±FLOOR_GUARD_HZ tone-band narrowing
@@ -196,7 +194,12 @@ public final class SpectralDiscontinuityDetector {
         // Per-block line detection (no history needed) -> noise floor + pedestal excess.
         for (int b = 0; b < bands; b++) lineBand[b] = isLocalLine(level, b);
         lastFloorDb        = floorMedian(level);
-        lastPedestalDb     = pedestalDb(re, im, peakBins);
+        // The pedestal is sampled past at least the window's main lobe and the
+        // leakage guard, over SKIRT_WIDTH_HZ - one geometry per block, handed
+        // on with the gates so the overlay reads the same bins.
+        int pedGap  = FftDsp.mainLobeBins(window) + FftDsp.LEAKAGE_GUARD_BINS;
+        int pedSpan = Math.max(8, (int) Math.round(SKIRT_WIDTH_HZ / this.binWidthHz));
+        lastPedestalDb     = pedestalDb(re, im, peakBins, window, pedGap, pedSpan);
         double pedFloorDb  = pedestalFloorDb(peakBins);    // two bands flanking the tone
         if (Double.isNaN(pedFloorDb)) pedFloorDb = lastFloorDb;
         lastPedestalExcess = Double.isNaN(lastPedestalDb) ? Double.NaN
@@ -208,7 +211,8 @@ public final class SpectralDiscontinuityDetector {
             pushRef(level);
             lastGates = new Gates(bandLo, bandHi, level.clone(), lastFloorDb, 0.0, 0.0,
                     lastPedestalExcess, Double.NaN, lastPowerDb, lastPowerDb, 0.0, halfSize,
-                    false, false, false, peakBins == null ? null : peakBins.clone());
+                    false, false, false, peakBins == null ? null : peakBins.clone(),
+                    pedGap, pedSpan);
             return false;
         }
 
@@ -248,9 +252,10 @@ public final class SpectralDiscontinuityDetector {
         boolean rejected = pedestalOut || scoreOut || powerOut;
         lastGates = new Gates(bandLo, bandHi, mref.clone(), lastFloorDb, lastThreshold, score,
                 lastPedestalExcess, pedestalThresh, lastPowerDb, pMed, powerThresh, halfSize,
-                pedestalOut, scoreOut, powerOut, peakBins == null ? null : peakBins.clone());
+                pedestalOut, scoreOut, powerOut, peakBins == null ? null : peakBins.clone(),
+                pedGap, pedSpan);
 
-        pushScore(score);                      // baselines track all blocks (robust to outliers)
+        pushScore(score);                     // baselines track all blocks (robust to outliers)
         pushPower(lastPowerDb);
         pushPedestal(lastPedestalExcess);
         if (!rejected) pushRef(level);         // reference only from accepted blocks
@@ -270,20 +275,21 @@ public final class SpectralDiscontinuityDetector {
 
     // ---------------------------------------------------------------- internals
 
-    /** Median power (-> dB) of the bins flanking each fundamental, main lobe
-     *  excluded.  NaN when no peaks are supplied. */
-    private double pedestalDb(double[] re, double[] im, int[] peakBins) {
+    /** Median power (-> dB) of the {@code skirt} bins flanking each
+     *  fundamental past its lobe - at least {@code peakHalf} bins out.  NaN
+     *  when no peaks are supplied. */
+    private double pedestalDb(double[] re, double[] im, int[] peakBins, WindowType window,
+                              int peakHalf, int skirt) {
         if (peakBins == null || peakBins.length == 0) return Double.NaN;
         IntToDoubleFunction mag = k -> Math.hypot(re[k], im[k]);
-        int peakHalf = Math.max(1, (int) Math.round(PEAK_HALFWIDTH_HZ / binWidthHz));
-        int skirt    = Math.max(8, (int) Math.round(SKIRT_WIDTH_HZ  / binWidthHz));
         double[] buf = new double[peakBins.length * 2 * skirt];
         int n = 0;
         for (int f : peakBins) {
             // Exclude the tone's DATA-DERIVED main lobe (not a fixed width) so
             // normal window leakage isn't counted; sample the skirt just beyond.
             int mb = halfSize - 1;   // bins here run 1..halfSize-1 (as buildBands/collectSkirt assume)
-            int[] e = lobe.lobeBins(mag, f, mb, lobe.localFloor(mag, f, mb));
+            int[] e = ToneLobeLift.lobeBins(mag, f, mb,
+                    ToneLobeLift.localFloor(mag, f, mb, binWidthHz, window), binWidthHz, window);
             int lo = Math.min(e[0], f - peakHalf);
             int hi = Math.max(e[1], f + peakHalf);
             n = collectSkirt(re, im, lo - skirt, lo, buf, n);
@@ -450,11 +456,14 @@ public final class SpectralDiscontinuityDetector {
         public final int      bins;             // bins summed for total power
         public final boolean  pedestalOut, scoreOut, powerOut;
         public final int[]    peakBins;         // gate 1 placement (near-carrier)
+        public final int      pedestalGapBins;  // gate 1: pedestal sampled at least this far out
+        public final int      pedestalSpanBins; // gate 1: pedestal bins sampled each side
 
         Gates(int[] bandLo, int[] bandHi, double[] mref, double floorDb, double scoreThreshDb,
               double scoreDb, double pedestalExcessDb, double pedestalThreshDb,
               double powerDb, double powerMedDb, double powerThreshDb, int bins,
-              boolean pedestalOut, boolean scoreOut, boolean powerOut, int[] peakBins) {
+              boolean pedestalOut, boolean scoreOut, boolean powerOut, int[] peakBins,
+              int pedestalGapBins, int pedestalSpanBins) {
             this.bandLo = bandLo; this.bandHi = bandHi; this.mref = mref;
             this.floorDb = floorDb; this.scoreThreshDb = scoreThreshDb; this.scoreDb = scoreDb;
             this.pedestalExcessDb = pedestalExcessDb; this.pedestalThreshDb = pedestalThreshDb;
@@ -462,6 +471,7 @@ public final class SpectralDiscontinuityDetector {
             this.bins = bins;
             this.pedestalOut = pedestalOut; this.scoreOut = scoreOut; this.powerOut = powerOut;
             this.peakBins = peakBins;
+            this.pedestalGapBins = pedestalGapBins; this.pedestalSpanBins = pedestalSpanBins;
         }
     }
 }
