@@ -33,6 +33,7 @@ import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Event;
+import org.edgo.audio.measure.dsp.FftDsp;
 import org.edgo.audio.measure.dsp.FilterDesign;
 import org.edgo.audio.measure.dsp.FreqRespCalHelper;
 import org.edgo.audio.measure.dsp.FreqRespCalibration;
@@ -2135,7 +2136,11 @@ public final class FreqRespView extends AbstractFreqDomainView {
      *  index and clamped at the ends.  Non-finite taps are dropped from the
      *  window; a position with no finite tap yields NaN.  Rejects lone spikes
      *  without shifting a genuine extremum - unlike a mean, the deep sample at a
-     *  high-Q null survives.  Index-aligned with {@code v}. */
+     *  high-Q null survives.  Index-aligned with {@code v}.
+     *
+     * @param v      the values
+     * @param window the window length, points (odd)
+     * @return the running median, one value per point of {@code v} */
     private double[] runningMedian(double[] v, int window) {
         int n = v.length;
         int half = window / 2;
@@ -2147,9 +2152,10 @@ public final class FreqRespView extends AbstractFreqDomainView {
                 if (Double.isFinite(v[j])) buf[cnt++] = v[j];
             }
             if (cnt == 0) { out[i] = Double.NaN; continue; }
-            double[] w = Arrays.copyOf(buf, cnt);
-            Arrays.sort(w);
-            out[i] = (cnt % 2 == 1) ? w[cnt / 2] : 0.5 * (w[cnt / 2 - 1] + w[cnt / 2]);
+            // Upper middle selected first: every tap below its index is then no
+            // larger, so the lower middle is the largest of those.
+            double upper = FftDsp.selectKth(buf, cnt, cnt / 2);
+            out[i] = (cnt % 2 == 1) ? upper : 0.5 * (FftDsp.selectKth(buf, cnt / 2, cnt / 2 - 1) + upper);
         }
         return out;
     }

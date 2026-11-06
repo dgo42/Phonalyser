@@ -18,8 +18,6 @@
 
 package org.edgo.audio.measure.dsp;
 
-import java.util.Arrays;
-
 import lombok.Getter;
 
 /**
@@ -67,31 +65,31 @@ public final class MainsFrequencyTracker {
     @Getter
     private double lockHz = Double.NaN;
 
-    /** Scratch for the windowed reference; grown on demand. */
-    private double[] windowScratch = new double[0];
-    /** Reusable single-precision scratch for the {@code double[]} overload. */
-    private float[]  narrowScratch = new float[0];
+    /** Reused buffer for the windowed reference; grown on demand. */
+    private double[] windowBuffer = new double[0];
+    /** Reused single-precision buffer for the {@code double[]} overload. */
+    private float[]  narrowBuffer = new float[0];
 
     public MainsFrequencyTracker(int sampleRate) {
         if (sampleRate <= 0) throw new IllegalArgumentException("sampleRate must be > 0");
         this.sampleRate = sampleRate;
     }
 
-    /** Drops the lock so the next {@link #track} re-detects from scratch and
+    /** Drops the lock so the next {@link #track} re-detects without a prior lock and
      *  snaps immediately (no EWMA inertia from the old lock). */
     public void resetTracking() {
         lockHz = Double.NaN;
     }
 
-    /** Double-precision reference overload - narrows into reusable scratch and
+    /** Double-precision reference overload - narrows into a reused buffer and
      *  reuses the single-precision estimator (the estimate is insensitive to
      *  float vs double). */
     public double track(double[] ref, int len) {
         if (ref == null) return Double.NaN;
         len = Math.min(len, ref.length);
-        if (narrowScratch.length < len) narrowScratch = new float[len];
-        for (int i = 0; i < len; i++) narrowScratch[i] = (float) ref[i];
-        return track(narrowScratch, len);
+        if (narrowBuffer.length < len) narrowBuffer = new float[len];
+        for (int i = 0; i < len; i++) narrowBuffer[i] = (float) ref[i];
+        return track(narrowBuffer, len);
     }
 
     /**
@@ -105,8 +103,8 @@ public final class MainsFrequencyTracker {
         // Need a few mains cycles for a meaningful estimate.
         if (len < (int) (4 * sampleRate / MIN_MAINS_HZ)) return lockHz;
 
-        if (windowScratch.length < len) windowScratch = new double[len];
-        double[] w = windowScratch;
+        if (windowBuffer.length < len) windowBuffer = new double[len];
+        double[] w = windowBuffer;
         // Hann window to suppress leakage from the (usually dominant) test
         // signal into the mains bands.
         double norm = 2.0 * Math.PI / (len - 1);
@@ -172,7 +170,13 @@ public final class MainsFrequencyTracker {
     }
 
     /** Median Goertzel power across the four detection bands - a robust floor
-     *  the strongest line must clear to count as real mains. */
+     *  the strongest line must clear to count as real mains.
+     *
+     * @param h1a the 50 Hz band's scan
+     * @param h1b the 60 Hz band's scan
+     * @param h2a the 100 Hz band's scan
+     * @param h2b the 120 Hz band's scan
+     * @return the median power; 0 when no band holds a value */
     private double scannedBaseline(BandScan h1a, BandScan h1b,
                                    BandScan h2a, BandScan h2b) {
         int m = (int) Math.round(2 * DETECT_SPAN_HZ / DETECT_STEP_HZ) + 1;
@@ -183,8 +187,7 @@ public final class MainsFrequencyTracker {
         idx = copyBandPowers(all, idx, h2a, 100.0, m);
         idx = copyBandPowers(all, idx, h2b, 120.0, m);
         if (idx == 0) return 0.0;
-        Arrays.sort(all, 0, idx);
-        return all[idx / 2];
+        return FftDsp.selectKth(all, idx, idx / 2);
     }
 
     /** Copies the {@code m} powers spanning ±{@link #DETECT_SPAN_HZ} around

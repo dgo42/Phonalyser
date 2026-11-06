@@ -19,8 +19,9 @@
 package org.edgo.audio.measure.gui.fft;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
+
+import org.edgo.audio.measure.dsp.FftDsp;
 
 import lombok.Getter;
 
@@ -445,7 +446,10 @@ public final class PairAdvance {
     /** Keeps a settled frame's miss, read at an advance of {@code atSamples},
      *  and renews the running median the admission is measured from: the
      *  median of the kept misses within {@link #MISS_MEDIAN_SEC} - or one
-     *  window - of this one. */
+     *  window - of this one.
+     *
+     * @param atSamples the advance the miss was read at, samples
+     * @param missRad   the miss, radians */
     private void recordMiss(double atSamples, double missRad) {
         missRing[missNext] = missRad;
         missAt[missNext]   = atSamples;
@@ -457,8 +461,10 @@ public final class PairAdvance {
         for (int i = 0; i < missCount; i++) {
             if (atSamples - missAt[i] <= span) recent[n++] = missRing[i];
         }
-        Arrays.sort(recent, 0, n);
-        double median = n % 2 == 1 ? recent[n / 2] : 0.5 * (recent[n / 2 - 1] + recent[n / 2]);
+        // Upper middle selected first: every entry below its index is then no
+        // larger, so the lower middle is the largest of those.
+        double upper  = FftDsp.selectKth(recent, n, n / 2);
+        double median = n % 2 == 1 ? upper : 0.5 * (FftDsp.selectKth(recent, n / 2, n / 2 - 1) + upper);
         missMedianRad = Math.abs(median) < MISS_MEDIAN_CAP_RAD ? median : 0.0;
     }
 
