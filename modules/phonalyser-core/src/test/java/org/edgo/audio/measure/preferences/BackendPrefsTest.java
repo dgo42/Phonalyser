@@ -37,9 +37,9 @@ class BackendPrefsTest {
         BackendPrefs p = new BackendPrefs();
         assertEquals(null,    p.getInputDeviceName());
         assertEquals(null,    p.getOutputDeviceName());
-        assertEquals(384_000, p.getInputSampleRate());
+        assertEquals(48_000,  p.getInputSampleRate());
         assertEquals(24,      p.getInputBitDepth());
-        assertEquals(384_000, p.getOutputSampleRate());
+        assertEquals(48_000,  p.getOutputSampleRate());
         assertEquals(24,      p.getOutputBitDepth());
     }
 
