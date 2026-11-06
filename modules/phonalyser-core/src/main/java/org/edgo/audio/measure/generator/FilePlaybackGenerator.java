@@ -28,7 +28,6 @@ import lombok.Getter;
 import lombok.Setter;
 import lombok.extern.log4j.Log4j2;
 import org.edgo.audio.measure.common.Closeables;
-import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.wav.PcmFileLoader;
 
 /**
@@ -93,11 +92,11 @@ public final class FilePlaybackGenerator extends SignalGenerator {
 
     /**
      * @param file a WAV / AIFF / FLAC file that {@link PcmFileLoader} can decode
+     * @param loop whether playback restarts at sample 0 when the file ends
+     * @throws Exception when the file cannot be opened or decoded
      */
     public FilePlaybackGenerator(File file, boolean loop) throws Exception {
-        // The inherited DDS state is unused - nextRaw() is overridden - but the
-        // base still needs a legal form and a non-zero full scale to construct.
-        super(GenSignalForm.SINE, 1000.0, 48_000, 1.0, 1.0, 1.0, 1.0);
+        super();
         setLaneGains(1.0, 1.0);
         this.file = file;
         this.loop = loop;
@@ -111,6 +110,12 @@ public final class FilePlaybackGenerator extends SignalGenerator {
      *  scale).  Live: the render loop reads the levels per frame. */
     public void setLaneGains(double left, double right) {
         setLevels(left, right);
+    }
+
+    /** A file's lane levels are its lane gains alone ({@link #setLaneGains});
+     *  no amplitude, full scale, form or pilot setting re-derives them. */
+    @Override
+    protected void recomputeLevels() {
     }
 
     private void openStream() throws Exception {
@@ -166,9 +171,8 @@ public final class FilePlaybackGenerator extends SignalGenerator {
     }
 
     /** A file's frames carry what the file holds and nothing else - no pilot
-     *  line is added to them.  The base's form test cannot see that on its
-     *  own: the inherited DDS form is SINE, a legal value the constructor
-     *  needs, and SINE is one of the forms that do carry a pilot. */
+     *  line is added to them.
+     *  @return always false */
     @Override
     protected boolean carriesPilot() {
         return false;

@@ -386,6 +386,17 @@ public class SignalGenerator implements GeneratorControls {
                 form, frequency, sampleRate, phaseInc, amplitudeVrmsLeft, amplitudeVrmsRight);
     }
 
+    /**
+     * Use only for {@link FilePlaybackGenerator}: a source whose samples are
+     * not a DDS waveform - no form, no oscillator, no sample rate, no levels.
+     * The form stays unset, so the subclass must override {@link #nextRaw()}
+     * and {@link #recomputeLevels()}, the two methods that read it, and sets
+     * both lanes' levels through {@link #setLevels}.
+     */
+    SignalGenerator() {
+        this.sampleRate = 0;
+    }
+
     /** Converts a frequency (Hz) to a 64-bit DDS phase increment.  Exact to
      *  the double mantissa (53 bits => {@code fs/2^53} ≈ 43 pHz granularity);
      *  audio frequencies sit far below Nyquist, so the product never
@@ -627,7 +638,7 @@ public class SignalGenerator implements GeneratorControls {
      *  against the current form's peak / RMS ratio, and each pilot's two lane
      *  levels from its own V RMS - a pilot is a sine whatever the form is, so
      *  it converts at a sine's peak / RMS ratio and never at the form's. */
-    private void recomputeLevels() {
+    protected void recomputeLevels() {
         double raw = rawRms(form);
         this.amplitudeLeft   = currentVrmsLeft  / (dacFsVoltageAmplLeft  * raw);
         this.amplitudeRight  = currentVrmsRight / (dacFsVoltageAmplRight * raw);
