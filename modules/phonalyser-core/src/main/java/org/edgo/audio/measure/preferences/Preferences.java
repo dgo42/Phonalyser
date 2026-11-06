@@ -646,7 +646,7 @@ public final class Preferences {
      *  in the Settings tab - the sweep duration is derived from this so
      *  the analyzer's {@code nextPow2(leadIn + sweep + tail)} lands
      *  exactly on the chosen length (no wasted bins). */
-    private final Property<Integer> freqRespFftSize          = bound(4194304);
+    private final Property<Integer> freqRespFftSize          = bound(524288);
     /** TPDF dither bits applied to the generator before quantisation;
      *  0 disables.  Same convention as the generator pane. */
     private final Property<Integer> freqRespDitherBits       = bound(0);
