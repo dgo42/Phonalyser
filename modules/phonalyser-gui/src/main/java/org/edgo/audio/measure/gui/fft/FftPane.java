@@ -615,11 +615,11 @@ public final class FftPane extends AbstractPane {
         FftResult r = view.getLastResult();
         double sr = 0;
         if (r != null) {
-            sr = r.sampleRate / 2.0;
+            sr = r.sampleRate;
         } else {
             sr = Preferences.instance().current().getInputSampleRate();
         }
-        return sr;
+        return sr / 2.0;
     }
 
     /** Clamps the persisted freq + mag window to the current hardware

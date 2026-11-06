@@ -3023,9 +3023,17 @@ public final class FftView extends AbstractFreqDomainView {
                 : "     ---";
     }
 
-    /** Formats one Δf line for the IMD table, mirroring the THD
-     *  path's "ΔF: %+.6f Hz (%+.2f ppm)  Δosc: %+.2f Hz @ 22.5792 MHz"
-     *  shape so the user reads the same numbers in both modes. */
+    /** Formats one Δf line - the THD header's and each IMD tone's - as
+     *  "label: Δf Hz (ppm)  Δosc: Hz @ crystal", the crystal picked from the
+     *  sample-rate family (22.5792 MHz for multiples of 11 025 Hz, 24.576 MHz
+     *  for multiples of 8 kHz); without a known crystal the Δosc part is left
+     *  out.
+     *
+     * @param label      the line's label
+     * @param expectedHz the frequency the generator was set to, Hz
+     * @param measuredHz the frequency measured, Hz
+     * @param sampleRate the capture rate, Hz
+     * @return the formatted line */
     private String formatDeltaF(String label, double expectedHz, double measuredHz, int sampleRate) {
         double delta = measuredHz - expectedHz;
         double ppm   = (expectedHz > 0) ? 1e6 * delta / expectedHz : Double.NaN;
@@ -3111,26 +3119,7 @@ public final class FftView extends AbstractFreqDomainView {
                 double measuredHz = Double.isFinite(r.fllAveragedHz)
                         ? r.fllAveragedHz : r.fundamentalHzRefined;
                 if (expected > 0 && Double.isFinite(measuredHz)) {
-                    double delta = measuredHz - expected;
-                    double ppm   = 1e6 * delta / expected;
-                    double osc;
-                    String oscName;
-                    if (r.sampleRate > 0 && r.sampleRate % 11025 == 0) {
-                        osc = 22.5792e6; oscName = "22.5792 MHz";
-                    } else if (r.sampleRate > 0 && r.sampleRate % 8000 == 0) {
-                        osc = 24.576e6;  oscName = "24.576 MHz";
-                    } else {
-                        osc = Double.NaN; oscName = "?";
-                    }
-                    String clock;
-                    if (Double.isNaN(osc)) {
-                        clock = String.format("ΔF: %+.6f Hz (%+.2f ppm)", delta, ppm);
-                    } else {
-                        double oscDelta = osc * delta / expected;
-                        clock = String.format("ΔF: %+.6f Hz (%+.2f ppm)  Δosc: %+.2f Hz @ %s",
-                                delta, ppm, oscDelta, oscName);
-                    }
-                    drawCentred(gc, clock, centreX, y);
+                    drawCentred(gc, formatDeltaF("ΔF", expected, measuredHz, r.sampleRate), centreX, y);
                     y += lineH;
                 }
             }
@@ -3679,11 +3668,11 @@ public final class FftView extends AbstractFreqDomainView {
     private double currentNyquist() {
         double sr = 0;
         if (lastResult != null) {
-            sr = lastResult.sampleRate / 2.0;
+            sr = lastResult.sampleRate;
         } else {
             sr = Preferences.instance().current().getInputSampleRate();
         }
-        return sr;
+        return sr / 2.0;
     }
 
     private void onMouseMove(MouseEvent ev) {
