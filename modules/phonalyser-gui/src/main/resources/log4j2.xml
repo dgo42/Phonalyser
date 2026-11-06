@@ -74,7 +74,7 @@
             <AppenderRef ref="Console" level="ERROR"/>
             <AppenderRef ref="File" level="INFO"/>
         </Logger>
-        <Logger name="org.edgo.audio.measure.fft.CoherentAccumulator" level="INFO" additivity="false">
+        <Logger name="org.edgo.audio.measure.fft.SpectrumAccumulator" level="INFO" additivity="false">
             <AppenderRef ref="Console" level="ERROR"/>
             <AppenderRef ref="File" level="INFO"/>
         </Logger>

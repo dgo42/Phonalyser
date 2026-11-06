@@ -18,10 +18,10 @@
 
 package org.edgo.audio.measure.fft;
 
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
+import org.edgo.audio.measure.dsp.FreqRespCalHelper;
 import org.edgo.audio.measure.dsp.SpectralDiscontinuityDetector;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.WindowType;
@@ -36,14 +36,6 @@ import org.edgo.audio.measure.enums.WindowType;
 public class FftResult {
 
     static final long serialVersionUID = 42L;
-
-    /** Width (Hz) of each flank {@link #localNoiseFloorDbFs()} samples just
-     *  beyond the fundamental's skirt - the "near range" - converted to bins
-     *  with the spectrum's own resolution, so the flank covers the same
-     *  stretch of spectrum at every sample rate and FFT size.  Wide enough to
-     *  give a stable median: a true tone has dropped to the floor here, a
-     *  broadband hump has not. */
-    private static final double LOCAL_FLOOR_FLANK_HZ = 12.0;
 
     /** FFT frame length (power of 2). */
     public int fftSize;
@@ -74,6 +66,9 @@ public class FftResult {
     // across analysis cycles via the pool; {@link #ensureArrays} grows
     // them when the FFT length changes.
     public double[] amplitudeDbFs;
+    /** The phase per bin in degrees as a spectrum file stores it, read back
+     *  into {@link #re} / {@link #im} by {@link FftAnalyzer#rebuildPhasors};
+     *  {@code null} on a live result, whose phase stands in its phasors. */
     public double[] phaseDeg;
     public double[] re;
     public double[] im;
@@ -155,13 +150,23 @@ public class FftResult {
     public double fllAveragedHz  = Double.NaN;
     /** The second tone's, the dual-tone companion of {@link #fllAveragedHz}. */
     public double fllAveraged2Hz = Double.NaN;
+    /** The fundamental's level as the spectrum carries it at
+     *  {@link #fundamentalBin}, dBFS and linear (full scale 1): the measured
+     *  level, and the corrected one once a {@code .frc} correction is applied
+     *  to the spectrum in place - the scalars follow the bin.
+     *  {@link #fundamental} carries both. */
     public double fundamentalDbFs;
     public double fundamentalLinear;
+    /** The fundamental as the statistics measure it - its level as measured
+     *  and de-embedded; {@code null} until the statistics ran. */
+    public SpectralLine fundamental;
 
-    /** Pinned coherent fundamental bin (κ) for the plot-time .frc "before-cal"
-     *  re-derive, or {@link Double#NaN} for a single (non-averaged) analysis
-     *  cycle.  The worker owns the accumulator and sets this; the UI's
-     *  post-average pipeline consumes it (non-NaN => averaging). */
+    /** The fundamental's fractional bin (κ) the rendered harmonic ladder -
+     *  and with it every line's de-embedding - stands on: the accumulator's
+     *  pinned one while averaging, the refined fundamental over the bin width
+     *  otherwise - a single cycle's refined fundamental jitters, the pinned
+     *  one does not.  Set by the worker on a live frame and by the loader on
+     *  a file; {@link Double#NaN} on a result neither set. */
     public double coherentKappa = Double.NaN;
     /** Channel this result was analyzed for ({@code true} = left) - picks the
      *  left/right .frc calibration in the UI's post-average pipeline. */
@@ -179,25 +184,18 @@ public class FftResult {
      *  after the change. */
     public long epoch;
 
-    // Harmonics (index 0 = 2nd harmonic, ...)
+    // Harmonics (index 0 = 2nd harmonic, ...): the ladder's positions, placed
+    // on the refined fundamental ({@link #placeHarmonics}).
     public int      harmonicCount;
     public int[]    harmonicBins;
     public double[] harmonicHz;
-    public double[] harmonicDbFs;
+    /** Each harmonic as the statistics measure it - its level as measured and
+     *  de-embedded - index-parallel to {@link #harmonicHz}; {@code null} until
+     *  the statistics ran. */
+    public SpectralLine[] harmonics;
+    /** Each harmonic's de-embedded level in % of the fundamental the ratios
+     *  stand on. */
     public double[] harmonicPct;
-
-    /** The local noise floor under each distortion line - every harmonic and
-     *  every intermodulation product - by the line's bin: the level, dBFS in
-     *  the domain {@link #amplitudeDbFs} stands in when the statistics are
-     *  derived, below which the line's reading is not taken.  A line under
-     *  its floor carries no stable level: what its bin holds is the noise
-     *  there, wandering across the floor's band from one collection to the
-     *  next, and summed into THD it would move THD and everything steered by
-     *  it.  So the reading is held at the floor from below and is free to
-     *  rise above it.  Index-parallel; a bin of -1 holds no floor.  Both
-     *  {@code null} when no floor was measured, which clamps nothing. */
-    public int[]    lineFloorBins;
-    public double[] lineFloorDbFs;
 
     // Raw (pre-.frc-de-embed) complex phasors of the fundamental and of each
     // distortion peak, stamped by the analyser ({@link #captureRawPeaks}) off
@@ -245,7 +243,7 @@ public class FftResult {
     public int[] imdProductBin;
 
     /** Intermodulation readout of a dual-tone spectrum, all levels in dBFS -
-     *  written wherever the analyser derives this result's statistics, from
+     *  written with this result's statistics, from
      *  {@link #fundamentalHzRefined} and {@link #fundamental2HzRefined}.
      *  {@code null} when the spectrum carries no second tone. */
     public ImdResult imd;
@@ -273,10 +271,9 @@ public class FftResult {
     /** Upper bound of the frequency range used for SNR (Hz); 0 = no limit. */
     public double snrFreqMax;
     /** How many harmonics the THD sums, counted from the 2nd: H2 .. H(n+1),
-     *  each still subject to the distortion window above.  Set by the caller
-     *  the same way the window is - the analysis input, and what the readout
-     *  labels the sum with; 0 on a result never told, which the analyser
-     *  treats as its historic H2..H9. */
+     *  each still subject to the distortion window above - the readout
+     *  settings' value the statistics were calculated with, and what the
+     *  readout labels the sum with. */
     public int thdHarmonics;
     /** True = coherent (complex) averaging; false = incoherent (power) averaging. */
     public boolean coherentAveraging;
@@ -302,26 +299,6 @@ public class FftResult {
     public double windowCoherentGain;
     /** Average noise floor: RMS amplitude of a single noise bin converted to dBFS. */
     public double avgNoiseFloorDbFs;
-    /** Pre-correction (BLUE-dot) snapshot of fundamental + harmonic
-     *  (freq, dBFS) pairs, paired with this Result so they publish
-     *  atomically together via {@code lastResult = r}.  Lives in
-     *  Result rather than as a separate volatile field on the worker
-     *  to avoid a tearing race where the view reads "new pre / old
-     *  r" and renders BLUE based on a future analysis cycle's
-     *  cumulative data while RED still reflects the current cycle -
-     *  visible as the BLUE dot jumping every few cycles even when the
-     *  cal lookup itself is bit-stable.
-     *  Layout: {@code [0] = freqs[], [1] = dBFs[]} with index 0
-     *  holding the fundamental and indices 1..harmonicCount holding
-     *  H2..HN.  {@code null} when no calibration is loaded. */
-    public double[][] preCorrectionPeaks;
-    /** Pre-correction (BLUE-dot) snapshot of the dual-tone lines, paired with
-     *  this Result for the same reason as {@link #preCorrectionPeaks}.
-     *  Layout: {@code [0] = freqs[], [1] = dBFs[]} holding F1, F2, then the
-     *  lower and the upper product of each order 2..{@link ImdResult#MAX_ORDER}.
-     *  {@code null} when no calibration is loaded or the frame carries no
-     *  intermodulation readout. */
-    public double[][] imdPreCorrectionPeaks;
     /**
      * Half-width of the dynamic fundamental exclusion zone in Hz (one side).
      * For a clean recording this is a few Hz; a signal interruption causes
@@ -330,8 +307,8 @@ public class FftResult {
     public double fundamentalDynExclusionHz;
     /**
      * User-supplied true fundamental level in dBFS - the manual fundamental
-     * (from {@code --fund-v} / {@code --fund-dbv} or the FFT-tab manual-fund
-     * field), converted from the stated dBV to dBFS once at the input boundary
+     * of the readout settings ({@link ReadoutSettings#manualFundamentalDbFs}),
+     * converted from the stated volts to dBFS once at the input boundary
      * via the global ADC offset and never overwritten by post-processing.
      * When set:
      * <ul>
@@ -351,9 +328,6 @@ public class FftResult {
      *  ({@code DebugSwitches.SHOW_DISCONTINUITY_GATES}); {@code null} when the
      *  detector isn't running. */
     public SpectralDiscontinuityDetector.Gates gates;
-    /** Current accepted block's pre-average spectrum (dBFs) for the discontinuity
-     *  debug overlay; {@code null} unless the gate debug is on. */
-    public double[] gateBlockDbFs;
     /** Last gate-REJECTED block's spectrum (dBFs), held so the debug overlay can
      *  show what tripped a gate (rejected blocks never reach the display). */
     public double[] gateRejectDbFs;
@@ -371,20 +345,24 @@ public class FftResult {
      *  in prefs or a new pool slot that's never been filled).
      *  Called from {@link FftAnalyzer#analyze} before the bin
      *  arrays are written so the analyzer can use {@code re} /
-     *  {@code im} / {@code amplitudeDbFs} / {@code phaseDeg}
-     *  directly as its output buffers - no per-cycle allocation. */
+     *  {@code im} / {@code amplitudeDbFs} directly as its output
+     *  buffers - no per-cycle allocation. */
     public void ensureArrays(int binCount, int harmonicCount) {
         if (amplitudeDbFs == null || amplitudeDbFs.length != binCount) {
             amplitudeDbFs = new double[binCount];
-            phaseDeg      = new double[binCount];
             re            = new double[binCount];
             im            = new double[binCount];
         }
-        if (harmonicBins == null || harmonicBins.length != harmonicCount) {
-            harmonicBins  = new int   [harmonicCount];
-            harmonicHz    = new double[harmonicCount];
-            harmonicDbFs  = new double[harmonicCount];
-            harmonicPct   = new double[harmonicCount];
+        ensureHarmonicArrays(harmonicCount);
+    }
+
+    /** Sizes the harmonic arrays for {@code count} harmonics, reusing them
+     *  when their length already matches. */
+    private void ensureHarmonicArrays(int count) {
+        if (harmonicBins == null || harmonicBins.length != count) {
+            harmonicBins  = new int   [count];
+            harmonicHz    = new double[count];
+            harmonicPct   = new double[count];
         }
     }
 
@@ -399,15 +377,21 @@ public class FftResult {
                 : 0.0;
     }
 
-    /** Places the harmonic ladder on the refined fundamental: harmonic
-     *  {@code h + 2} at {@code (h + 2) · fundamentalHzRefined}, its bin the
-     *  nearest one, or -1 beyond the spectrum.  The levels are the
-     *  statistics' ({@link FftAnalyzer#recomputeStats}), which read the
-     *  positions written here. */
-    public void placeHarmonics() {
+    /** Places a ladder of harmonics on the fundamental's fractional bin:
+     *  harmonic {@code h + 2} at {@code (h + 2) · kappa} bins, its bin the
+     *  nearest one, or -1 beyond the spectrum.  The arrays are sized to
+     *  {@code count} first.  The levels are the statistics'
+     *  ({@link org.edgo.audio.measure.common.SpectrumStatistics#calculateStat}),
+     *  which read the positions written here.
+     *
+     * @param count the harmonics to place, counted from the 2nd
+     * @param kappa the fundamental's fractional bin the ladder stands on */
+    public void placeHarmonics(int count, double kappa) {
+        ensureHarmonicArrays(count);
+        harmonicCount = count;
         int halfSize = amplitudeDbFs.length - 1;
         for (int h = 0; h < harmonicCount; h++) {
-            double hz = (h + 2) * fundamentalHzRefined;
+            double hz = (h + 2) * kappa * freqResolution;
             int    hb = (int) Math.round(hz / freqResolution);
             harmonicHz[h]   = hz;
             harmonicBins[h] = (hb >= 1 && hb <= halfSize) ? hb : -1;
@@ -487,6 +471,7 @@ public class FftResult {
         c.fllAveraged2Hz             = src.fllAveraged2Hz;
         c.fundamentalDbFs            = src.fundamentalDbFs;
         c.fundamentalLinear          = src.fundamentalLinear;
+        c.fundamental                = src.fundamental;   // immutable - share the reference
         c.coherentKappa              = src.coherentKappa;
         c.channelLeft                = src.channelLeft;
         c.samplesAbsStart            = src.samplesAbsStart;
@@ -494,10 +479,8 @@ public class FftResult {
         c.harmonicCount              = src.harmonicCount;
         c.harmonicBins               = reuseCopy(c.harmonicBins,  src.harmonicBins);
         c.harmonicHz                 = reuseCopy(c.harmonicHz,    src.harmonicHz);
-        c.harmonicDbFs               = reuseCopy(c.harmonicDbFs,  src.harmonicDbFs);
+        c.harmonics                  = src.harmonics != null ? src.harmonics.clone() : null;
         c.harmonicPct                = reuseCopy(c.harmonicPct,   src.harmonicPct);
-        c.lineFloorBins              = reuseCopy(c.lineFloorBins, src.lineFloorBins);
-        c.lineFloorDbFs              = reuseCopy(c.lineFloorDbFs, src.lineFloorDbFs);
         c.rawFundRe                  = src.rawFundRe;
         c.rawFundIm                  = src.rawFundIm;
         c.dacFundPhaseRad            = src.dacFundPhaseRad;
@@ -527,150 +510,65 @@ public class FftResult {
         c.fundamentalDynExclusionHz  = src.fundamentalDynExclusionHz;
         c.fundamentalTrueDbFs        = src.fundamentalTrueDbFs;
         c.gates                      = src.gates;   // immutable snapshot - share the reference
-        c.gateBlockDbFs              = src.gateBlockDbFs;    // debug snapshots - share (not mutated)
         c.gateRejectDbFs             = src.gateRejectDbFs;
         c.gateRejectGates            = src.gateRejectGates;
-        c.preCorrectionPeaks         = copyRows(src.preCorrectionPeaks);
-        c.imdPreCorrectionPeaks      = copyRows(src.imdPreCorrectionPeaks);
     }
 
-    /** A copy of a 2-D peak list: the outer array AND each non-null row
-     *  cloned, so the copy can be mutated independently of the source (rows
-     *  are tiny peak lists - no reuse needed); {@code null} stays null. */
-    private double[][] copyRows(double[][] rows) {
-        if (rows == null) return null;
-        double[][] dst = new double[rows.length][];
-        for (int i = 0; i < rows.length; i++) {
-            dst[i] = rows[i] != null ? rows[i].clone() : null;
+    /** Every line of the spectrum in the slot order of
+     *  {@link FreqRespCalHelper#toneFrequencies}: the fundamental, each
+     *  harmonic, then for a dual tone the second fundamental and the
+     *  intermodulation products, each order's lower product before its upper.
+     *
+     * @return the lines by slot; {@code null} for a slot not carried or
+     *         before the statistics ran */
+    public SpectralLine[] toneLines() {
+        SpectralLine[] lines = new SpectralLine[FreqRespCalHelper.toneCount(this)];
+        lines[0] = fundamental;
+        for (int h = 0; harmonics != null && h < harmonics.length && h < harmonicCount; h++) {
+            lines[1 + h] = harmonics[h];
         }
-        return dst;
-    }
-
-    /**
-     * Noise floor as the spectrum actually SHOWS it (dBFS): the high-percentile
-     * "top of the grass" with the fundamental, the harmonics and their skirts
-     * removed - the practical level a harmonic must clear to be measurable,
-     * well above the RMS {@link #avgNoiseFloorDbFs}.  Decays as the coherent
-     * average deepens.  {@link Double#NaN} when no spectrum is present.
-     */
-    public double noisePeakFloorDbFs() {
-        if (amplitudeDbFs == null || !(freqResolution > 0)) return Double.NaN;
-        int n = amplitudeDbFs.length;
-        boolean[] excl = new boolean[n];
-        int fundHalf = (int) Math.max(1, Math.ceil(fundamentalDynExclusionHz / freqResolution));
-        markSignalBins(excl, fundamentalBin, fundHalf);            // fundamental + its skirt
-        int harmHalf = Math.max(3, fundHalf / 8);
-        if (harmonicBins != null) {
-            for (int i = 0; i < harmonicCount && i < harmonicBins.length; i++) {
-                markSignalBins(excl, harmonicBins[i], harmHalf);   // each harmonic + its skirt
+        if (imd != null) {
+            int slot = FreqRespCalHelper.secondToneSlot(this);
+            lines[slot++] = fundamentalHzRefined <= fundamental2HzRefined ? imd.f2 : imd.f1;
+            for (int k = 2; k <= ImdResult.MAX_ORDER; k++) {
+                lines[slot++] = imd.dnL[k];
+                lines[slot++] = imd.dnH[k];
             }
         }
-        double[] noise = new double[n];
-        int cnt = 0;
-        for (int b = 1; b < n; b++) {
-            if (!excl[b] && Double.isFinite(amplitudeDbFs[b])) noise[cnt++] = amplitudeDbFs[b];
-        }
-        if (cnt == 0) return Double.NaN;
-        Arrays.sort(noise, 0, cnt);
-        int idx = (int) Math.min(cnt - 1, Math.round(0.999 * (cnt - 1)));   // grass peaks
-        return noise[idx];
-    }
-
-    /**
-     * Robust noise floor (dBFS) in the NEAR RANGE of the fundamental - the median
-     * of two {@link #LOCAL_FLOOR_FLANK_HZ}-wide flanks placed immediately beyond
-     * the fundamental's dynamic skirt.  This is a SHARPNESS probe, not a wide-band
-     * floor: a genuine tone has dropped to the noise floor a few lobes out (so it
-     * towers over this), whereas the "peak" of a broadband hump (speech) or a
-     * noise bin is still surrounded by near-equal grass here.  {@link Double#NaN}
-     * when the flanks hold no usable bins.
-     */
-    public double localNoiseFloorDbFs() {
-        if (amplitudeDbFs == null || !(freqResolution > 0) || fundamentalBin <= 0) return Double.NaN;
-        int n = amplitudeDbFs.length;
-        int skirt = (int) Math.max(1, Math.ceil(fundamentalDynExclusionHz / freqResolution));
-        int flank = (int) Math.round(LOCAL_FLOOR_FLANK_HZ / freqResolution);
-        double[] band = new double[2 * flank];
-        int cnt = 0;
-        for (int b = fundamentalBin - skirt - flank; b < fundamentalBin - skirt; b++) {
-            if (b >= 1 && b < n && Double.isFinite(amplitudeDbFs[b])) band[cnt++] = amplitudeDbFs[b];
-        }
-        for (int b = fundamentalBin + skirt + 1; b <= fundamentalBin + skirt + flank; b++) {
-            if (b >= 1 && b < n && Double.isFinite(amplitudeDbFs[b])) band[cnt++] = amplitudeDbFs[b];
-        }
-        if (cnt == 0) return Double.NaN;
-        Arrays.sort(band, 0, cnt);
-        return band[cnt / 2];                                          // median = local grass level
-    }
-
-    /** The local noise floor a distortion line at {@code bin} is held at from
-     *  below ({@link #lineFloorDbFs}), dBFS; {@link Double#NaN} where none was
-     *  measured. */
-    public double lineFloorDbFs(int bin) {
-        if (lineFloorBins == null || lineFloorDbFs == null || bin < 1) return Double.NaN;
-        for (int i = 0; i < lineFloorBins.length; i++) {
-            if (lineFloorBins[i] == bin) return lineFloorDbFs[i];
-        }
-        return Double.NaN;
-    }
-
-    /** {@code linear}, a line's amplitude at {@code bin} (full scale 1), held
-     *  at the line's local noise floor from below
-     *  ({@link #lineFloorDbFs(int)}); unchanged where no floor was measured
-     *  or the reading is not finite. */
-    public double atLeastLineFloor(int bin, double linear) {
-        double floorDbFs = lineFloorDbFs(bin);
-        if (!Double.isFinite(floorDbFs) || !Double.isFinite(linear)) return linear;
-        return Math.max(linear, Math.pow(10.0, floorDbFs / 20.0));
-    }
-
-    /** One distortion line as the readouts carry it: the bin it sits on and
-     *  its readout in dBFS, held at the line's floor from below. */
-    public record DistortionLine(int bin, double readoutDbFs) {}
-
-    /** The harmonics as distortion lines, H2 first; empty without
-     *  harmonics. */
-    public List<DistortionLine> harmonicLines() {
-        List<DistortionLine> lines = new ArrayList<>();
-        if (harmonicBins == null || harmonicDbFs == null) return lines;
-        for (int h = 0; h < harmonicCount; h++) {
-            lines.add(new DistortionLine(harmonicBins[h], harmonicDbFs[h]));
-        }
         return lines;
     }
 
-    /** The intermodulation products as distortion lines - both sidebands of
-     *  every order from 2 to {@link ImdResult#MAX_ORDER}, the lower first, the
-     *  lines the combined intermod figure sums; empty for a single tone or a
-     *  spectrum whose bin width is unknown.  A product outside the measurable
-     *  range carries a {@link Double#NaN} readout. */
-    public List<DistortionLine> intermodLines() {
-        List<DistortionLine> lines = new ArrayList<>();
-        if (imd == null || !(freqResolution > 0.0)) return lines;
-        for (int k = 2; k <= ImdResult.MAX_ORDER; k++) {
-            lines.add(new DistortionLine((int) Math.round(imd.dnLHz[k] / freqResolution), imd.dnLDbFs[k]));
-            lines.add(new DistortionLine((int) Math.round(imd.dnHHz[k] / freqResolution), imd.dnHDbFs[k]));
-        }
-        return lines;
-    }
-
-    /**
-     * Harmonic {@code i}'s level (dBFS) as ORIGINALLY measured - before any
-     * {@code .frc} de-embedding.  When a cal is loaded the displayed
-     * {@link #harmonicDbFs} is lifted by the cal, but {@link #preCorrectionPeaks}
-     * retains the raw pre-correction levels; with no cal, {@link #harmonicDbFs}
-     * is already raw.  Index 0 = H2.  {@link Double#NaN} when unavailable.
+    /** The bin whose levels stand in for bin {@code k} once the pilot lines
+     *  are cut out of the spectrum: {@code k} itself outside the pilots'
+     *  spans ({@link #pilot1MaskLoBin} .. {@link #pilot1MaskHiBin},
+     *  {@link #pilot2MaskLoBin} .. {@link #pilot2MaskHiBin}); inside one, the
+     *  noise bin just outside the span, mirrored in at the nearer edge, so a
+     *  cut span carries the noise beside it - its power and its texture.  A
+     *  pilot is the alignment's time base, not part of the measured signal.
      *
-     * <p>This is the honest measurability reference: the cal can boost a buried
-     * harmonic above the displayed floor, but its raw level is what the ADC
-     * actually captured relative to the (raw) noise grass.
-     */
-    public double rawHarmonicDbFs(int i) {
-        if (preCorrectionPeaks != null && preCorrectionPeaks.length > 1
-                && preCorrectionPeaks[1] != null && 1 + i < preCorrectionPeaks[1].length) {
-            return preCorrectionPeaks[1][1 + i];   // [1][0] = fundamental, [1][1+i] = harmonic i
+     * @param k the bin
+     * @return the bin to read for {@code k}; {@code k} itself where the mirror
+     *         would leave the spectrum */
+    public int pilotFreeBin(int k) {
+        int lo;
+        int hi;
+        if (k >= pilot1MaskLoBin && k <= pilot1MaskHiBin) {
+            lo = pilot1MaskLoBin;
+            hi = pilot1MaskHiBin;
+        } else if (k >= pilot2MaskLoBin && k <= pilot2MaskHiBin) {
+            lo = pilot2MaskLoBin;
+            hi = pilot2MaskHiBin;
+        } else {
+            return k;
         }
-        return (harmonicDbFs != null && i < harmonicDbFs.length) ? harmonicDbFs[i] : Double.NaN;
+        int source = k - lo <= hi - k ? lo - 1 - (k - lo) : hi + 1 + (hi - k);
+        return source >= 1 && source < amplitudeDbFs.length ? source : k;
+    }
+
+    /** The harmonics as the statistics measured them, H2 first; empty
+     *  before the statistics ran. */
+    public List<SpectralLine> harmonicLines() {
+        return harmonics != null ? Arrays.asList(harmonics) : List.of();
     }
 
     /**
@@ -740,13 +638,5 @@ public class FftResult {
         rawFundIm = Double.NaN;
         rawPeakRe = null;
         rawPeakIm = null;
-    }
-
-    /** Marks {@code center ± half} bins as signal (excluded from the noise set). */
-    private void markSignalBins(boolean[] excl, int center, int half) {
-        if (center <= 0) return;
-        int lo = Math.max(0, center - half);
-        int hi = Math.min(excl.length - 1, center + half);
-        for (int b = lo; b <= hi; b++) excl[b] = true;
     }
 }

@@ -19,7 +19,6 @@
 package org.edgo.audio.measure.gui.fft;
 
 import java.util.ArrayDeque;
-import java.util.Arrays;
 import java.util.Locale;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -32,7 +31,6 @@ import org.edgo.audio.measure.dsp.FftBinSnap;
 import org.edgo.audio.measure.dsp.FftDsp;
 import org.edgo.audio.measure.dsp.SpectralDiscontinuityDetector;
 import org.edgo.audio.measure.dsp.TimeDiscontinuityDetector;
-import org.edgo.audio.measure.dsp.ToneLobeLift;
 import org.edgo.audio.measure.enums.AlignGenerator;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.FftOverlap;
@@ -40,12 +38,13 @@ import org.edgo.audio.measure.enums.FundamentalPhaseAlignment;
 import org.edgo.audio.measure.enums.GenChangeCause;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.enums.WindowType;
-import org.edgo.audio.measure.fft.CoherentAccumulator;
-import org.edgo.audio.measure.fft.CoherentAccumulator.FrameTurns;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.fft.FftResultPool;
 import org.edgo.audio.measure.fft.PilotToneSelector;
+import org.edgo.audio.measure.fft.ReadoutSettings;
+import org.edgo.audio.measure.fft.SpectrumAccumulator;
+import org.edgo.audio.measure.fft.SpectrumAccumulator.FrameTurns;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.GeneratorOutput;
 import org.edgo.audio.measure.gui.bus.MessageBus;
@@ -85,19 +84,13 @@ public final class FftAnalyzerWorker {
     /** Maximum sleep between analysis attempts. */
     private static final int MAX_SLEEP_MS = 250;
     /** Per-cycle display throttle: the cross-cycle accumulator runs every analysis
-     *  cycle, but the O(N) display rebuild (overlay + recomputeStats + dBV lift +
+     *  cycle, but the O(N) display rebuild (overlay + statistics + dBV lift +
      *  deep-copy publish) is gated to AT MOST one per {@code DISPLAY_MIN_NANOS} when
      *  caught up, and SKIPPED while the capture backlog is high so the worker
      *  catches up instead of overrunning - but never deferred past
      *  {@code DISPLAY_MAX_NANOS} so the view can't freeze. */
     private static final long DISPLAY_MIN_NANOS =  40_000_000L;   // ≤25 Hz refresh when keeping up
     private static final long DISPLAY_MAX_NANOS = 500_000_000L;   // ≥2 Hz even while behind
-    /** Lowest harmonic ORDER the analysis always evaluates, whatever the
-     *  preference states: the ladder H2 to H9 the distortion readouts are
-     *  built on.  The count handed to the analysis is one less - it counts
-     *  from the SECOND harmonic - and the protected ladder of the pilot's
-     *  selection is that count plus one again. */
-    private static final int MIN_CALC_MAX_HARMONIC = 9;
     private long lastShowNanos;
 
     /** The owner this worker reports to - every message is posted onto the UI
@@ -110,7 +103,7 @@ public final class FftAnalyzerWorker {
      *  fractional bin re-pinned from their phase slope.  Restarted by
      *  {@link #accumulateIntoForeverBuffer} on the collection's first frame
      *  and on a change of the transform length or the averaging mode. */
-    private final CoherentAccumulator accumulator = new CoherentAccumulator();
+    private final SpectrumAccumulator accumulator = new SpectrumAccumulator();
     /** The predistortion engine every published result is handed to, on this
      *  worker's thread; null while none is registered.  Stored, not owned: the
      *  predistortion dialog creates the engine, registers and unregisters it. */
@@ -237,7 +230,7 @@ public final class FftAnalyzerWorker {
      *  (no stale pre-reset samples leak in).  Re-anchoring on the worker thread
      *  keeps the cursor single-owner even though resets arrive from others. */
     private volatile boolean reAnchorPending = true;
-    /** Reusable per-cycle scratch: {@code analyzeBuf} is the analysis copy (the
+    /** Reusable per-cycle buffers: {@code analyzeBuf} is the analysis copy (the
      *  comb / FFT window mutate it in place, so it must not be {@link #winBuf}),
      *  {@code hopBuf} stages the fresh hop pulled from the reader each cycle.
      *  {@code hopBuf} is sized to the LARGEST possible hop of the current
@@ -553,7 +546,7 @@ public final class FftAnalyzerWorker {
     /** Each pilot line's raw phase on this frame's spectrum, and the raw phase
      *  it had on the accumulation's reference frame: their difference is the
      *  turn the line made by itself, which is all its hump is turned back by
-     *  in the accumulator ({@link CoherentAccumulator.FrameTurns}).  NaN while
+     *  in the accumulator ({@link SpectrumAccumulator.FrameTurns}).  NaN while
      *  the line is not read. */
     private double pilotRawPhase1 = Double.NaN;
     private double pilotRawPhase2 = Double.NaN;
@@ -1291,7 +1284,7 @@ public final class FftAnalyzerWorker {
      *
      * <p>A second line, the floor trace, states each harmonic's local noise
      * floor from H2 on, read from the same arrays scaled the same way by
-     * {@link ToneLobeLift#lineFloor} - the upper border of the noise band
+     * {@link FftDsp#lineFloor} - the upper border of the noise band
      * beside the line, the floor the displayed harmonics are held at from
      * below.  On the accumulator it is the coherent average's own floor,
      * which falls with the frame count, so the level line beside it says how
@@ -1324,7 +1317,7 @@ public final class FftAnalyzerWorker {
             double amp = Math.hypot(re[kh], im[kh]) * conv / norm;
             levels.append(String.format(" H%d=%.2f", h, amp > 1e-15 ? 20.0 * Math.log10(amp) : -300.0));
             if (h >= 2) {
-                double floorLin = ToneLobeLift.lineFloor(
+                double floorLin = FftDsp.lineFloor(
                         k -> Math.hypot(re[k], im[k]) * conv / norm, kh, halfSize, binHz, nenbwBins);
                 floors.append(String.format(" H%d=%.2f", h,
                         floorLin > 0.0 ? 20.0 * Math.log10(floorLin) : Double.NaN));
@@ -2097,35 +2090,21 @@ public final class FftAnalyzerWorker {
         return Math.pow(10.0, -marginDb / 20.0) / Math.sqrt(2.0 * Math.log(2.0));
     }
 
-    /** The pilot's level over its own local floor on the ANALYSED channel,
-     *  dB, read from the fresh frame's raw bins. */
+    /** The pilot's level over its own line floor on the ANALYSED channel,
+     *  dB, read from the fresh frame's raw bins: the pilot bin's magnitude
+     *  over {@link FftDsp#lineFloor} of the bin magnitudes around it, the
+     *  pilot's own lobe left out of that floor.
+     *
+     * @param r        this analysis cycle's result, raw bins in {@code re}/{@code im}
+     * @param k2       the pilot's bin
+     * @param halfSize highest bin index the spectrum holds
+     * @return the pilot's margin over its line floor, dB; -300 when the pilot
+     *         bin or the floor is zero */
     private double analysedPilotMarginDb(FftResult r, int k2, int halfSize) {
-        int lo = Math.max(0, k2 - PHASE_ALIGN_FLOOR_SPAN_BINS);
-        int hi = Math.min(halfSize, k2 + PHASE_ALIGN_FLOOR_SPAN_BINS);
-        double[] powers = new double[hi - lo + 1];
-        for (int k = lo; k <= hi; k++) {
-            powers[k - lo] = r.re[k] * r.re[k] + r.im[k] * r.im[k];
-        }
-        return marginOverFloorDb(powers, k2 - lo);
-    }
-
-    /** A line's power over the median power of its neighbourhood, dB, with
-     *  its own lobe left out of that median - a windowed tone spreads over a
-     *  few bins and would lift the very floor it is measured against.
-     *  {@code powers} holds the neighbourhood in bin order and
-     *  {@code powers[centre]} is the line's own bin. */
-    private double marginOverFloorDb(double[] powers, int centre) {
-        double[] floor = new double[powers.length];
-        int nFloor = 0;
-        for (int i = 0; i < powers.length; i++) {
-            if (Math.abs(i - centre) > PHASE_ALIGN_FLOOR_EXCLUDE_BINS) {
-                floor[nFloor++] = powers[i];
-            }
-        }
-        Arrays.sort(floor, 0, nFloor);
-        double median   = nFloor > 0 ? floor[nFloor / 2] : 0.0;
-        double linePow  = powers[centre];
-        return (median > 0.0 && linePow > 0.0) ? 10.0 * Math.log10(linePow / median) : -300.0;
+        double floor   = FftDsp.lineFloor(k -> Math.hypot(r.re[k], r.im[k]), k2, halfSize,
+                r.freqResolution, r.windowNenbwBins);
+        double lineMag = Math.hypot(r.re[k2], r.im[k2]);
+        return (floor > 0.0 && lineMag > 0.0) ? 20.0 * Math.log10(lineMag / floor) : -300.0;
     }
 
     /**
@@ -2307,7 +2286,7 @@ public final class FftAnalyzerWorker {
         // fundamental level(s); the comparison fires once alignment settles.
         alignWatchArmed     = true;
         alignWatchBaselined = false;
-        // The lock re-acquires from scratch, so the pilot tracking's one-shot
+        // The lock re-acquires from nothing, so the pilot tracking's one-shot
         // re-zero is armed again for the moment it is tracking once more.
         pilotRetrackDone    = false;
         pilotRetrackPending = false;
@@ -2623,16 +2602,20 @@ public final class FftAnalyzerWorker {
     }
 
     /** Qualifies the reference feed at an accumulator restart: the reference
-     *  bin must stand {@link #PHASE_ALIGN_MIN_MARGIN_DB} over the median power
-     *  of its neighbourhood (the fundamental's own lobe left out of that floor)
-     *  and reach {@link #PHASE_ALIGN_MIN_LEVEL_DBFS}.  A feed that fails either
+     *  bin must stand {@link #PHASE_ALIGN_MIN_MARGIN_DB} over the band-top
+     *  ({@link FftDsp#bandTop}) of its neighbourhood's bin magnitudes (the
+     *  fundamental's own lobe left out of that floor) and reach
+     *  {@link #PHASE_ALIGN_MIN_LEVEL_DBFS}.  A feed that fails either
      *  test carries no fundamental to compare against - its phase is the phase
      *  of noise, and aligning to it would inject that noise into the average -
      *  so the collection runs unaligned, with the two numbers logged and, once
      *  per collection, handed to the pane for the operator.  The sweep costs
      *  one single-bin transform per neighbourhood bin, paid once per restart,
      *  never per analysis cycle.  A no-op in every other alignment mode, which
-     *  keep no reference window - or keep it for the trace alone. */
+     *  keep no reference window - or keep it for the trace alone.
+     *
+     * @param r        the result of the analysis cycle the accumulator restarts on
+     * @param halfSize highest bin index the spectrum holds */
     private void checkPhaseAlignStart(FftResult r, int halfSize) {
         phaseAlignRefused = false;
         if (refWinBuf == null || refMirrorForTrace || !winValid || r.freqResolution <= 0.0) return;
@@ -2647,12 +2630,11 @@ public final class FftAnalyzerWorker {
             FftAnalyzer.BinPhasor p = analyzer.frameBinPhasor(refWinBuf, 0, r.fftSize, r.windowType, k);
             double pow = p.re() * p.re() + p.im() * p.im();
             if (k == k0) refPow = pow;
-            if (Math.abs(k - k0) > PHASE_ALIGN_FLOOR_EXCLUDE_BINS) floor[nFloor++] = pow;
+            if (Math.abs(k - k0) > PHASE_ALIGN_FLOOR_EXCLUDE_BINS) floor[nFloor++] = Math.sqrt(pow);
         }
-        Arrays.sort(floor, 0, nFloor);
-        double median   = nFloor > 0 ? floor[nFloor / 2] : 0.0;
-        double marginDb = (refPow > 0.0 && median > 0.0)
-                ? 10.0 * Math.log10(refPow / median) : -300.0;
+        double top      = nFloor > 0 ? FftDsp.bandTop(floor, nFloor) : 0.0;
+        double marginDb = (refPow > 0.0 && top > 0.0)
+                ? 20.0 * Math.log10(Math.sqrt(refPow) / top) : -300.0;
         double conv     = r.amplitudePerMagnitude();
         double levelDbFs = (refPow > 0.0 && conv > 0.0)
                 ? 20.0 * Math.log10(Math.sqrt(refPow) * conv) : -300.0;
@@ -3059,7 +3041,7 @@ public final class FftAnalyzerWorker {
             resultPool.release(latestForUi.getAndSet(null));
             resultPool.clear();
             // Big-buffer teardown: the sliding window, its per-cycle copy, the
-            // hop stage and the analyzer's scratch idle on several hundred MB
+            // hop stage and the analyzer's working arrays idle on several hundred MB
             // at fftSize 4 M while nothing records.  All rebuild on demand at
             // the next start (the join above guarantees no cycle is in flight).
             winBuf     = new double[0];
@@ -3069,7 +3051,7 @@ public final class FftAnalyzerWorker {
             refHopBuf  = null;
             invalidateWindow();
             winNeeded  = -1;
-            analyzer.releaseScratch();
+            analyzer.releaseBuffers();
         } else {
             // A monster-FFT cycle outlived the join: leave its state alone and
             // let the next start's pending reset wipe it on the worker side.
@@ -3497,19 +3479,14 @@ public final class FftAnalyzerWorker {
         // FFT window mutates this copy in place, never winBuf.
         double[] samples = analyzeBuf;
 
-        int    calcMaxH = Math.max(MIN_CALC_MAX_HARMONIC, prefs.getFftCalcMaxHarmonic()) - 1;
-        // "Max harmonic for THD" names the highest harmonic the sum takes; the
-        // analyser counts harmonics from the 2nd, so H(N) is N - 1 of them.
-        int    thdMaxH  = Math.max(1, prefs.getFftThdMaxHarmonic() - 1);
-        double distMin  = prefs.isFftDistMinEnabled() ? prefs.getFftDistMinHz() : 0;
-        double distMax  = prefs.isFftDistMaxEnabled() ? prefs.getFftDistMaxHz() : 0;
+        // The readout settings the frame is analysed with.  Its manual
+        // fundamental is a user-DECLARED true level - it applies to ANY source
+        // (external amplifier as much as our own generator), so it is NOT gated
+        // on genActive, which gates only the generator FREQUENCY hints below.
+        ReadoutSettings settings = ReadoutSettings.fromPreferences(prefs,
+                AudioBackend.instance().analysedChannelDbvOffsetDb());
         boolean coherent = prefs.isFftCoherentAveraging();
         boolean genActive = isGeneratorActive();
-        // Manual fundamental is a user-DECLARED true level - it applies to ANY source
-        // (external amplifier as much as our own generator), so it must NOT be gated on
-        // genActive; resolveFundRefDbFs already returns NaN unless the user enabled it.
-        // (genActive still gates the generator FREQUENCY hints below, which do need it.)
-        double fundRefDbFs = resolveFundRefDbFs(prefs);
         // The coherent de-rotation locks onto the detected fundamental, so
         // in dual-tone the hint must point at a real tone (the lower one).
         // Hinting the single-tone frequency - usually nowhere near F1/F2 -
@@ -3545,20 +3522,13 @@ public final class FftAnalyzerWorker {
                         : Double.NaN);
         // Dual tone: the second tone is searched for when no hint names it.
         analyzer.setMultiTone(dualTone);
-        // While cross-cycle averaging, the single-cycle THD / SNR / noise-floor
-        // stats are discarded and re-derived by recomputeStats() on the
-        // accumulated spectrum below - so tell analyze to skip those sweeps
-        // (incl. the two O(N log N) noise sorts) and only produce the spectrum
-        // + fundamental/harmonic bins.  Single-cycle mode keeps the full stats.
-        analyzer.setSpectrumOnly(accumulate);
         FftResult slot = resultPool.acquire();
         FftResult r;
         try {
             // The one frame at the window's start; the stated spacing is the
             // drawn pending hop, which the statistics read the overlap from.
-            r = analyzer.analyze(samples, sampleRate, fftLength, calcMaxH, thdMaxH,
-                    window, overlap, distMin, distMax, coherent, fundRefDbFs,
-                    false, expectedFundHz, slot, pendingHopSamples);
+            r = analyzer.analyze(samples, sampleRate, fftLength, settings,
+                    window, overlap, coherent, expectedFundHz, slot, pendingHopSamples);
         } catch (RuntimeException ex) {
             // Pool hygiene only - the failure itself must surface: the worker
             // loop's Throwable catch logs it, so a persistently throwing
@@ -3571,7 +3541,6 @@ public final class FftAnalyzerWorker {
         // that doesn't reach their assignment below can't republish a
         // previous cycle's snapshots.
         r.gates         = null;
-        r.gateBlockDbFs = null;
         // A signal change (resetStatistics) landed while this window was
         // being assembled / analyzed - it straddles the old and the new
         // signal.  Discard it: neither accumulate (it would poison the
@@ -3609,8 +3578,8 @@ public final class FftAnalyzerWorker {
         // Cross-cycle accumulation: each cycle contributes its (small) per-cycle
         // frames to a running accumulator (coherently rotated to align with
         // the accumulator's time reference), then the displayed Result is
-        // rebuilt from the running average and the harmonic / THD / SNR stats
-        // are re-derived via recomputeStats.  Forever mode is a true cumulative
+        // rebuilt from the running average, whose statistics the view
+        // calculates.  Forever mode is a true cumulative
         // mean (SNR boost √(total frames)); a finite ring N is the same
         // accumulator bounded to N frames (an exponential window), so it also
         // reaches √N depth regardless of the capture-buffer size.
@@ -3655,7 +3624,6 @@ public final class FftAnalyzerWorker {
                 return IDLE_CYCLE_MS;
             }
             r.gates        = spectralDetector.gates();   // debug overlay snapshot
-            r.gateBlockDbFs = dbgBlock;                    // current accepted block (pre-average)
         }
         // Second epoch gate: the detector pass above takes tens of ms at large
         // fftSize - a reset landing there must still keep this straddling
@@ -3762,7 +3730,7 @@ public final class FftAnalyzerWorker {
         }
 
         // Per-cycle TRIM: the accumulator above ran this cycle, but the O(N)
-        // display rebuild below (overlay + recomputeStats + dBV lift + deep-copy
+        // display rebuild below (overlay + statistics + dBV lift + deep-copy
         // publish) does NOT need to.  Skip it while the capture backlog is high -
         // catch up rather than overrun - throttle it to DISPLAY_MIN_NANOS when
         // caught up, but force it by DISPLAY_MAX_NANOS so the view never freezes.
@@ -3777,21 +3745,25 @@ public final class FftAnalyzerWorker {
         }
         lastShowNanos = System.nanoTime();
 
+        // The frame the view renders comes out of the accumulator: the average
+        // laid over the frame where this cycle was averaged, the raw frame as
+        // analysed where it was not - averaging off, or the phase lock still
+        // converging.
         if (accumulated) {
             accumulator.overlayOnto(r);         // r.amplitudeDbFs <- RAW cumulative average
             stampDacFundamentalPhase(r, alignMode);   // on the SAME spectrum the peaks come from
             r.captureRawPeaks();                // refresh raw F + peak phasors off the averaged re/im
         }
-        // The whole post-average pipeline - recomputeStats -> .frc calibration
+        // The whole post-average pipeline - statistics -> .frc calibration
         // -> dBV lift - runs in the UI (FftView), ONCE per DISPLAYED frame
         // (after the display throttle + the coalescing handoff), so it's not
-        // redone on coalesced frames.  Here we only hand over the RAW averaged
-        // spectrum plus the state that pipeline needs: the pinned coherent κ
-        // for the cal "before" dots (NaN => single analysis cycle), the channel.
-        r.coherentKappa = accumulated
-                ? (accumulator.isStarted() ? accumulator.getKappa()
-                                : (r.freqResolution > 0 ? r.fundamentalHzRefined / r.freqResolution : 0.0))
-                : Double.NaN;
+        // redone on coalesced frames.  Here we only hand over the RAW
+        // spectrum - averaged or not - plus the state that pipeline needs:
+        // the κ every .frc lookup is made at - the pinned one while averaging,
+        // which does not jitter, the frame's refined fundamental otherwise -
+        // and the channel.
+        double frameKappa = r.freqResolution > 0 ? r.fundamentalHzRefined / r.freqResolution : 0.0;
+        r.coherentKappa = accumulated && accumulator.isStarted() ? accumulator.getKappa() : frameKappa;
         r.channelLeft      = wantLeft;
         r.samplesAbsStart  = samplesAbsStart;   // the window's absolute start
         r.epoch            = epochAtStart;      // consumers drop frames from a pre-reset epoch
@@ -3926,14 +3898,14 @@ public final class FftAnalyzerWorker {
      * {@link FftResult#rawPeakRe} / {@link FftResult#rawPeakIm}), the tones'
      * DAC phases ({@link FftResult#dacFundPhaseRad},
      * {@link FftResult#dacFund2PhaseRad}), the harmonic count, bins and
-     * frequencies, the harmonics' levels ({@link FftResult#rawHarmonicDbFs}:
-     * {@link FftResult#preCorrectionPeaks}, otherwise
-     * {@link FftResult#harmonicDbFs}), the product grid
-     * ({@link FftResult#imdProductA} / {@link FftResult#imdProductB}), and
-     * {@link FftResult#amplitudeDbFs} with {@link FftResult#freqResolution}
-     * and {@link FftResult#windowNenbwBins} for the lines' clearances.  The
-     * pre-correction peaks are null and the harmonic levels hold the
-     * analyser's detection on the last single frame, not the average.
+     * frequencies, the manual fundamental ({@link FftResult#fundamentalTrueDbFs}),
+     * the product grid ({@link FftResult#imdProductA} /
+     * {@link FftResult#imdProductB}), and {@link FftResult#amplitudeDbFs} with
+     * {@link FftResult#freqResolution} and {@link FftResult#windowNenbwBins}
+     * for the lines' clearances.  The frame carries no statistics: they are
+     * calculated on the view's copy.
+     *
+     * @param r the published result
      */
     private void handToPredistortionEngine(FftResult r) {
         PredistortionEngine engine = predistortionEngine;
@@ -3985,21 +3957,5 @@ public final class FftAnalyzerWorker {
         if (chunk <= 0) return have;
         int got = rdr.read(chunk, wantLeft ? dst : refDst, wantLeft ? refDst : dst, have);
         return got == SignalBufferReader.OVERRUN ? SignalBufferReader.OVERRUN : have + got;
-    }
-
-
-    /** Computes the dBFS reference anchor passed into {@link FftAnalyzer}:
-     *  the manual fundamental (canonical Vrms - the field stores nothing
-     *  else, whatever unit the user typed in) is resolved to its dBV anchor,
-     *  then converted to dBFS here at the boundary - the analyzer speaks
-     *  dBFS only.  Returns {@code NaN} (no anchor) unless manual-fundamental
-     *  mode is enabled. */
-    private double resolveFundRefDbFs(Preferences prefs) {
-        if (prefs.isFftManualFundEnabled()) {
-            double v = prefs.getFftManualFundVrms();
-            double dbv = (v > 0) ? 20.0 * Math.log10(v) : Double.NaN;
-            return dbv - AudioBackend.instance().analysedChannelDbvOffsetDb();   // NaN propagates
-        }
-        return Double.NaN;
     }
 }

@@ -28,8 +28,8 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Random;
 
-import org.edgo.audio.measure.dsp.ToneLobeLift;
-import org.edgo.audio.measure.fft.CoherentAccumulator.FrameTurns;
+import org.edgo.audio.measure.dsp.FftDsp;
+import org.edgo.audio.measure.fft.SpectrumAccumulator.FrameTurns;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -38,7 +38,7 @@ import org.junit.jupiter.api.Test;
  * is the rotation that bin received.  Geometry: a transform of 4096 samples,
  * the fundamental on bin 100, a hump of 3 bins to either side.
  */
-class CoherentAccumulatorTest {
+class SpectrumAccumulatorTest {
 
     private static final int    FFT_SIZE  = 4096;
     private static final double KAPPA     = 100.0;
@@ -49,38 +49,62 @@ class CoherentAccumulatorTest {
     private static final double TOL_RAD   = 1e-9;
     private static final int    NO_PILOT  = -1;
 
+    /** A frame of unit real parts.
+     *
+     * @return {@code 1.0} on every bin 0 .. FFT_SIZE/2 */
     private double[] ones() {
         double[] v = new double[FFT_SIZE / 2 + 1];
         Arrays.fill(v, 1.0);
         return v;
     }
 
+    /** A frame of zero imaginary parts.
+     *
+     * @return {@code 0.0} on every bin 0 .. FFT_SIZE/2 */
     private double[] zeros() {
         return new double[FFT_SIZE / 2 + 1];
     }
 
-    /** The angle bin k received: the accumulated phasor's, the frame's being 0. */
-    private double angleAt(CoherentAccumulator acc, int k) {
+    /** The angle a bin received: the accumulated phasor's, the frame's being 0.
+     *
+     * @param acc the accumulator
+     * @param k   the bin
+     * @return the accumulated phasor's angle, radians */
+    private double angleAt(SpectrumAccumulator acc, int k) {
         return Math.atan2(acc.getSumIm()[k], acc.getSumRe()[k]);
     }
 
+    /** The proportional rotation of a bin over {@link #DELTA}.
+     *
+     * @param k the bin
+     * @return {@code -2π·DELTA·k/N} folded to one turn, radians */
     private double proportional(int k) {
         return Math.IEEEremainder(-2.0 * Math.PI * DELTA * k / FFT_SIZE, 2.0 * Math.PI);
     }
 
+    /** Asserts two angles equal modulo one turn.
+     *
+     * @param expected the expected angle, radians
+     * @param actual   the angle read, radians
+     * @param what     the failure message */
     private void assertAngle(double expected, double actual, String what) {
         assertEquals(0.0, Math.IEEEremainder(actual - expected, 2.0 * Math.PI), TOL_RAD, what);
     }
 
-    private CoherentAccumulator singleTone() {
-        CoherentAccumulator acc = new CoherentAccumulator();
+    /** A coherent collection pinned on the single tone at {@link #KAPPA}.
+     *
+     * @return the restarted accumulator */
+    private SpectrumAccumulator singleTone() {
+        SpectrumAccumulator acc = new SpectrumAccumulator();
         acc.restart(FFT_SIZE, true, KAPPA, Double.NaN, null, null, LOBE_HALF, NO_PILOT, NO_PILOT);
         return acc;
     }
 
+    /** Every bin of H2's hump turns by twice the fundamental's angle; the
+     *  bins outside every hump turn in proportion to their own bin. */
     @Test
     void aHumpTurnsByItsLinesAngleAndTheRestInProportionToTheBin() {
-        CoherentAccumulator acc = singleTone();
+        SpectrumAccumulator acc = singleTone();
         acc.add(ones(), zeros(), 1.0, FrameTurns.of(DELTA));
         double phi1 = acc.fundamentalAngle(DELTA);
         int h2 = (int) Math.round(2 * KAPPA);
@@ -98,9 +122,10 @@ class CoherentAccumulatorTest {
         assertEquals(1.0, acc.getFrames(), 0.0, "one frame held");
     }
 
+    /** The fundamental's phase excess turns its own hump alone. */
     @Test
     void theExcessReachesTheFundamentalsHumpAlone() {
-        CoherentAccumulator acc = singleTone();
+        SpectrumAccumulator acc = singleTone();
         double phiF = 0.4;
         acc.add(ones(), zeros(), 1.0,
                 new FrameTurns(DELTA, Double.NaN, phiF, 0.0, Double.NaN, Double.NaN));
@@ -113,9 +138,11 @@ class CoherentAccumulatorTest {
         assertAngle(2.0 * phi1, angleAt(acc, 2 * k0), "H2 keeps its own angle");
     }
 
+    /** A one-bin hump - the rectangular window's - turns H3's neighbours with
+     *  it and leaves the bins two away proportional. */
     @Test
     void aOneBinHumpIsTheRectangularWindowsCase() {
-        CoherentAccumulator acc = new CoherentAccumulator();
+        SpectrumAccumulator acc = new SpectrumAccumulator();
         acc.restart(FFT_SIZE, true, KAPPA, Double.NaN, null, null, 1, NO_PILOT, NO_PILOT);
         acc.add(ones(), zeros(), 1.0, FrameTurns.of(DELTA));
         double phi1 = acc.fundamentalAngle(DELTA);
@@ -125,11 +152,13 @@ class CoherentAccumulatorTest {
         assertAngle(proportional(h3 + 2), angleAt(acc, h3 + 2), "two bins above: proportional");
     }
 
+    /** A product turns by its combination of the two tones' turns; the
+     *  second tone takes its own excess. */
     @Test
     void aProductTurnsByItsCombinationAndTheSecondToneTakesItsOwnExcess() {
         double kappa2 = 260.0;
         double phi2 = 1.1, phiF2 = 0.25;
-        CoherentAccumulator acc = new CoherentAccumulator();
+        SpectrumAccumulator acc = new SpectrumAccumulator();
         acc.restart(FFT_SIZE, true, KAPPA, kappa2, new int[] { 0, 1, -1 }, new int[] { 1, 1, 1 },
                 LOBE_HALF, NO_PILOT, NO_PILOT);
         acc.add(ones(), zeros(), 1.0,
@@ -141,10 +170,11 @@ class CoherentAccumulatorTest {
         assertAngle(proportional(230), angleAt(acc, 230), "a bin between the products: proportional");
     }
 
+    /** A second tone no reading places turns by its own fractional bin. */
     @Test
     void aCountedSecondToneTurnsByItsOwnBin() {
         double kappa2 = 260.5;
-        CoherentAccumulator acc = new CoherentAccumulator();
+        SpectrumAccumulator acc = new SpectrumAccumulator();
         acc.restart(FFT_SIZE, true, KAPPA, kappa2, new int[] { 0 }, new int[] { 1 },
                 LOBE_HALF, NO_PILOT, NO_PILOT);
         acc.add(ones(), zeros(), 1.0, FrameTurns.of(DELTA));
@@ -154,10 +184,12 @@ class CoherentAccumulatorTest {
         }
     }
 
+    /** A pilot's hump turns by its reading, or by its own bin where none
+     *  places it. */
     @Test
     void aPilotsHumpTurnsByItsOwnReadingOrByItsBin() {
         int pilot = 1234;
-        CoherentAccumulator acc = new CoherentAccumulator();
+        SpectrumAccumulator acc = new SpectrumAccumulator();
         acc.restart(FFT_SIZE, true, KAPPA, Double.NaN, null, null, LOBE_HALF, pilot, NO_PILOT);
         double read = 0.7;
         acc.add(ones(), zeros(), 1.0,
@@ -168,7 +200,7 @@ class CoherentAccumulatorTest {
         assertAngle(proportional(pilot + LOBE_HALF + 1), angleAt(acc, pilot + LOBE_HALF + 1),
                 "the bin above the pilot's hump: proportional");
 
-        CoherentAccumulator counted = new CoherentAccumulator();
+        SpectrumAccumulator counted = new SpectrumAccumulator();
         counted.restart(FFT_SIZE, true, KAPPA, Double.NaN, null, null, LOBE_HALF, pilot, NO_PILOT);
         counted.add(ones(), zeros(), 1.0, FrameTurns.of(DELTA));
         for (int m = -LOBE_HALF; m <= LOBE_HALF; m++) {
@@ -177,9 +209,10 @@ class CoherentAccumulatorTest {
         }
     }
 
+    /** Without a pinned fundamental a frame is added weighted and unrotated. */
     @Test
     void withoutAPinnedFundamentalTheFrameIsAddedAsItStands() {
-        CoherentAccumulator acc = new CoherentAccumulator();
+        SpectrumAccumulator acc = new SpectrumAccumulator();
         acc.restart(FFT_SIZE, true, 0.0, Double.NaN, null, null, LOBE_HALF, NO_PILOT, NO_PILOT);
         acc.add(ones(), zeros(), 2.0, FrameTurns.of(DELTA));
         assertEquals(2.0, acc.getSumRe()[777], 0.0, "weighted, unrotated");
@@ -187,9 +220,10 @@ class CoherentAccumulatorTest {
         assertEquals(2.0, acc.getFrames(), 0.0, "two frames held");
     }
 
+    /** Subtracting the previous cycle leaves the reference frame alone. */
     @Test
     void subtractingThePreviousCycleTakesItsFrameOutExactly() {
-        CoherentAccumulator acc = singleTone();
+        SpectrumAccumulator acc = singleTone();
         acc.add(ones(), zeros(), 1.0, FrameTurns.of(0.0));
         acc.add(ones(), zeros(), 1.0, FrameTurns.of(DELTA));
         acc.subtractPreviousCycles();
@@ -200,9 +234,11 @@ class CoherentAccumulatorTest {
         assertEquals(1.0, acc.getFrames(), 0.0, "one frame held");
     }
 
+    /** On a power average, subtracting the previous cycle leaves the first
+     *  frame's power alone. */
     @Test
     void subtractingThePreviousCycleTakesItsPowerOutExactly() {
-        CoherentAccumulator acc = new CoherentAccumulator();
+        SpectrumAccumulator acc = new SpectrumAccumulator();
         acc.restart(FFT_SIZE, false, KAPPA, Double.NaN, null, null, LOBE_HALF, NO_PILOT, NO_PILOT);
         double[] mag = ones();
         mag[10] = 3.0;
@@ -213,9 +249,10 @@ class CoherentAccumulatorTest {
         assertEquals(1.0, acc.getFrames(), 0.0, "one frame held");
     }
 
+    /** A cycle subtracted after a scaling comes out with its scaled weight. */
     @Test
     void aScaledPreviousCycleComesOutWithItsScaledWeight() {
-        CoherentAccumulator acc = singleTone();
+        SpectrumAccumulator acc = singleTone();
         acc.add(ones(), zeros(), 1.0, FrameTurns.of(0.0));
         acc.add(ones(), zeros(), 1.0, FrameTurns.of(DELTA));
         acc.scale(0.5);
@@ -228,9 +265,11 @@ class CoherentAccumulatorTest {
                 "the scaled frames less the scaled weight of the frame taken out");
     }
 
+    /** A second subtraction, one after a restart and one after a reset change
+     *  nothing. */
     @Test
     void aSubtractionWithNothingHeldChangesNothing() {
-        CoherentAccumulator acc = singleTone();
+        SpectrumAccumulator acc = singleTone();
         acc.add(ones(), zeros(), 1.0, FrameTurns.of(0.0));
         acc.add(ones(), zeros(), 1.0, FrameTurns.of(DELTA));
         acc.subtractPreviousCycles();
@@ -251,9 +290,10 @@ class CoherentAccumulatorTest {
         assertEquals(0.0, acc.getFrames(), 0.0, "a reset empties the ring with the sums");
     }
 
+    /** Scaling keeps the mean and shrinks the frames held with the sums. */
     @Test
     void scalingKeepsTheMeanAndShrinksTheFramesHeld() {
-        CoherentAccumulator acc = singleTone();
+        SpectrumAccumulator acc = singleTone();
         acc.add(ones(), zeros(), 1.0, FrameTurns.of(0.0));
         acc.add(ones(), zeros(), 1.0, FrameTurns.of(0.0));
         acc.scale(0.5);
@@ -261,9 +301,12 @@ class CoherentAccumulatorTest {
         assertEquals(1.0, acc.getSumRe()[5] / acc.getFrames(), TOL_RAD, "the mean is unchanged");
     }
 
-    /** A frame whose fundamental bin carries the phase of a tone at
-     *  {@code kappaTrue} bins after an advance of {@code delta} samples,
-     *  every other bin a unit phasor. */
+    /** A frame whose fundamental bin carries the phase of a tone after an
+     *  advance, every other bin a unit phasor.
+     *
+     * @param kappaTrue the tone's fractional bin
+     * @param delta     the frame's advance, samples
+     * @return the frame's real and imaginary parts */
     private double[][] toneFrame(double kappaTrue, double delta) {
         double[] re = ones(), im = zeros();
         int    k0  = (int) Math.round(kappaTrue);
@@ -273,45 +316,51 @@ class CoherentAccumulatorTest {
         return new double[][] { re, im };
     }
 
+    /** κ pinned 0.2 bin above the tone stands while measuring and lands on
+     *  the tone when the measurement closes. */
     @Test
     void theFundamentalsPhaseSlopeCorrectsKappaOnceTheMeasurementCloses() {
         // Pinned 0.2 bin above the tone: kappa stands through the measurement
         // and the slope over the whole stretch puts it on the tone when the
         // measurement closes.
         double kappaTrue = 100.0;
-        CoherentAccumulator acc = new CoherentAccumulator();
+        SpectrumAccumulator acc = new SpectrumAccumulator();
         acc.restart(FFT_SIZE, true, kappaTrue + 0.2, Double.NaN, null, null, LOBE_HALF, NO_PILOT, NO_PILOT);
-        for (int f = 0; f < CoherentAccumulator.KAPPA_MEAS_FRAMES - 1; f++) {
+        for (int f = 0; f < SpectrumAccumulator.KAPPA_MEAS_FRAMES - 1; f++) {
             double[][] fr = toneFrame(kappaTrue, f * DELTA);
             acc.add(fr[0], fr[1], 1.0, FrameTurns.of(f * DELTA));
             assertEquals(kappaTrue + 0.2, acc.getKappa(), 0.0, "kappa stands while measuring, frame " + f);
             assertEquals(false, acc.isKappaRefined(), "still measuring, frame " + f);
         }
-        int last = CoherentAccumulator.KAPPA_MEAS_FRAMES - 1;
+        int last = SpectrumAccumulator.KAPPA_MEAS_FRAMES - 1;
         double[][] fr = toneFrame(kappaTrue, last * DELTA);
         acc.add(fr[0], fr[1], 1.0, FrameTurns.of(last * DELTA));
         assertEquals(kappaTrue, acc.getKappa(), 1e-9, "corrected onto the tone when the measurement closes");
         assertEquals(true, acc.isKappaRefined(), "the measurement closed");
     }
 
+    /** A slope of more than half a bin is no tone's residual and is
+     *  discarded. */
     @Test
     void aSlopeBeyondHalfABinIsNoToneAndIsDiscarded() {
         // The pinned bin holds a phasor that does not advance with the frames
         // - no tone at the fundamental: turned back by the pinned kappa it
         // reads a slope of a whole 100 bins when the measurement closes,
         // which is discarded.
-        CoherentAccumulator acc = new CoherentAccumulator();
+        SpectrumAccumulator acc = new SpectrumAccumulator();
         acc.restart(FFT_SIZE, true, KAPPA, Double.NaN, null, null, LOBE_HALF, NO_PILOT, NO_PILOT);
-        for (int f = 0; f < CoherentAccumulator.KAPPA_MEAS_FRAMES; f++) {
+        for (int f = 0; f < SpectrumAccumulator.KAPPA_MEAS_FRAMES; f++) {
             acc.add(ones(), zeros(), 1.0, FrameTurns.of(f));
         }
         assertEquals(KAPPA, acc.getKappa(), 0.0, "kappa stands");
         assertEquals(false, acc.isKappaRefined(), "nothing closed");
     }
 
+    /** The incoherent average sums each bin's power and records no
+     *  statistics row. */
     @Test
     void theIncoherentAverageSumsPower() {
-        CoherentAccumulator acc = new CoherentAccumulator();
+        SpectrumAccumulator acc = new SpectrumAccumulator();
         acc.restart(FFT_SIZE, false, KAPPA, Double.NaN, null, null, LOBE_HALF, NO_PILOT, NO_PILOT);
         double[] mag = ones();
         mag[10] = 3.0;
@@ -333,9 +382,11 @@ class CoherentAccumulatorTest {
     private static final double RANDOM_MEAN_LIMIT = 0.6;
     private static final double TWO_PI = 2.0 * Math.PI;
 
+    /** The coherent average keeps every frame's power while the coherent mean
+     *  of random phases falls. */
     @Test
     void theCoherentAverageKeepsThePowerOfItsFrames() {
-        CoherentAccumulator acc = singleTone();
+        SpectrumAccumulator acc = singleTone();
         Random random = new Random(NOISE_SEED);
         for (int f = 0; f < POWER_FRAMES; f++) {
             double[] re = ones();
@@ -351,9 +402,10 @@ class CoherentAccumulatorTest {
         assertTrue(mean < RANDOM_MEAN_LIMIT, "while the coherent mean of the random phases falls: " + mean);
     }
 
+    /** A scaled subtraction takes the power out with the complex sums. */
     @Test
     void aScaledSubtractionTakesThePowerOutWithTheComplexSums() {
-        CoherentAccumulator acc = singleTone();
+        SpectrumAccumulator acc = singleTone();
         double[] loud = ones();
         loud[NOISE_BIN] = 3.0;
         acc.add(ones(), zeros(), 1.0, FrameTurns.of(0.0));
@@ -376,14 +428,21 @@ class CoherentAccumulatorTest {
     private static final double BAND_NENBW  = 2.0;
     private static final long   NOISE_SEED  = 7L;
 
-    /** The statistics column named {@code name}. */
-    private int column(CoherentAccumulator acc, String name) {
+    /** The statistics column of a name.
+     *
+     * @param acc  the accumulator
+     * @param name the column's name
+     * @return its index */
+    private int column(SpectrumAccumulator acc, String name) {
         int c = acc.statisticsColumns().indexOf(name);
         assertTrue(c >= 0, "a column " + name);
         return c;
     }
 
-    /** A frame of unit-variance complex Gaussian noise. */
+    /** A frame of unit-variance complex Gaussian noise.
+     *
+     * @param random the source of the noise
+     * @return the frame's real and imaginary parts */
     private double[][] noiseFrame(Random random) {
         double[] re = zeros(), im = zeros();
         for (int k = 0; k < re.length; k++) {
@@ -393,9 +452,11 @@ class CoherentAccumulatorTest {
         return new double[][] { re, im };
     }
 
+    /** The statistics grow one row per frame added; a restart or a reset
+     *  drops them. */
     @Test
     void theStatisticsGrowOneRowPerFrameAndARestartOrAResetDropsThem() {
-        CoherentAccumulator acc = singleTone();
+        SpectrumAccumulator acc = singleTone();
         // beyond the store's first sizing of 64 rows
         int rows = 100;
         for (int f = 0; f < rows; f++) {
@@ -414,9 +475,11 @@ class CoherentAccumulatorTest {
         assertThrows(IndexOutOfBoundsException.class, () -> acc.statistic(0, 0), "no row to read");
     }
 
+    /** The statistics follow the tones, H2..H9 and every product - never a
+     *  pilot, never H10 - and the column list is read-only. */
     @Test
     void theStatisticsFollowTheTonesH2ToH9AndEveryProduct() {
-        CoherentAccumulator acc = new CoherentAccumulator();
+        SpectrumAccumulator acc = new SpectrumAccumulator();
         acc.restart(FFT_SIZE, true, KAPPA, 260.0, new int[] { 0, 1, -1 }, new int[] { 1, 1, 1 },
                 LOBE_HALF, 1234, NO_PILOT);
         List<String> columns = acc.statisticsColumns();
@@ -438,9 +501,11 @@ class CoherentAccumulatorTest {
         assertThrows(UnsupportedOperationException.class, () -> columns.add("x"), "read-only");
     }
 
+    /** A row holds the values the add saw: magnitudes, the turned-back phase,
+     *  the accumulated phase, no band top without a geometry. */
     @Test
     void theStatisticsHoldTheValuesTheAddSaw() {
-        CoherentAccumulator acc = singleTone();
+        SpectrumAccumulator acc = singleTone();
         acc.add(ones(), zeros(), 1.0, FrameTurns.of(0.0));
         double[] re = ones();
         double[] im = zeros();
@@ -468,9 +533,11 @@ class CoherentAccumulatorTest {
                 acc.statistic(row, column(acc, "(1,0) accumulated")), 1e-12, "the fundamental's accumulated magnitude");
     }
 
+    /** The band tops are the line floors over the frame's and over the
+     *  average's bins beside the line; a restart drops the geometry. */
     @Test
     void theBandTopsAreTheLineFloorsOfTheFrameAndOfTheAverage() {
-        CoherentAccumulator acc = singleTone();
+        SpectrumAccumulator acc = singleTone();
         acc.bandGeometry(BAND_BIN_HZ, BAND_NENBW);
         Random random = new Random(NOISE_SEED);
         double[][] fr = null;
@@ -483,8 +550,8 @@ class CoherentAccumulatorTest {
         double[]       sRe    = acc.getSumRe();
         double[]       sIm    = acc.getSumIm();
         final double[][] last = fr;
-        double raw = ToneLobeLift.lineFloor(k -> Math.hypot(last[0][k], last[1][k]), H2_BIN, half, BAND_BIN_HZ, BAND_NENBW);
-        double avg = ToneLobeLift.lineFloor(k -> Math.hypot(sRe[k], sIm[k]) / frames, H2_BIN, half, BAND_BIN_HZ, BAND_NENBW);
+        double raw = FftDsp.lineFloor(k -> Math.hypot(last[0][k], last[1][k]), H2_BIN, half, BAND_BIN_HZ, BAND_NENBW);
+        double avg = FftDsp.lineFloor(k -> Math.hypot(sRe[k], sIm[k]) / frames, H2_BIN, half, BAND_BIN_HZ, BAND_NENBW);
         int row = acc.statisticsRowCount() - 1;
         assertEquals(raw, acc.statistic(row, column(acc, "(2,0) raw band top")), raw * 1e-12,
                 "the band top over the frame's own bins beside H2");
@@ -497,9 +564,11 @@ class CoherentAccumulatorTest {
                 "a restart drops the geometry");
     }
 
+    /** A frame added without a pinned fundamental records the frame count
+     *  alone. */
     @Test
     void aFrameWithoutAPinnedFundamentalRecordsTheFrameCountAlone() {
-        CoherentAccumulator acc = new CoherentAccumulator();
+        SpectrumAccumulator acc = new SpectrumAccumulator();
         acc.restart(FFT_SIZE, true, 0.0, Double.NaN, null, null, LOBE_HALF, NO_PILOT, NO_PILOT);
         acc.add(ones(), zeros(), 2.0, FrameTurns.of(DELTA));
         assertEquals(List.of("frames"), acc.statisticsColumns(), "no line to follow");

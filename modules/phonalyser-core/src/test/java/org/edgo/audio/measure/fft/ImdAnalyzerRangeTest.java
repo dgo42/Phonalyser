@@ -23,6 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.Arrays;
 
+import org.edgo.audio.measure.common.SpectrumStatistics;
 import org.edgo.audio.measure.enums.WindowType;
 import org.junit.jupiter.api.Test;
 
@@ -61,21 +62,41 @@ class ImdAnalyzerRangeTest {
     private static final double PILOT_LEVEL_DBFS = -100.0;
     /** How far the two TD+N readings may differ, dB. */
     private static final double TDN_TOLERANCE_DB = 0.01;
+    /** The readout settings the statistics run with: no harmonics, no
+     *  distortion band, no manual fundamental - the intermodulation readout
+     *  is what is asked. */
+    private static final ReadoutSettings SETTINGS = new ReadoutSettings(0, 0, 0.0, 0.0, Double.NaN);
 
-    /** Synthetic dBFS spectrum: −140 dBFS floor with two −6 dBFS tones. */
+    /** Synthetic dBFS spectrum: −140 dBFS floor with two −6 dBFS tones, one
+     *  level per bin from DC to Nyquist, read through the rectangular window.
+     *
+     * @param f1Hz the first tone's frequency, Hz
+     * @param f2Hz the second tone's frequency, Hz
+     * @return the spectrum */
     private FftResult spectrumWithTones(double f1Hz, double f2Hz) {
         FftResult r = new FftResult();
         r.freqResolution = BIN_BW_HZ;
-        r.fftSize        = BINS * 2;
-        r.sampleRate     = (int) Math.round(BIN_BW_HZ * BINS * 2);
+        r.fftSize        = (BINS - 1) * 2;
+        r.sampleRate     = (int) Math.round(BIN_BW_HZ * r.fftSize);
+        r.windowType     = WindowType.RECT;
         r.amplitudeDbFs  = new double[BINS];
         Arrays.fill(r.amplitudeDbFs, -140.0);
-        r.amplitudeDbFs[(int) Math.round(f1Hz / BIN_BW_HZ)] = -6.0;
+        r.fundamentalBin = (int) Math.round(f1Hz / BIN_BW_HZ);
+        r.amplitudeDbFs[r.fundamentalBin] = -6.0;
         r.amplitudeDbFs[(int) Math.round(f2Hz / BIN_BW_HZ)] = -6.0;
         r.fundamentalHzRefined   = f1Hz;
         r.fundamental2HzRefined  = f2Hz;
-        r.fundamentalTrueDbFs    = Double.NaN;   // no manual override
         return r;
+    }
+
+    /** The intermodulation readout of {@code r}, as the statistics derive it
+     *  from the lines they measure.
+     *
+     * @param r the spectrum
+     * @return the readout */
+    private ImdResult imdOf(FftResult r) {
+        new SpectrumStatistics().calculateStat(r, SETTINGS, null);
+        return r.imd;
     }
 
     /** The same spectrum with the alignment's two pilots pinned on it the way
@@ -85,7 +106,12 @@ class ImdAnalyzerRangeTest {
      *
      *  <p>Both spectra carry the same pinned spans, so what the comparison
      *  isolates are the lines and not the handful of floor bins the spans
-     *  cover. */
+     *  cover.
+     *
+     * @param f1Hz    the first tone's frequency, Hz
+     * @param f2Hz    the second tone's frequency, Hz
+     * @param linesOn whether the pilot lines themselves are on the spectrum
+     * @return the spectrum */
     private FftResult spectrumWithPilots(double f1Hz, double f2Hz, boolean linesOn) {
         FftResult r = spectrumWithTones(f1Hz, f2Hz);
         r.windowType      = WindowType.BH7;
@@ -102,17 +128,18 @@ class ImdAnalyzerRangeTest {
         return r;
     }
 
+    /** Products below DC or beyond the spectrum read NaN, never a synthetic
+     *  floor; a one-sided DFD3 and the IMD power still report. */
     @Test
     void outOfRangeProducts_reportNaN_neverMinus600() {
         // 600 Hz + 15 kHz: 2f1−f2 and all higher dnL sidebands land below
         // DC; d4H (43.8 kHz) and d5H (58.2 kHz) land beyond the spectrum.
-        ImdResult imd = new ImdAnalyzer().analyze(
-                spectrumWithTones(600.0, 15_000.0), 600.0, 15_000.0);
+        ImdResult imd = imdOf(spectrumWithTones(600.0, 15_000.0));
 
-        assertTrue(Double.isNaN(imd.dnLDbFs[3]), "2f1-f2 below DC must be NaN");
-        assertTrue(Double.isNaN(imd.dnHDbFs[4]), "d4H beyond spectrum must be NaN");
-        assertTrue(Double.isNaN(imd.dnHDbFs[5]), "d5H beyond spectrum must be NaN");
-        assertTrue(Double.isFinite(imd.dnHDbFs[3]), "d3H (29.4 kHz) is measurable");
+        assertTrue(Double.isNaN(imd.dnL[3].deembeddedAmplitudeDbFs()), "2f1-f2 below DC must be NaN");
+        assertTrue(Double.isNaN(imd.dnH[4].deembeddedAmplitudeDbFs()), "d4H beyond spectrum must be NaN");
+        assertTrue(Double.isNaN(imd.dnH[5].deembeddedAmplitudeDbFs()), "d5H beyond spectrum must be NaN");
+        assertTrue(Double.isFinite(imd.dnH[3].deembeddedAmplitudeDbFs()), "d3H (29.4 kHz) is measurable");
         assertTrue(Double.isFinite(imd.dfd2Pct), "f2-f1 (14.4 kHz) is measurable");
         // SMPTE-style one-sided DFD3: the lower sideband is below DC, but
         // the upper one is measurable and must still be reported.
@@ -121,20 +148,21 @@ class ImdAnalyzerRangeTest {
         assertTrue(Double.isFinite(imd.imdPwrPct), "IMD power must skip NaN products");
 
         for (int k = 2; k <= ImdResult.MAX_ORDER; k++) {
-            assertAbsurdFree(imd.dnLDbFs[k], "dnLDbFs[" + k + "]");
-            assertAbsurdFree(imd.dnHDbFs[k], "dnHDbFs[" + k + "]");
+            assertAbsurdFree(imd.dnL[k].deembeddedAmplitudeDbFs(), "dnL[" + k + "]");
+            assertAbsurdFree(imd.dnH[k].deembeddedAmplitudeDbFs(), "dnH[" + k + "]");
         }
     }
 
+    /** A CCIF pair whose every product fits the grid reads every product
+     *  finite. */
     @Test
     void allInRangePair_everyProductFinite() {
         // 19 + 20 kHz CCIF pair: every product from d2 to d5 fits the grid.
-        ImdResult imd = new ImdAnalyzer().analyze(
-                spectrumWithTones(19_000.0, 20_000.0), 19_000.0, 20_000.0);
+        ImdResult imd = imdOf(spectrumWithTones(19_000.0, 20_000.0));
 
         for (int k = 2; k <= ImdResult.MAX_ORDER; k++) {
-            assertTrue(Double.isFinite(imd.dnLDbFs[k]), "dnLDbFs[" + k + "] finite");
-            assertTrue(Double.isFinite(imd.dnHDbFs[k]), "dnHDbFs[" + k + "] finite");
+            assertTrue(Double.isFinite(imd.dnL[k].deembeddedAmplitudeDbFs()), "dnL[" + k + "] finite");
+            assertTrue(Double.isFinite(imd.dnH[k].deembeddedAmplitudeDbFs()), "dnH[" + k + "] finite");
         }
         assertTrue(Double.isFinite(imd.dfd2Pct));
         assertTrue(Double.isFinite(imd.dfd3Pct));
@@ -157,10 +185,8 @@ class ImdAnalyzerRangeTest {
     void thePilotLinesStayOutOfTheTdnResidual() {
         double f1Hz = 19_000.0;
         double f2Hz = 20_000.0;
-        double tdnPlain = new ImdAnalyzer()
-                .analyze(spectrumWithPilots(f1Hz, f2Hz, false), f1Hz, f2Hz).tdnPct;
-        double tdnPilots = new ImdAnalyzer()
-                .analyze(spectrumWithPilots(f1Hz, f2Hz, true), f1Hz, f2Hz).tdnPct;
+        double tdnPlain  = imdOf(spectrumWithPilots(f1Hz, f2Hz, false)).tdnPct;
+        double tdnPilots = imdOf(spectrumWithPilots(f1Hz, f2Hz, true)).tdnPct;
 
         assertTrue(tdnPlain > 0.0, "the fixture's own noise floor gives no TD+N to compare against");
         assertEquals(0.0, 20.0 * Math.log10(tdnPilots / tdnPlain), TDN_TOLERANCE_DB,
@@ -168,7 +194,10 @@ class ImdAnalyzerRangeTest {
                         + tdnPilots + " % with them");
     }
 
-    /** A dBFS cell is either NaN (unmeasurable) or a plausible level. */
+    /** A dBFS cell is either NaN (unmeasurable) or a plausible level.
+     *
+     * @param dbfs the cell's level, dBFS
+     * @param what the cell's name in the failure message */
     private void assertAbsurdFree(double dbfs, String what) {
         assertTrue(Double.isNaN(dbfs) || dbfs > ABSURD_DBFS,
                 what + " = " + dbfs);

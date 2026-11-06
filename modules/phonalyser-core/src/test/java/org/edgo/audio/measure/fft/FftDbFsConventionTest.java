@@ -56,6 +56,8 @@ class FftDbFsConventionTest {
      *  leaves the window's scalloping and leakage out of it entirely. */
     private static final double TOLERANCE_DB = 0.02;
 
+    /** A half-scale peak tone reads -6.02 dBFS, not the rms reference's
+     *  -9.03 dBFS. */
     @Test
     void fundamentalDbFsIsReferencedToPeakAmplitude() {
         FftResult result = analyzeCoherentTone(PEAK_FRACTION);
@@ -70,6 +72,7 @@ class FftDbFsConventionTest {
                         + " dBFS instead");
     }
 
+    /** A full-scale peak tone reads 0 dBFS. */
     @Test
     void aFullScaleToneReadsZeroDbFs() {
         // The anchor of the whole scale: full-scale peak IS 0 dBFS.  Stated
@@ -82,6 +85,7 @@ class FftDbFsConventionTest {
                 "a full-scale peak sine must read 0 dBFS");
     }
 
+    /** Half the amplitude reads 6.02 dB lower: the scale is amplitude-based. */
     @Test
     void halvingTheAmplitudeCostsSixDecibels() {
         // Independent of any reference: the SCALE must be amplitude-based
@@ -96,7 +100,10 @@ class FftDbFsConventionTest {
 
     /** A sine at an exact bin centre, so no window leakage or scalloping
      *  stands between the amplitude that went in and the level that comes
-     *  out. */
+     *  out.
+     *
+     * @param peakFraction the tone's peak amplitude, a fraction of full scale
+     * @return the analysed frame */
     private FftResult analyzeCoherentTone(double peakFraction) {
         double binWidth  = (double) SAMPLE_RATE / FFT_SIZE;
         double exactFreq = Math.round(1_000.0 / binWidth) * binWidth;
@@ -105,8 +112,9 @@ class FftDbFsConventionTest {
         for (int n = 0; n < signal.length; n++) {
             signal[n] = peakFraction * Math.sin(2.0 * Math.PI * exactFreq * n / SAMPLE_RATE);
         }
-        return new FftAnalyzer().analyze(signal, SAMPLE_RATE, FFT_SIZE, HARMONICS, HARMONICS,
-                WindowType.HANN, FftOverlap.PCT_0, 0.0, 0.0, true, Double.NaN, false, Double.NaN,
+        return new FftAnalyzer().analyze(signal, SAMPLE_RATE, FFT_SIZE,
+                new ReadoutSettings(HARMONICS, HARMONICS, 0.0, 0.0, Double.NaN),
+                WindowType.HANN, FftOverlap.PCT_0, true, Double.NaN,
                 new FftResult(), FftOverlap.PCT_0.hopSamples(FFT_SIZE));
     }
 }

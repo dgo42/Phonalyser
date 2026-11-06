@@ -42,11 +42,12 @@ import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Label;
 import org.edgo.audio.measure.common.Constants;
+import org.edgo.audio.measure.common.SpectrumStatistics;
+import org.edgo.audio.measure.dsp.FftDsp;
 import org.edgo.audio.measure.dsp.FreqRespCalHelper;
 import org.edgo.audio.measure.dsp.FreqRespCalibration;
 import org.edgo.audio.measure.dsp.InverseCascade;
 import org.edgo.audio.measure.dsp.SpectralDiscontinuityDetector;
-import org.edgo.audio.measure.dsp.ToneLobe;
 import org.edgo.audio.measure.dsp.ToneLobeLift;
 import org.edgo.audio.measure.enums.AlignGenerator;
 import org.edgo.audio.measure.enums.Channel;
@@ -54,10 +55,10 @@ import org.edgo.audio.measure.enums.FundamentalPhaseAlignment;
 import org.edgo.audio.measure.enums.GenChangeCause;
 import org.edgo.audio.measure.enums.MagnitudeUnit;
 import org.edgo.audio.measure.enums.WindowType;
-import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
-import org.edgo.audio.measure.fft.FftResult.DistortionLine;
 import org.edgo.audio.measure.fft.ImdResult;
+import org.edgo.audio.measure.fft.ReadoutSettings;
+import org.edgo.audio.measure.fft.SpectralLine;
 import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
@@ -91,7 +92,7 @@ import lombok.extern.log4j.Log4j2;
  *
  * <p>Owns the analysis pipeline itself: a daemon worker thread that acquires
  * its own shared capture, runs
- * {@link FftAnalyzer#analyze}, and publishes the latest
+ * {@link org.edgo.audio.measure.fft.FftAnalyzer#analyze}, and publishes the latest
  * {@link FftResult} for paint to read.  The owning
  * {@link FftPane} drives the lifecycle ({@link #start} / {@link #stop} /
  * {@link #resetStatistics}) and feeds settings via {@code Preferences}.
@@ -101,19 +102,12 @@ import lombok.extern.log4j.Log4j2;
 @Log4j2
 public final class FftView extends AbstractFreqDomainView {
 
-    /** Bin index standing for "this frame carries no second tone" in the
-     *  calibration cascade's keys. */
-    private static final int NO_TONE_BIN = -1;
-    /** Bin index of a slot of the line-floor table that holds no distortion
-     *  line - a fundamental's slot, or a line the frame does not carry. */
-    private static final int NO_LINE_BIN = -1;
     /** Dots of a dual-tone frame: F1, F2, then the lower and the upper
      *  product of each order 2..{@link ImdResult#MAX_ORDER}. */
     private static final int IMD_LINES = 2 + 2 * (ImdResult.MAX_ORDER - 1);
-    /** How close, dB, a harmonic's readout stands to its line floor when the
-     *  floor hold wrote it: the hold's linear-to-dB round trip, nothing a
-     *  measured level lands on by chance. */
-    private static final double LINE_FLOOR_MATCH_DB = 1e-9;
+    /** How far (dB) the debug overlay draws the noise gate's lines above each
+     *  band's band-top, so they stand clear of the noise tops. */
+    private static final double GATE2_LINE_OFFSET_DB = 0.0;
     /** Nanoseconds per millisecond - the render-step timings are stated in ms. */
     private static final double NANOS_PER_MS = 1_000_000.0;
     /** How long the alignment magnitude-drift hint keeps blinking. */
@@ -164,6 +158,13 @@ public final class FftView extends AbstractFreqDomainView {
      *  range).  Below it, F and the harmonics are just grass (indistinguishable,
      *  F sometimes below H2), so the THD/IMD table and the F/Hn dots are hidden. */
     private static final double SIGNAL_FLOOR_MARGIN_DB = 10.0;
+    /** How far below the noise floor (dB) auto setup puts the magnitude
+     *  axis bottom - the floor is a band-top, the upper edge of the grass,
+     *  so the grass itself stays in view below it. */
+    private static final double AUTO_SETUP_BELOW_FLOOR_DB = 30.0;
+    /** How far below the noise floor (dB) maximize puts the magnitude axis
+     *  bottom - deeper than auto setup, for the widest view. */
+    private static final double MAXIMIZE_BELOW_FLOOR_DB = 40.0;
 
     /** A measured THD above this (%) means the "fundamental" is not a clean tone
      *  but the top of a broadband hump (speech) or noise - the harmonics are as
@@ -235,11 +236,11 @@ public final class FftView extends AbstractFreqDomainView {
      *  scope and neither view can starve the other behind its events. */
     private boolean fftDirty;
 
-    /** Re-derives the measurements (THD / SNR / N / fundamental / harmonics, all
-     *  units + %) from the displayed spectrum - the same {@code recomputeStats}
-     *  the worker uses, so every readout matches the plot.  Reused so its
-     *  scratch buffers aren't re-allocated. */
-    private final FftAnalyzer statsAnalyzer = new FftAnalyzer();
+    /** Calculates the measurements (THD / SNR / N / fundamental / harmonics,
+     *  all units + %) of every rendered spectrum - live frame, average or
+     *  loaded file - so every readout matches the plot.  One instance, used on
+     *  the UI thread only, so its reused buffers are never shared. */
+    private final SpectrumStatistics statistics = new SpectrumStatistics();
 
     /** Sticky table-mode selector - {@code true} draws the IMD table,
      *  {@code false} draws the THD table.  Updated only inside
@@ -458,30 +459,32 @@ public final class FftView extends AbstractFreqDomainView {
      *  input moves: the loaded rows ({@link #onCalibrationChanged}), the analysed
      *  channel or the FFT length (both funnel through
      *  {@link #resetStatistics}), the capture rate (a fresh recording), and the
-     *  frame's own tone positions and lobe extents ({@link #calInverseFits}).
-     *  {@code null} means "build on the next frame"; the correction, the blue
-     *  dots and the rejected-block overlay all read this one cascade. */
+     *  frame's own tone bins ({@link #calInverseFits}).  {@code null} means
+     *  "build on the next frame"; the correction, the red dots and the
+     *  rejected-block overlay all read this one cascade. */
     private InverseCascade calInv;
 
     /** {@code true} while a tone-only row is loaded - only then does
      *  {@link #calInv} depend on the frame's tones, and only then are the tone
-     *  keys below compared. */
+     *  bins below compared. */
     private boolean calInvToneKeys;
 
-    /** The frame keys {@link #calInv} was built from: the fundamental bin, the
-     *  second fundamental's bin ({@link #NO_TONE_BIN} for a single tone) and
-     *  every tone's lobe span.  A tone-only row writes its one value into
-     *  exactly those bins, so a frame that moved any of them needs the response
-     *  built again. */
-    private int calInvFundBin;
-    private int calInvF2Bin;
-    private ToneLobe[] calInvSpans;
+    /** The tone bins {@link #calInv} was built on, slot for slot
+     *  ({@link FreqRespCalHelper#toneBins}): a tone-only row's value stands at
+     *  exactly those tones, so a frame that moved any of them needs the
+     *  response built again. */
+    private int[] calInvToneBins;
 
     /** The offscreen screenshot copy's view - silent and deaf on the bus, see
      *  the constructor. */
     private final boolean offScreen;
 
-    /** @param offScreen the offscreen screenshot copy's view: it neither
+    /** A view of the FFT pane.
+     *
+     * @param parent     the composite the view is drawn in
+     * @param pane       the pane that owns the view
+     * @param controller the pane's controller
+     * @param offScreen  the offscreen screenshot copy's view: it neither
      *                   publishes nor subscribes on the bus and does not react
      *                   to preference changes - it only draws the snapshot it
      *                   is given */
@@ -897,7 +900,7 @@ public final class FftView extends AbstractFreqDomainView {
     public void onCalibrationChanged(CorrectionStore.Change change) {
         if (isDisposed()) return;
         if (this.lastResult != null && this.lastResultLive && !isRunning()) {
-            restateStoppedResult(change);
+            restateStoppedResult();
         } else {
             this.calInv = null;
             if (this.lastResult != null) buildCalInverse(this.lastResult);
@@ -1020,273 +1023,167 @@ public final class FftView extends AbstractFreqDomainView {
      *  plotted curve clear immediately and repopulate from the fresh
      *  accumulation - otherwise the stale last values linger on screen.
      *  Only while recording: a statically loaded CSV (worker stopped)
-     *  must survive an unrelated setting change that also resets. */
+     *  must survive an unrelated setting change that also resets.  The
+     *  statistics forget what the dropped result's trace was lifted with. */
     private void clearRetainedResultsAfterReset() {
         if (isRunning()) {
             lastResult = null;
+            statistics.reset();
             clearBanner();         // drop any re-sync / overrun warning on reset
         }
         syncDataButtons();
         GuiUtil.marshal(() -> { if (!isDisposed()) redraw(); });
     }
 
-    /** Post-average pipeline, run ONCE per DISPLAYED frame (the worker now hands
-     *  over only the RAW averaged spectrum + the state below): the distortion
-     *  lines' local noise floors -> .frc calibration -> recompute every
-     *  measurement.  So all readouts (THD / SNR / N / fundamental / harmonics,
-     *  every unit + %) and the plot derive from one calibrated spectrum,
-     *  computed only on frames the user actually sees. */
+    /** Post-average pipeline, run ONCE per DISPLAYED frame on the view's own
+     *  copy of the worker's frame - raw or averaged, as the accumulator handed
+     *  it over - with the loaded {@code .frc} rows: {@link #runPipeline}.  So
+     *  all readouts (THD / SNR / N / fundamental / harmonics, every unit + %)
+     *  and the plot derive from one spectrum, computed only on frames the user
+     *  actually sees.
+     *
+     * @param r the view's copy of the frame, as measured
+     */
     private void finalizeResult(FftResult r) {
         if (r.amplitudeDbFs == null) return;
-        boolean accumulated = !Double.isNaN(r.coherentKappa);
-
-        // 1. The local noise floor under every distortion line, measured on
-        //    the averaged spectrum as the capture holds it - before the
-        //    de-embedding, which lifts a tone-only row's lobes but not the bins
-        //    around them, so a floor read afterwards would stand a whole
-        //    calibration gain below the line it is held against.
-        double[] lineHz = FreqRespCalHelper.toneFrequencies(r);
-        measureLineFloors(r, lineHz);
-
-        // 2. Frequency-response (.frc) calibration - adjusts spectrum + readouts;
-        //    never on the cal (green) line.
-        int correctedBins = 0;
-        boolean calibrated = !correctionStore.getEntries().isEmpty();
-        if (calibrated) {
-            r.preCorrectionPeaks = FreqRespCalHelper.capturePreCorrectionPeaks(r);
-            holdPreCorrectionHarmonicsAtFloor(r);
-            // While a row corrects only the tones, the held response stands in
-            // the bins this frame's tones and lobes named - a frame that moved
-            // one of them needs a fresh one.
-            if (!calInverseFits(r)) {
-                buildCalInverse(r);
-                logRenderStep("3.2 .frc response build");
-            }
-            correctedBins = FreqRespCalHelper.applyInverseInPlace(r, calInv);
-            // The bin count goes into the step's own text, so the switch is
-            // tested here as well: the message must not be built when it is off.
-            if (DebugSwitches.SHOW_FFT_ANALYZE_TIME) {
-                logRenderStep("3.3 .frc apply (" + correctedBins + " bins)");
-            }
-            carryLineFloorsThroughCal(r, lineHz, accumulated, calInv);
-        }
-        // 3. Measurements - recomputed on every frame: averaging needs it
-        //    (analyze skipped the stats while accumulating), the calibration
-        //    changes the spectrum, and the line-floor hold of step 1 lives in
-        //    the recompute.
-        statsAnalyzer.recomputeStats(r);
-        logRenderStep("3.4 statistics recompute");
-        // 4. The BLUE "before-cal" dots of an ACCUMULATED frame, derived here -
-        //    after step 3 - because the readouts they start from are the ones
-        //    that recompute produces: while averaging, the analysis carries no
-        //    statistics at all, so a level read before the recompute is whatever
-        //    an earlier analysis cycle left behind and lands the dot anywhere.
-        //    The measured level is therefore the recomputed post-cal level plus
-        //    the cascade's gain at the tone's own bin - what the correction took
-        //    off that bin, added back.  The cal is looked up at the PINNED
-        //    coherent fundamental bin: the single-cycle fundamentalHzRefined
-        //    jitters and dances the lookup point.  A single analysis cycle keeps
-        //    the step-2 snapshot, which is the raw spectrum's own readouts,
-        //    taken before the divide.
-        if (calibrated && accumulated) {
-            int hc = r.harmonicCount;
-            double[] preFreqs = new double[1 + hc];
-            double[] preDbFs  = new double[1 + hc];
-            double stableFundHz = r.coherentKappa * r.freqResolution;
-            preFreqs[0] = r.fundamentalHz;
-            preDbFs[0]  = r.fundamentalDbFs + calGainDbAt(calInv, r, stableFundHz);
-            for (int h = 0; h < hc; h++) {
-                if (r.harmonicBins[h] > 0) {
-                    preFreqs[1 + h] = r.harmonicHz[h];
-                    preDbFs[1 + h] = r.harmonicDbFs[h] + calGainDbAt(calInv, r, harmonicCalHz(r, h, true));
-                }
-            }
-            r.preCorrectionPeaks = new double[][] { preFreqs, preDbFs };
-            logRenderStep("3.5 blue dots");
-        }
-        // 5. The BLUE dots of the dual-tone lines, from the readouts step 3
-        //    recomputed and the response step 2 corrected with - stored on
-        //    the result like the harmonics', so whatever shows this frame
-        //    (the screenshot copy included) draws them without a response of
-        //    its own.
-        if (calibrated && r.imd != null) {
-            r.imdPreCorrectionPeaks = imdPreCorrectionPeaks(r, calInv);
-        }
-
-
-    }
-
-    /** Measures the local noise floor under every distortion line of
-     *  {@code r} - each harmonic and, for a dual tone, each intermodulation
-     *  product, at {@code lineHz} as {@link FreqRespCalHelper#toneFrequencies}
-     *  lists them - as the upper border of the noise band beside the line
-     *  ({@link ToneLobeLift#lineFloor}: within 25 Hz of the line, its lobe
-     *  excluded by the window's noise bandwidth), and writes each line's bin
-     *  and floor onto the result's
-     *  line-floor table ({@link FftResult#lineFloorDbFs}), where the
-     *  statistics recompute holds the line's reading at it from below.  The
-     *  fundamentals keep no floor: they are the signal, not a line read
-     *  against the noise. */
-    private void measureLineFloors(FftResult r, double[] lineHz) {
-        if (!(r.freqResolution > 0.0)) {
-            r.lineFloorBins = null;
-            r.lineFloorDbFs = null;
-            return;
-        }
-        int harmonics = Math.max(0, r.harmonicCount);
-        int half = r.amplitudeDbFs.length - 1;
-        int[]    bins   = new int[lineHz.length];
-        double[] floors = new double[lineHz.length];
-        final double[] dbFs = r.amplitudeDbFs;
-        IntToDoubleFunction mag = k -> Math.pow(10.0, dbFs[k] / 20.0);
-        for (int i = 0; i < lineHz.length; i++) {
-            boolean fundamental = i == 0 || i == 1 + harmonics;
-            int bin = (int) Math.round(lineHz[i] / r.freqResolution);
-            if (fundamental || !(lineHz[i] > 0.0) || bin < 1 || bin > half) {
-                bins[i]   = NO_LINE_BIN;
-                floors[i] = Double.NaN;
-                continue;
-            }
-            double floorLin = ToneLobeLift.lineFloor(mag, bin, half, r.freqResolution, r.windowNenbwBins);
-            bins[i]   = bin;
-            floors[i] = floorLin > 0.0 ? 20.0 * Math.log10(floorLin) : Double.NaN;
-        }
-        r.lineFloorBins = bins;
-        r.lineFloorDbFs = floors;
-    }
-
-    /** Holds the BLUE snapshot's harmonics - the levels the capture measured,
-     *  before the calibration - at their local noise floors from below, the
-     *  floors still standing in that same domain.  Matters for a single
-     *  cycle, whose blue dots are this snapshot; an accumulated frame
-     *  re-derives them from the held readouts after the recompute. */
-    private void holdPreCorrectionHarmonicsAtFloor(FftResult r) {
-        double[] freqs = r.preCorrectionPeaks[0];
-        double[] dbFs  = r.preCorrectionPeaks[1];
-        for (int i = 1; i < dbFs.length; i++) {
-            if (!(freqs[i] > 0.0)) continue;
-            double floorDbFs = r.lineFloorDbFs((int) Math.round(freqs[i] / r.freqResolution));
-            if (Double.isFinite(floorDbFs) && Double.isFinite(dbFs[i])) dbFs[i] = Math.max(dbFs[i], floorDbFs);
-        }
-    }
-
-    /** Carries the line-floor table into the calibrated domain the recompute
-     *  reads: each floor less the dB the calibration takes off its line - the
-     *  inverse of how a blue dot is derived from a red one - looked up at the
-     *  same frequency the blue dot is, so a line held at its floor draws its
-     *  blue dot on that floor and its red dot the calibration's gain away.
-     *  {@code inv} is the cascade the spectrum is being corrected by. */
-    private void carryLineFloorsThroughCal(FftResult r, double[] lineHz, boolean accumulated,
-                                           InverseCascade inv) {
-        if (r.lineFloorBins == null) return;
-        int harmonics = Math.max(0, r.harmonicCount);
-        for (int i = 0; i < r.lineFloorBins.length; i++) {
-            if (r.lineFloorBins[i] == NO_LINE_BIN || !Double.isFinite(r.lineFloorDbFs[i])) continue;
-            boolean harmonic = i >= 1 && i <= harmonics;
-            double  hz = harmonic ? harmonicCalHz(r, i - 1, accumulated) : lineHz[i];
-            r.lineFloorDbFs[i] -= calGainDbAt(inv, r, hz);
-        }
-    }
-
-    /** The frequency the calibration's gain at harmonic {@code h} (0 = H2) is
-     *  looked up at: on an accumulated frame the multiple of the PINNED
-     *  coherent fundamental - a single cycle's refined fundamental jitters and
-     *  dances the lookup point - else the harmonic's own frequency. */
-    private double harmonicCalHz(FftResult r, int h, boolean accumulated) {
-        return accumulated ? r.coherentKappa * r.freqResolution * (h + 2) : r.harmonicHz[h];
+        runPipeline(r, readoutSettings(), !correctionStore.getEntries().isEmpty());
     }
 
     /**
-     * Brings a stopped capture's result in line with one change of the loaded
-     * rows, in place: the row as it was is taken off when it was active, the
-     * row as it is now applied when it is active - each alone, on the spectrum
-     * as it stands ({@link #restateRow}).  The blue dots are the levels as
-     * captured, which no change of the rows moves: they are taken from the
-     * readouts as they stand when the first row comes, and dropped when the
-     * last one goes.  The held response belongs to a raw frame, so it is
-     * dropped and the next frame builds it on its own spectrum.
+     * The one pipeline every rendered spectrum takes - a live frame, an
+     * average, a spectrum read back from a file:
+     * <ol>
+     *   <li>the harmonic ladder, placed with the settings' harmonic count on
+     *       the result's κ ({@link FftResult#coherentKappa}) - the pinned one
+     *       while averaging, so the lines do not jitter between bins;</li>
+     *   <li>the statistics in one step
+     *       ({@link SpectrumStatistics#calculateStat}): every line measured
+     *       once, its level as measured (the blue dot) and de-embedded (the
+     *       red dot), every readout on the de-embedded levels, and the trace
+     *       lifted - the {@code .frc}, the manual fundamental, the clamped
+     *       distortion lines - ready to draw and to save; the view's copy
+     *       only, never the worker's frame.</li>
+     * </ol>
+     *
+     * @param r        the spectrum as measured, never de-embedded
+     * @param settings the readout settings the statistics are calculated with
+     * @param deembed  whether the loaded {@code .frc} rows correct it
      */
-    private void restateStoppedResult(CorrectionStore.Change change) {
-        FftResult r = lastResult;
-        boolean calibrated = !correctionStore.getEntries().isEmpty();
-        if (calibrated && r.preCorrectionPeaks == null) {
-            r.preCorrectionPeaks = FreqRespCalHelper.capturePreCorrectionPeaks(r);
-            holdPreCorrectionHarmonicsAtFloor(r);
-            if (r.imd != null) r.imdPreCorrectionPeaks = imdPreCorrectionPeaks(r, null);
+    private void runPipeline(FftResult r, ReadoutSettings settings, boolean deembed) {
+        r.placeHarmonics(settings.harmonicCount(), r.coherentKappa);
+        statistics.calculateStat(r, settings, frcFor(r, deembed));
+        logRenderStep("3.4 statistics");
+    }
+
+    /** The pipeline again on the result it delivered last: the statistics
+     *  take the lifts they put on its trace off first
+     *  ({@link SpectrumStatistics#recalculateStat}), then calculate with the
+     *  settings and the rows as they are now.
+     *
+     * @param r        the result the pipeline delivered last
+     * @param settings the readout settings the statistics are calculated with
+     * @param deembed  whether the loaded {@code .frc} rows correct it */
+    private void rerunPipeline(FftResult r, ReadoutSettings settings, boolean deembed) {
+        r.placeHarmonics(settings.harmonicCount(), r.coherentKappa);
+        statistics.recalculateStat(r, settings, frcFor(r, deembed));
+    }
+
+    /** The {@code .frc} correction {@code r} is de-embedded with: the held
+     *  response, built again when it no longer fits {@code r}
+     *  ({@link #calInverseFits}).
+     *
+     * @param r       the spectrum, its harmonic ladder placed
+     * @param deembed whether the loaded {@code .frc} rows correct it
+     * @return the correction; {@code null} without de-embedding */
+    private InverseCascade frcFor(FftResult r, boolean deembed) {
+        if (!deembed) return null;
+        if (!calInverseFits(r)) {
+            buildCalInverse(r);
+            logRenderStep("3.2 .frc response build");
         }
-        CorrectionStore.Entry before = change.before();
-        CorrectionStore.Entry after  = change.after();
-        if (before != null && before.isActive()) restateRow(r, before, true);
-        if (after  != null && after.isActive())  restateRow(r, after, false);
-        if (!calibrated) {
-            r.preCorrectionPeaks    = null;
-            r.imdPreCorrectionPeaks = null;
-        }
+        return calInv;
+    }
+
+    /** The readout settings as the preferences state them now, the manual
+     *  fundamental converted with the analysed channel's dBV offset.
+     *
+     * @return the readout settings
+     */
+    private ReadoutSettings readoutSettings() {
+        return ReadoutSettings.fromPreferences(Preferences.instance(),
+                AudioBackend.instance().analysedChannelDbvOffsetDb());
+    }
+
+    /**
+     * Brings a stopped capture's result in line with the loaded rows and the
+     * readout settings as they are now.  The held response belongs to the
+     * rows before the change, so it is dropped and built anew; the pipeline
+     * runs again ({@link #rerunPipeline}), its statistics taking their lifts
+     * off the trace first.
+     */
+    private void restateStoppedResult() {
         calInv = null;
+        rerunPipeline(lastResult, readoutSettings(), !correctionStore.getEntries().isEmpty());
     }
 
-    /**
-     * Applies one row's correction to {@code r} in place, or with {@code undo}
-     * takes it off again: the row's response sampled on {@code r}'s grid, with
-     * the tone lobes measured on the spectrum as it stands - a lobe bin's
-     * stretch exponent does not move under the other rows' correction, so the
-     * row comes off exactly as it went on - the line floors carried by the
-     * same gain, and the readouts recomputed on the result.
+    /** Shows a static spectrum loaded from file instead of live data, after
+     *  the pipeline a live frame takes - without the {@code .frc} and without
+     *  the manual fundamental: the file was saved with both applied.  When the
+     *  result carries IMD products ({@link FftResult#imd}) the view switches
+     *  to IMD (dual-tone) table mode and renders them; otherwise it shows the
+     *  single-tone THD / harmonic table.  The caller must have already stopped
+     *  recording (so the worker won't overwrite it).
+     *
+     * @param r the spectrum read from the file, as the file holds it
      */
-    private void restateRow(FftResult r, CorrectionStore.Entry e, boolean undo) {
-        FreqRespCalibration cal = r.channelLeft ? e.getCalibration().left() : e.getCalibration().right();
-        List<FreqRespCalibration> row  = List.of(cal);
-        List<FreqRespCalibration> none = List.of();
-        double[] tones = FreqRespCalHelper.toneFrequencies(r);
-        InverseCascade inv = FreqRespCalHelper.cascadeInverse(
-                e.isWithNoise() ? row : none, e.isWithNoise() ? none : row,
-                tones, FreqRespCalHelper.toneLobeSpans(r, tones), r.fftSize, r.sampleRate);
-        if (undo) inv = inv.reciprocal();
-        carryLineFloorsThroughCal(r, tones, !Double.isNaN(r.coherentKappa), inv);
-        FreqRespCalHelper.applyInverseInPlace(r, inv);
-        statsAnalyzer.recomputeStats(r);
-    }
-
-    /** Shows a static spectrum loaded from file instead of live data.  When
-     *  the result carries IMD products ({@link FftResult#imd}) the view
-     *  switches to IMD (dual-tone) table mode and renders them; otherwise it
-     *  shows the single-tone THD / harmonic table.  The THD / IMD metrics
-     *  themselves are recomputed by the caller from the loaded spectrum, and
-     *  the caller must have already stopped recording (so the worker won't
-     *  overwrite it). */
     public void displayLoadedResult(FftResult r) {
         lastResult = r;
         lastResultLive = false;
+        runPipeline(r, readoutSettings().withoutManualFundamental(), false);
         tableModeIsImd = (r.imd != null);
         syncDataButtons();
         if (!isDisposed()) { redraw(); update(); }
     }
 
     /** A THD setting (HP/LP band, manual fundamental, max harmonics) changed.
-     *  For a displayed STATIC spectrum (not a live capture) re-apply the settings
-     *  and recompute its THD / harmonics, then repaint.  During live capture the
-     *  worker re-reads these every analysis cycle, so this only repaints. */
+     *  For a displayed STATIC spectrum (not a live capture) the pipeline runs
+     *  again with the settings as they are now - a stopped capture's from the
+     *  spectrum as measured, with the loaded rows; a loaded file's without the
+     *  {@code .frc} and the manual fundamental - then repaints.  During live
+     *  capture every displayed frame takes the pipeline with the settings of
+     *  its time, so this only repaints. */
     private void onThdSettingChanged() {
         if (isDisposed()) return;
         if (lastResult != null && !controller.isRecording()) {
-            controller.recomputeStaticResult(lastResult);
+            if (lastResultLive) {
+                restateStoppedResult();
+            } else {
+                rerunPipeline(lastResult, readoutSettings().withoutManualFundamental(), false);
+            }
         }
         redraw();
     }
 
-    /** True when {@code r}'s measured fundamental rises clearly above the LOCAL
-     *  noise floor (the grass in its near range) - i.e. it is a genuine tonal
-     *  peak, not the top of a broadband hump (speech) or the max bin of pure
-     *  noise.  When false, F and the harmonics are indistinguishable from the
-     *  surrounding grass, so the THD/IMD table and the F/Hn dots are hidden. */
+    /** True when {@code r}'s measured fundamental rises clearly above its own
+     *  local noise floor - the band-top beside it its line carries - i.e. it
+     *  is a genuine tonal peak, not the top of a broadband hump (speech) or
+     *  the max bin of pure noise.  Both levels are the line's raw ones, read on
+     *  the spectrum as it arrived, before any de-embedding or lift.  When
+     *  false, F and the harmonics are indistinguishable from the surrounding
+     *  grass, so the THD/IMD table and the F/Hn dots are hidden.
+     *
+     * @param r the result
+     * @return true for a distinguishable fundamental */
     private boolean hasDistinguishableSignal(FftResult r) {
-        if (r == null || !Double.isFinite(r.fundamentalDbFs)) return false;
+        if (r == null || r.fundamental == null) return false;
+        double level = r.fundamental.rawAmplitudeDbFs();
+        if (!Double.isFinite(level)) return false;
         // Absurd THD => the harmonics are as strong as the "fundamental": a
         // broadband hump (speech) or noise, not a tone.
         if (Double.isFinite(r.thdPct) && r.thdPct > MAX_THD_PCT) return false;
-        double floor = r.localNoiseFloorDbFs();
+        double floor = r.fundamental.bandTopDbFs();
         if (!Double.isFinite(floor)) return true;   // no floor estimate - don't suppress
-        return r.fundamentalDbFs > floor + SIGNAL_FLOOR_MARGIN_DB;
+        return level > floor + SIGNAL_FLOOR_MARGIN_DB;
     }
 
     /** True when the table is currently in IMD (dual-tone) mode. */
@@ -1395,13 +1292,15 @@ public final class FftView extends AbstractFreqDomainView {
         ImdResult imd = lastResult.imd;
         if (imd != null) {
             // Aggregate every dot frequency we'd potentially plot.
-            double minHz = Math.min(imd.f1Hz, imd.f2Hz);
-            double maxHz = Math.max(imd.f1Hz, imd.f2Hz);
-            double diff  = Math.abs(imd.f2Hz - imd.f1Hz);
+            double f1Hz  = imd.f1.frequencyHz();
+            double f2Hz  = imd.f2.frequencyHz();
+            double minHz = Math.min(f1Hz, f2Hz);
+            double maxHz = Math.max(f1Hz, f2Hz);
+            double diff  = Math.abs(f2Hz - f1Hz);
             if (diff > 0) minHz = Math.min(minHz, diff);
             for (int k = 2; k <= ImdResult.MAX_ORDER; k++) {
-                double dl = imd.dnLHz[k];
-                double dh = imd.dnHHz[k];
+                double dl = imd.dnL[k].frequencyHz();
+                double dh = imd.dnH[k].frequencyHz();
                 if (Double.isFinite(dl) && dl > 0) {
                     minHz = Math.min(minHz, dl);
                     maxHz = Math.max(maxHz, dl);
@@ -1431,24 +1330,26 @@ public final class FftView extends AbstractFreqDomainView {
         }
 
         // ── Magnitude: top = strongest detected tone + 10 dB,
-        // bottom = noise floor − 20 dB.  In DUAL_TONE mode the
+        // bottom = noise floor − 30 dB.  In DUAL_TONE mode the
         // strongest tone is whichever of F1 / F2 has the higher
         // dBFS - the single-fundamental detector in FftAnalyzer
         // already latches on to that one, so we use both F1/F2
         // dBFS from the IMD slot to pick the maximum explicitly.
         if (Double.isFinite(lastResult.fundamentalDbFs) && Double.isFinite(lastResult.avgNoiseFloorDbFs)) {
             // The fundamental's DISPLAYED dBFS - manual override (converted) when set,
-            // else the measured level (already .frc-corrected in place by the worker).
+            // else the measured level (already .frc-corrected in place by the pipeline).
             double peakDbFs = displayedFundDbFs();
             if (!Double.isFinite(peakDbFs)) peakDbFs = lastResult.fundamentalDbFs;
             if (imd != null) {
-                if (Double.isFinite(imd.f1DbFs)) peakDbFs = Math.max(peakDbFs, imd.f1DbFs);
-                if (Double.isFinite(imd.f2DbFs)) peakDbFs = Math.max(peakDbFs, imd.f2DbFs);
+                double f1DbFs = imd.f1.deembeddedAmplitudeDbFs();
+                double f2DbFs = imd.f2.deembeddedAmplitudeDbFs();
+                if (Double.isFinite(f1DbFs)) peakDbFs = Math.max(peakDbFs, f1DbFs);
+                if (Double.isFinite(f2DbFs)) peakDbFs = Math.max(peakDbFs, f2DbFs);
             }
             // Range is stored canonically in dBFS; the unit conversion happens only at
             // draw / readout time, so every unit pans + zooms identically.
             double topDbFs = peakDbFs + 20;
-            double botDbFs = lastResult.avgNoiseFloorDbFs - 20;
+            double botDbFs = lastResult.avgNoiseFloorDbFs - AUTO_SETUP_BELOW_FLOOR_DB;
             if (Double.isFinite(topDbFs) && Double.isFinite(botDbFs) && topDbFs != botDbFs) {
                 if (topDbFs < botDbFs) { double s = topDbFs; topDbFs = botDbFs; botDbFs = s; }
                 prefs.setFftMagTop(topDbFs);
@@ -1462,7 +1363,7 @@ public final class FftView extends AbstractFreqDomainView {
 
     /** Maximises the visible spectrum: frequency range spans the full
      *  capture band ([bin size, Nyquist]) and the magnitude axis runs
-     *  from a fixed +20 dB ceiling down to (noise floor − 30 dB).  The
+     *  from a fixed +20 dB ceiling down to (noise floor − 40 dB).  The
      *  top is signal-independent - it doesn't track the fundamental -
      *  so the chart layout stays stable across signal changes.  Works
      *  even when no analysis result is published yet (uses fallback
@@ -1480,7 +1381,7 @@ public final class FftView extends AbstractFreqDomainView {
             prefs.setFftFreqMaxHz(nyquist);
         }
 
-        // Fixed +20 dBFS ceiling, noise-floor − 30 dB floor (when
+        // Fixed +20 dBFS ceiling, noise-floor − 40 dB floor (when
         // present; otherwise default to −150 dBFS bottom to give a
         // sensible empty-chart layout).
         // Default +20 dBFS ceiling, but never below the DISPLAYED (correction-lifted)
@@ -1488,7 +1389,7 @@ public final class FftView extends AbstractFreqDomainView {
         double fundTop = displayedFundDbFs();
         double topDbFs = Double.isFinite(fundTop) ? Math.max(20.0, fundTop + 20.0) : 20.0;
         double botDbFs = (lastResult != null && Double.isFinite(lastResult.avgNoiseFloorDbFs))
-                ? lastResult.avgNoiseFloorDbFs - 30
+                ? lastResult.avgNoiseFloorDbFs - MAXIMIZE_BELOW_FLOOR_DB
                 : -150;
         // Range stored canonically in dBFS - unit conversion happens at draw / readout.
         if (Double.isFinite(topDbFs) && Double.isFinite(botDbFs) && topDbFs != botDbFs) {
@@ -1503,8 +1404,10 @@ public final class FftView extends AbstractFreqDomainView {
 
     /** The fundamental's DISPLAYED level in dBFS - what the spectrum actually draws at
      *  the fundamental: the manual-override dBV (converted) when set, else the measured
-     *  level, which the worker already corrected in place for the loaded {@code .frc}
-     *  calibration.  {@code NaN} with no result. */
+     *  level, which the pipeline already corrected in place for the loaded {@code .frc}
+     *  calibration.
+     *
+     * @return the level, {@code NaN} with no result */
     private double displayedFundDbFs() {
         if (lastResult == null || !Double.isFinite(lastResult.fundamentalDbFs)) return Double.NaN;
         if (Double.isFinite(lastResult.fundamentalTrueDbFs)) {
@@ -1827,7 +1730,17 @@ public final class FftView extends AbstractFreqDomainView {
 
     /** Draws a small red dot at the fundamental peak and at every
      *  detected harmonic.  Helps the user see at a glance which peaks the
-     *  analyser picked up. */
+     *  analyser picked up.
+     *
+     * @param gc      the graphics context
+     * @param plot    the plot area
+     * @param r       the result whose lines are drawn
+     * @param unit    the magnitude unit of the axis
+     * @param freqMin the lowest frequency shown, Hz
+     * @param freqMax the highest frequency shown, Hz
+     * @param magTop  the top of the magnitude axis, in {@code unit}
+     * @param magBot  the bottom of the magnitude axis, in {@code unit}
+     * @param logFreq whether the frequency axis is logarithmic */
     private void drawHarmonicDots(GC gc, Rectangle plot, FftResult r,
                                   MagnitudeUnit unit,
                                   double freqMin, double freqMax,
@@ -1836,42 +1749,31 @@ public final class FftView extends AbstractFreqDomainView {
         Preferences prefs = Preferences.instance();
         double binBw = r.freqResolution;
 
-        // "Before-cal" dots - painted FIRST so the corrected (red)
-        // dots sit on top.  Pulled from the SAME r snapshot used for
-        // the post-cal dots so both share one analysis cycle's harmonicHz
-        // values - the snapshot was deep-copied at publish time, so
-        // BLUE and RED can never end up from different cycles.
-        double[][] before = r.preCorrectionPeaks;
-        drawBeforeCalDots(gc, plot, before, unit, freqMin, freqMax, magTop, magBot, logFreq);
-
         // Each plotDotAt gates on the dot's magnitude vs the visible
         // range and skips drawing when it falls outside - that hides
         // dots cleanly without snapping them to the chart edges.
         // The fundamental dot sits on the DISPLAYED peak: the manual
-        // fundamental when set (the trace's lobe is stretched to it at
-        // draw time), else the measured level.
-        //
-        // With a manual fundamental and no .frc cal there is no pre-cal
-        // snapshot above, yet the lobe is stretched to the manual value and the
-        // red dot lands on it - so also drop a BLUE dot at the true MEASURED
-        // fundamental height, matching the before-cal marker the cal path draws.
-        if (before == null && Double.isFinite(r.fundamentalTrueDbFs)
-                && r.fundamentalTrueDbFs != r.fundamentalDbFs) {
-            gc.setBackground(color(ColorRole.BEFORE_CAL_DOT));
-            plotDotAt(gc, plot, r.fundamentalHzRefined, r.fundamentalDbFs,
+        // fundamental when set (the statistics stretch the trace's lobe to
+        // it), else the de-embedded level.  Its BLUE dot stands on
+        // the level as measured wherever the red one stands elsewhere - the
+        // de-embedding or the manual fundamental moved it.
+        SpectralLine fundamental = r.fundamental;
+        double fundDotDbFs = Double.isFinite(r.fundamentalTrueDbFs)
+                ? r.fundamentalTrueDbFs : fundamental.deembeddedAmplitudeDbFs();
+        // Blue dots painted FIRST so the red dots sit on top.
+        gc.setBackground(color(ColorRole.BEFORE_CAL_DOT));
+        if (fundamental.rawAmplitudeDbFs() != fundDotDbFs) {
+            plotDotAt(gc, plot, fundamental.frequencyHz(), fundamental.rawAmplitudeDbFs(),
                     unit, freqMin, freqMax, magTop, magBot, logFreq);
         }
-        double fundDotDbFs = Double.isFinite(r.fundamentalTrueDbFs)
-                ? r.fundamentalTrueDbFs : r.fundamentalDbFs;
+        List<SpectralLine> harmonics = r.harmonicLines();
+        drawMeasuredDots(gc, plot, harmonics, unit, freqMin, freqMax, magTop, magBot, logFreq);
         gc.setBackground(color(ColorRole.HARMONIC_DOT));
-        plotDotAt(gc, plot, r.fundamentalHzRefined, fundDotDbFs,
+        plotDotAt(gc, plot, fundamental.frequencyHz(), fundDotDbFs,
                 unit, freqMin, freqMax, magTop, magBot, logFreq);
-        if (r.harmonicHz != null && r.harmonicDbFs != null) {
-            int n = Math.min(r.harmonicHz.length, r.harmonicDbFs.length);
-            for (int i = 0; i < n; i++) {
-                plotDotAt(gc, plot, r.harmonicHz[i], r.harmonicDbFs[i],
-                        unit, freqMin, freqMax, magTop, magBot, logFreq);
-            }
+        for (SpectralLine harmonic : harmonics) {
+            plotDotAt(gc, plot, harmonic.frequencyHz(), harmonic.deembeddedAmplitudeDbFs(),
+                    unit, freqMin, freqMax, magTop, magBot, logFreq);
         }
 
         // Hn labels on top of every (corrected) dot - fundamental gets
@@ -1879,17 +1781,15 @@ public final class FftView extends AbstractFreqDomainView {
         // the harmonics within the calc-max-harmonic count are
         // labelled (matches the THD-tab's calcMaxHarmonic pref).
         gc.setForeground(color(ColorRole.HARMONIC_DOT));
-        drawHarmonicLabel(gc, plot, "F " + formatFrequency(r.fundamentalHzRefined),
-                r.fundamentalHzRefined, fundDotDbFs,
+        drawHarmonicLabel(gc, plot, "F " + formatFrequency(fundamental.frequencyHz()),
+                fundamental.frequencyHz(), fundDotDbFs,
                 unit, freqMin, freqMax, magTop, magBot, logFreq);
-        if (r.harmonicHz != null && r.harmonicDbFs != null) {
-            int n = Math.min(r.harmonicHz.length, r.harmonicDbFs.length);
-            int calcMax = Math.max(9, prefs.getFftCalcMaxHarmonic());
-            for (int i = 0; i < n && (i + 2) <= calcMax; i++) {
-                drawHarmonicLabel(gc, plot, "H" + (i + 2),
-                        r.harmonicHz[i], r.harmonicDbFs[i],
-                        unit, freqMin, freqMax, magTop, magBot, logFreq);
-            }
+        int calcMax = Math.max(9, prefs.getFftCalcMaxHarmonic());
+        for (int i = 0; i < harmonics.size() && (i + 2) <= calcMax; i++) {
+            SpectralLine harmonic = harmonics.get(i);
+            drawHarmonicLabel(gc, plot, "H" + (i + 2),
+                    harmonic.frequencyHz(), harmonic.deembeddedAmplitudeDbFs(),
+                    unit, freqMin, freqMax, magTop, magBot, logFreq);
         }
 
         // DEBUG overlay: spectral discontinuity reject gates.
@@ -1901,10 +1801,23 @@ public final class FftView extends AbstractFreqDomainView {
      *  - gate-2 floor-reference curve (dark cyan) + reject boundary (cyan),
      *  gate-1 near-carrier pedestal reject line (orange), gate-3 total-power
      *  line + reject band (magenta) - so it's visible what each gate would
-     *  reject.  Every value is positioned by its dB excess over the detector's
-     *  floor, added to the DISPLAYED (calibrated) floor, so it lands at the
-     *  right vertical position whatever calibration the chart applies.  A gate
-     *  that fired this block is drawn thicker. */
+     *  reject.  Gate 2 stands on each band's band-top of the DISPLAYED
+     *  spectrum, {@link #GATE2_LINE_OFFSET_DB} above it; gates 1 and 3 are
+     *  positioned by their dB excess over the detector's floor, added to the
+     *  displayed (calibrated) floor, so they land at the right vertical
+     *  position whatever calibration the chart applies.  A gate that fired
+     *  this block is drawn thicker.
+     *
+     * @param gc      the graphics context
+     * @param plot    the plot area
+     * @param r       the displayed result
+     * @param unit    the magnitude unit of the axis
+     * @param freqMin the lowest frequency shown, Hz
+     * @param freqMax the highest frequency shown, Hz
+     * @param magTop  the axis top, in {@code unit}
+     * @param magBot  the axis bottom, in {@code unit}
+     * @param logFreq whether the frequency axis is logarithmic
+     * @param binBw   the bin width, Hz */
 	private void drawDiscontinuityGates(GC gc, Rectangle plot, FftResult r,
                                         MagnitudeUnit unit, double freqMin, double freqMax,
                                         double magTop, double magBot, boolean logFreq,
@@ -1920,27 +1833,36 @@ public final class FftView extends AbstractFreqDomainView {
         boolean rejPed   = rej != null && rej.pedestalOut;
         boolean rejPow   = rej != null && rej.powerOut;
 
-        // Displayed (calibrated) floor per band = median dBFs over the band.
+        // Displayed (calibrated) floor per band = the band's band-top in dBFs,
+        // the level the detector reads per band.
         double[] floorDisp = new double[nb];
+        // Gate 2's anchor per band: the displayed band-top, the offset above it.
+        double[] gate2Disp = new double[nb];
         for (int b = 0; b < nb; b++) {
-            floorDisp[b] = medianRange(dbfs, Math.max(1, g.bandLo[b]), Math.min(n, g.bandHi[b]));
+            int lo = Math.max(1, g.bandLo[b]);
+            int hi = Math.min(n, g.bandHi[b]);
+            floorDisp[b] = bandTopRange(dbfs, lo, hi);
+            gate2Disp[b] = floorDisp[b] + GATE2_LINE_OFFSET_DB;
         }
 
-        // Per-band MEAN power levels of the pre-average blocks (the quantity gate 2
+        // Per-band band-tops of the pre-average blocks (the quantity gate 2
         // compares) and the line bands a tone dominates - gate 2 excludes those, so
         // they are skipped in the reference and the block curves alike.
-        double[] curLvl = bandLevels(r.gateBlockDbFs, g);
-        boolean[] line  = lineBands(g.mref);
+        double[] curLvl = g.bandTopDb;
+        boolean[] line  = g.lineBand;
 
-        // gate 2: per-band floor reference (dark cyan) + reject boundary (cyan).
+        // gate 2: per-band band-top reference (dark cyan) + reject boundary (cyan).
         double prevXr = Double.NaN, prevYr = 0, prevXb = Double.NaN, prevYb = 0;
         for (int b = 0; b < nb; b++) {
-            if (line[b] || Double.isNaN(floorDisp[b])) {
+            if (line[b] || Double.isNaN(gate2Disp[b])) {
                 prevXr = prevXb = Double.NaN;
                 continue;
             }
             double x = freqToX(0.5 * (g.bandLo[b] + g.bandHi[b]) * binBw, plot, freqMin, freqMax, logFreq);
-            double ref = floorDisp[b] + (g.mref[b] - g.floorDb);
+            // The band's reference over the detector's floor, on the same
+            // anchor the block curve stands on: the gap to that curve is the
+            // band-top over the reference, the lift gate 2 judges.
+            double ref = gate2Disp[b] + (g.mref[b] - g.floorDb);
             double yr = gateY(ref, unit, plot, magTop, magBot);
             double yb = gateY(ref + g.scoreThreshDb, unit, plot, magTop, magBot);
             gc.setForeground(display.getSystemColor(SWT.COLOR_DARK_CYAN));
@@ -1959,9 +1881,13 @@ public final class FftView extends AbstractFreqDomainView {
             int half = Math.max(24, plot.width / 16);
             double threshExc = rej != null && !Double.isNaN(rej.pedestalThreshDb)
                     ? rej.pedestalThreshDb : g.pedestalThreshDb;
+            // Base = the fundamental's flank floor on the displayed trace, the
+            // reference the detector measures the pedestal excess against.
+            IntToDoubleFunction dispMag = k -> Math.pow(10.0, dbfs[k] / 20.0);
             for (int pk : g.peakBins) {
-                double cf = skirtFloorDbFs(dbfs, pk, g.pedestalGapBins, g.pedestalSpanBins);
-                if (Double.isNaN(cf)) continue;
+                double floorLin = FftDsp.pedestalFloor(dispMag, pk, n - 1, binBw, r.windowType);
+                if (!(floorLin > 0.0)) continue;
+                double cf = 20.0 * Math.log10(floorLin);
                 double xc = freqToX(pk * binBw, plot, freqMin, freqMax, logFreq);
                 double xL = Math.max(plot.x, xc - half);
                 double xR = Math.min(plot.x + plot.width, xc + half);
@@ -1978,8 +1904,9 @@ public final class FftView extends AbstractFreqDomainView {
             }
         }
 
-        // gate 3: total-power line + reject band (magenta).
-        double medFloor = medianArray(floorDisp);
+        // gate 3: total-power line + reject band (magenta), based on the
+        // displayed floor read the way the detector reads its own.
+        double medFloor = FftDsp.bandTopOfLevelsDb(floorDisp, line, nb);
         if (!Double.isNaN(medFloor) && g.bins > 0) {
             double perBin = 10.0 * Math.log10(g.bins);
             int xr = plot.x + plot.width;
@@ -2006,7 +1933,7 @@ public final class FftView extends AbstractFreqDomainView {
         }
 
         // Current accepted block - per-band level curve (grey, context).
-        drawLevelCurve(gc, plot, curLvl, line, floorDisp, g, unit,
+        drawLevelCurve(gc, plot, curLvl, line, gate2Disp, g, unit,
                 freqMin, freqMax, magTop, magBot, logFreq, binBw, SWT.COLOR_GRAY, false);
         // Full REJECTED FFT (red) at bin resolution - its fundamental rigidly
         // shifted ONTO the displayed fundamental (no stretch) so the block's
@@ -2097,13 +2024,15 @@ public final class FftView extends AbstractFreqDomainView {
         //    took off the displayed spectrum there, and a bin no row reached is
         //    left alone.
         if (calInv != null) {
+            SpectralLine[] lines = r.toneLines();
             for (int k = kFirst; k <= kLast; k++) {
-                out[k] -= FreqRespCalHelper.gainDbAt(calInv, k);
+                out[k] -= FreqRespCalHelper.gainDbAt(lines, calInv, k);
             }
         }
 
-        // 2. Manual fundamental - its displayed peak is lifted at draw time (not in
-        //    amplitudeDbFs), so lift red's fundamental lobe to the user value too.
+        // 2. Manual fundamental - the statistics lifted the displayed peak to
+        //    it, not the block's, so lift red's fundamental lobe to the user
+        //    value too.
         boolean manual = Double.isFinite(r.fundamentalTrueDbFs)
                 && Double.isFinite(r.fundamentalDbFs) && Double.isFinite(r.fundamentalHzRefined);
         double targetDbFs;
@@ -2140,8 +2069,8 @@ public final class FftView extends AbstractFreqDomainView {
     private void stretchLobe(double[] out, IntToDoubleFunction mag, int toneBin, int half,
                              double factor, double binHz, WindowType window) {
         if (toneBin < 1 || toneBin > half) return;
-        double floor   = ToneLobeLift.localFloor(mag, toneBin, half, binHz, window);
-        int[]  edges   = ToneLobeLift.lobeBins(mag, toneBin, half, floor, binHz, window);
+        double floor   = FftDsp.pedestalFloor(mag, toneBin, half, binHz, window);
+        int[]  edges   = FftDsp.lobeBins(mag, toneBin, half, floor, binHz, window);
         double peakMag = mag.applyAsDouble(toneBin);
         for (int k = edges[0]; k <= edges[1]; k++) {
             if (k < 1 || k > half || k >= out.length) continue;
@@ -2161,65 +2090,56 @@ public final class FftView extends AbstractFreqDomainView {
                 Math.abs(g.powerDb - g.powerMedDb), g.powerThreshDb, pow ? " <<" : "");
     }
 
-    /** Per-band MEAN power level (dBFs) of a pre-average block - the quantity
-     *  gate 2 compares; {@code null} when the block is absent. */
-    private double[] bandLevels(double[] block, SpectralDiscontinuityDetector.Gates g) {
-        if (block == null) return null;
-        int nb = g.mref.length, n = block.length;
-        double[] lvl = new double[nb];
-        for (int b = 0; b < nb; b++) {
-            int lo = Math.max(1, g.bandLo[b]), hi = Math.min(n, g.bandHi[b]);
-            double sum = 0.0; int m = 0;
-            for (int k = lo; k < hi; k++) { sum += Math.pow(10.0, block[k] / 10.0); m++; }
-            lvl[b] = m > 0 ? 10.0 * Math.log10(sum / m + 1e-300) : Double.NaN;
-        }
-        return lvl;
+    /** The band-top of {@code a[lo..hi)} - the upper edge of the band's noise,
+     *  {@link FftDsp#bandTop} of the bins' magnitudes - in dBFs.
+     *
+     * @param a  a spectrum, dBFs per bin
+     * @param lo the band's first bin
+     * @param hi one past the band's last bin
+     * @return the band-top, dBFs; NaN when the band is empty */
+    private double bandTopRange(double[] a, int lo, int hi) {
+        int len = hi - lo;
+        if (len <= 0) return Double.NaN;
+        double[] magnitudes = new double[len];
+        for (int k = lo; k < hi; k++) magnitudes[k - lo] = Math.pow(10.0, a[k] / 20.0);
+        return 20.0 * Math.log10(FftDsp.bandTop(magnitudes, len) + 1e-300);
     }
 
-    /** Bands whose level towers &gt; 10 dB over the local median - tones, which
-     *  gate 2 excludes from its floor comparison. */
-    private boolean[] lineBands(double[] lvl) {
-        int nb = lvl.length;
-        boolean[] line = new boolean[nb];
-        for (int b = 0; b < nb; b++) {
-            int lo = Math.max(0, b - 3), hi = Math.min(nb, b + 4);
-            double[] loc = Arrays.copyOfRange(lvl, lo, hi);
-            Arrays.sort(loc);
-            line[b] = lvl[b] > loc[loc.length / 2] + 10.0;
-        }
-        return line;
-    }
-
-    /** Median of the non-line band levels - a block's own floor of band means. */
-    private double bandFloor(double[] lvl, boolean[] line) {
-        double[] c = new double[lvl.length];
-        int m = 0;
-        for (int b = 0; b < lvl.length; b++) if (!line[b] && !Double.isNaN(lvl[b])) c[m++] = lvl[b];
-        if (m == 0) return 0.0;
-        c = Arrays.copyOf(c, m);
-        Arrays.sort(c);
-        return c[m / 2];
-    }
-
-    /** Draws a block's per-band level curve, anchored to the displayed floor by
-     *  each band's excess over the block's own floor (so it shares the gate
-     *  reference's frame); line bands are skipped. */
-    private void drawLevelCurve(GC gc, Rectangle plot, double[] lvl, boolean[] line, double[] floorDisp,
+    /** Draws a block's per-band level curve, each band at its {@code anchor}
+     *  plus the band's excess over the detector's floor of the block (so it
+     *  shares the gate reference's frame); line bands are skipped.
+     *
+     * @param gc       the graphics context
+     * @param plot     the plot area
+     * @param lvl      the block's band-top per band in the detector's dB; {@code null} for none
+     * @param line     the line bands, skipped
+     * @param anchor   where each band's curve stands, dBFs
+     * @param g        the gate snapshot whose bands are drawn
+     * @param unit     the magnitude unit of the axis
+     * @param freqMin  the lowest frequency shown, Hz
+     * @param freqMax  the highest frequency shown, Hz
+     * @param magTop   the axis top, in {@code unit}
+     * @param magBot   the axis bottom, in {@code unit}
+     * @param logFreq  whether the frequency axis is logarithmic
+     * @param binBw    the bin width, Hz
+     * @param swtColor the SWT system colour of the curve
+     * @param dashed   whether the curve is dashed */
+    private void drawLevelCurve(GC gc, Rectangle plot, double[] lvl, boolean[] line, double[] anchor,
                                 SpectralDiscontinuityDetector.Gates g, MagnitudeUnit unit,
                                 double freqMin, double freqMax, double magTop, double magBot,
                                 boolean logFreq, double binBw, int swtColor, boolean dashed) {
         if (lvl == null) return;
-        double floor = bandFloor(lvl, line);
+        double floor = g.floorDb;
         gc.setForeground(getDisplay().getSystemColor(swtColor));
         gc.setLineWidth(3);
         gc.setLineStyle(dashed ? SWT.LINE_DASH : SWT.LINE_SOLID);
         double prevX = Double.NaN, prevY = 0;
         for (int b = 0; b < lvl.length; b++) {
-            if (line[b] || Double.isNaN(lvl[b]) || Double.isNaN(floorDisp[b])) {
+            if (line[b] || Double.isNaN(lvl[b]) || Double.isNaN(anchor[b])) {
                 prevX = Double.NaN;
                 continue;
             }
-            double dispDbFs = floorDisp[b] + (lvl[b] - floor);
+            double dispDbFs = anchor[b] + (lvl[b] - floor);
             double y = gateY(dispDbFs, unit, plot, magTop, magBot);
             double x = freqToX(0.5 * (g.bandLo[b] + g.bandHi[b]) * binBw, plot, freqMin, freqMax, logFreq);
             if (!Double.isNaN(prevX)) drawLineAt(gc, prevX, prevY, x, y);
@@ -2242,40 +2162,6 @@ public final class FftView extends AbstractFreqDomainView {
         double v = convertFromDbFs(dbFs, unit, null);
         double y = magToY(v, plot, magTop, magBot, unit);
         return Math.max(plot.y, Math.min(plot.y + plot.height, y));
-    }
-
-    /** Median of {@code a[lo..hi)}; NaN when empty. */
-    private double medianRange(double[] a, int lo, int hi) {
-        int len = hi - lo;
-        if (len <= 0) return Double.NaN;
-        double[] c = Arrays.copyOfRange(a, lo, hi);
-        Arrays.sort(c);
-        return c[len / 2];
-    }
-
-    /** Displayed noise floor in the skirt flanking bin {@code pk} (main lobe
-     *  excluded): the median over the {@code span} bins past {@code gap} to
-     *  either side - the geometry the pedestal gate sampled. */
-    private double skirtFloorDbFs(double[] a, int pk, int gap, int span) {
-        double[] buf = new double[2 * span];
-        int n = 0;
-        for (int k = pk - gap - span; k < pk - gap; k++) if (k >= 1 && k < a.length) buf[n++] = a[k];
-        for (int k = pk + gap + 1; k <= pk + gap + span && k < a.length; k++) if (k >= 1) buf[n++] = a[k];
-        if (n == 0) return Double.NaN;
-        double[] c = Arrays.copyOf(buf, n);
-        Arrays.sort(c);
-        return c[n / 2];
-    }
-
-    /** Median of an array, skipping NaN; NaN when all NaN. */
-    private double medianArray(double[] a) {
-        double[] c = new double[a.length];
-        int n = 0;
-        for (double v : a) if (!Double.isNaN(v)) c[n++] = v;
-        if (n == 0) return Double.NaN;
-        c = Arrays.copyOf(c, n);
-        Arrays.sort(c);
-        return c[n / 2];
     }
 
     /** Returns the on-screen (x, y) pixel position of a dot at the
@@ -2325,110 +2211,98 @@ public final class FftView extends AbstractFreqDomainView {
         drawOutlinedText(gc, text, lx, ly);
     }
 
-    /** Paints a BLUE "before-cal" dot at every (freq, dBFS) pair of
-     *  {@code before} - layout {@code [0] = freqs[], [1] = dBFs[]} - for the
-     *  red post-cal dots painted afterwards to sit on top.  Nothing for a
-     *  {@code null} or malformed list. */
-    private void drawBeforeCalDots(GC gc, Rectangle plot, double[][] before,
-                                   MagnitudeUnit unit,
-                                   double freqMin, double freqMax,
-                                   double magTop, double magBot,
-                                   boolean logFreq) {
-        if (before == null || before.length != 2 || before[0] == null || before[1] == null) return;
+    /** Paints a BLUE "before-cal" dot at every line's level as measured,
+     *  where it differs from the de-embedded one - the red dot painted
+     *  afterwards sits on top.  Without de-embedding the two are equal and no
+     *  blue dot is drawn.
+     *
+     * @param gc      the graphics context
+     * @param plot    the plot area
+     * @param lines   the lines whose measured levels are drawn
+     * @param unit    the magnitude unit of the axis
+     * @param freqMin the lowest frequency shown, Hz
+     * @param freqMax the highest frequency shown, Hz
+     * @param magTop  the top of the magnitude axis, in {@code unit}
+     * @param magBot  the bottom of the magnitude axis, in {@code unit}
+     * @param logFreq whether the frequency axis is logarithmic */
+    private void drawMeasuredDots(GC gc, Rectangle plot, List<SpectralLine> lines,
+                                  MagnitudeUnit unit,
+                                  double freqMin, double freqMax,
+                                  double magTop, double magBot,
+                                  boolean logFreq) {
         gc.setBackground(color(ColorRole.BEFORE_CAL_DOT));
-        int n = Math.min(before[0].length, before[1].length);
-        for (int i = 0; i < n; i++) {
-            plotDotAt(gc, plot, before[0][i], before[1][i],
+        for (SpectralLine line : lines) {
+            if (line.rawAmplitudeDbFs() == line.deembeddedAmplitudeDbFs()) continue;
+            plotDotAt(gc, plot, line.frequencyHz(), line.rawAmplitudeDbFs(),
                     unit, freqMin, freqMax, magTop, magBot, logFreq);
         }
     }
 
-    /** The dual-tone lines' frequencies in dot order: F1, F2, then the lower
-     *  and the upper product of each order 2..{@link ImdResult#MAX_ORDER}. */
-    private double[] imdLineHz(ImdResult imd) {
-        double[] hz = new double[IMD_LINES];
-        hz[0] = imd.f1Hz;
-        hz[1] = imd.f2Hz;
-        int idx = 2;
+    /** The dual-tone lines in dot order.
+     *
+     * @param imd the intermodulation readout
+     * @return F1, F2, then the lower and the upper product of each order
+     *         2..{@link ImdResult#MAX_ORDER} */
+    private List<SpectralLine> imdLines(ImdResult imd) {
+        List<SpectralLine> lines = new ArrayList<>(IMD_LINES);
+        lines.add(imd.f1);
+        lines.add(imd.f2);
         for (int k = 2; k <= ImdResult.MAX_ORDER; k++) {
-            hz[idx++] = imd.dnLHz[k];
-            hz[idx++] = imd.dnHHz[k];
+            lines.add(imd.dnL[k]);
+            lines.add(imd.dnH[k]);
         }
-        return hz;
-    }
-
-    /** The dual-tone lines' levels as read off the spectrum, in the order of
-     *  {@link #imdLineHz}: the tones' read levels, then the products'. */
-    private double[] imdMeasuredDbFs(ImdResult imd) {
-        double[] dbFs = new double[IMD_LINES];
-        dbFs[0] = imd.f1DbFs;
-        dbFs[1] = imd.f2DbFs;
-        int idx = 2;
-        for (int k = 2; k <= ImdResult.MAX_ORDER; k++) {
-            dbFs[idx++] = imd.dnLDbFs[k];
-            dbFs[idx++] = imd.dnHDbFs[k];
-        }
-        return dbFs;
-    }
-
-    /** The dual-tone lines' levels before the {@code .frc} correction, as
-     *  {@link FftResult#imdPreCorrectionPeaks} lays them out: each line's
-     *  measured post-correction level plus the cascade's gain at its own bin
-     *  - what the correction took off that bin, added back - so blue stands
-     *  exactly where the measurement stood before the correction.  {@code inv}
-     *  is the cascade the spectrum was corrected by, {@code null} for none. */
-    private double[][] imdPreCorrectionPeaks(FftResult r, InverseCascade inv) {
-        double[] hz   = imdLineHz(r.imd);
-        double[] dbFs = imdMeasuredDbFs(r.imd);
-        for (int i = 0; i < hz.length; i++) {
-            dbFs[i] += calGainDbAt(inv, r, hz[i]);
-        }
-        return new double[][] { hz, dbFs };
+        return lines;
     }
 
     /** Paints F1, F2 and the per-order dnL / dnH IMD-product dots +
      *  labels on the spectrum.  Same visual treatment as
      *  {@link #drawHarmonicDots} so the user sees consistent marker
      *  styling across THD and IMD modes - red dots on every measured
-     *  spike, blue "before-cal" dots underneath when one or more
-     *  calibration files are loaded.  Dots that fall outside the
-     *  visible mag range are skipped (the {@link #plotDotAt} helper
-     *  handles the bounds check). */
+     *  spike, blue "before-cal" dots underneath wherever the red dot
+     *  stands elsewhere than the level as measured.  Dots that fall outside
+     *  the visible mag range are skipped (the {@link #plotDotAt} helper
+     *  handles the bounds check).
+     *
+     * @param gc      the graphics context
+     * @param plot    the plot area
+     * @param imd     the intermodulation readout whose lines are drawn
+     * @param r       the result the readout belongs to
+     * @param unit    the magnitude unit of the axis
+     * @param freqMin the lowest frequency shown, Hz
+     * @param freqMax the highest frequency shown, Hz
+     * @param magTop  the top of the magnitude axis, in {@code unit}
+     * @param magBot  the bottom of the magnitude axis, in {@code unit}
+     * @param logFreq whether the frequency axis is logarithmic */
     private void drawImdDots(GC gc, Rectangle plot, ImdResult imd,
                              FftResult r,
                              MagnitudeUnit unit,
                              double freqMin, double freqMax,
                              double magTop, double magBot,
                              boolean logFreq) {
-        // Every dot's (freq, post-cal dBFs), in the order of imdLineHz.  The
-        // tones stand at their displayed level - each tone's share of the
+        // Every red dot's (freq, de-embedded dBFS), in the order of imdLines.
+        // The tones stand at their displayed level - each tone's share of the
         // manual fundamental when one is set, where the lobe lift puts its
-        // lobe - the products at the level read off the spectrum;
-        // measuredDbFs keeps the tones' read level.
-        double[] hz           = imdLineHz(imd);
-        double[] measuredDbFs = imdMeasuredDbFs(imd);
-        double[] dbFs         = measuredDbFs.clone();
+        // lobe - the products at their de-embedded level.
+        List<SpectralLine> lines = imdLines(imd);
+        int count = lines.size();
+        double[] hz   = new double[count];
+        double[] dbFs = new double[count];
+        for (int i = 0; i < count; i++) {
+            hz[i]   = lines.get(i).frequencyHz();
+            dbFs[i] = lines.get(i).deembeddedAmplitudeDbFs();
+        }
         dbFs[0] = dbFsOfMagnitude(imd.f1Mag);
         dbFs[1] = dbFsOfMagnitude(imd.f2Mag);
-        int count = hz.length;
 
-        // Blue "before-cal" dots first so the red post-cal dots sit on top -
-        // the frame's own snapshot, present while a calibration is loaded
-        // (finalizeResult), the same as the THD path's.
-        if (r.imdPreCorrectionPeaks != null) {
-            drawBeforeCalDots(gc, plot, r.imdPreCorrectionPeaks,
-                    unit, freqMin, freqMax, magTop, magBot, logFreq);
-        } else if (Double.isFinite(r.fundamentalTrueDbFs)) {
-            // With a manual fundamental and no .frc cal the tone lobes are
-            // lifted to their shares of it and the red dots land there - so
-            // also drop a BLUE dot at each tone's MEASURED height, as the
-            // single-tone path does.
-            gc.setBackground(color(ColorRole.BEFORE_CAL_DOT));
-            for (int i = 0; i < 2; i++) {
-                if (dbFs[i] != measuredDbFs[i]) {
-                    plotDotAt(gc, plot, hz[i], measuredDbFs[i],
-                            unit, freqMin, freqMax, magTop, magBot, logFreq);
-                }
+        // Blue dots first so the red dots sit on top: each line's level as
+        // measured, wherever its red dot stands elsewhere - the de-embedding
+        // or the manual fundamental moved it.
+        gc.setBackground(color(ColorRole.BEFORE_CAL_DOT));
+        for (int i = 0; i < count; i++) {
+            double rawDbFs = lines.get(i).rawAmplitudeDbFs();
+            if (rawDbFs != dbFs[i]) {
+                plotDotAt(gc, plot, hz[i], rawDbFs,
+                        unit, freqMin, freqMax, magTop, magBot, logFreq);
             }
         }
 
@@ -2447,9 +2321,11 @@ public final class FftView extends AbstractFreqDomainView {
         // strictly above their own dots so the dot itself is never
         // obscured.
         gc.setForeground(color(ColorRole.HARMONIC_DOT));
-        Point p1 = dotScreenPos(plot, imd.f1Hz, dbFs[0], unit, freqMin, freqMax,
+        double f1Hz = imd.f1.frequencyHz();
+        double f2Hz = imd.f2.frequencyHz();
+        Point p1 = dotScreenPos(plot, f1Hz, dbFs[0], unit, freqMin, freqMax,
                 magTop, magBot, logFreq);
-        Point p2 = dotScreenPos(plot, imd.f2Hz, dbFs[1], unit, freqMin, freqMax,
+        Point p2 = dotScreenPos(plot, f2Hz, dbFs[1], unit, freqMin, freqMax,
                 magTop, magBot, logFreq);
         if (p1 != null || p2 != null) {
             // Horizontal centring runs off the FRACTIONAL dot column and is
@@ -2457,10 +2333,10 @@ public final class FftView extends AbstractFreqDomainView {
             // drawHarmonicLabel.  The Point above stays integer on purpose: it
             // drives the vertical stacking below, which works in whole text
             // rows.
-            double x1f = freqToX(imd.f1Hz, plot, freqMin, freqMax, logFreq);
-            double x2f = freqToX(imd.f2Hz, plot, freqMin, freqMax, logFreq);
-            String t1 = "F1 " + formatFrequency(imd.f1Hz);
-            String t2 = "F2 " + formatFrequency(imd.f2Hz);
+            double x1f = freqToX(f1Hz, plot, freqMin, freqMax, logFreq);
+            double x2f = freqToX(f2Hz, plot, freqMin, freqMax, logFreq);
+            String t1 = "F1 " + formatFrequency(f1Hz);
+            String t2 = "F2 " + formatFrequency(f2Hz);
             Point ext1 = gc.textExtent(t1);
             Point ext2 = gc.textExtent(t2);
             final int margin = 4;     // dot-to-label vertical gap
@@ -2504,15 +2380,14 @@ public final class FftView extends AbstractFreqDomainView {
         }
 
         // dnL (lower sideband) + dnH (upper sideband) labels for
-        // n = 2..5.  Frequency anchors are imd.dnLHz / dnHHz; level
-        // anchors are the dnLDbFs / dnHDbFs arrays.
+        // n = 2..5, anchored on each product's red dot.
         for (int k = 2; k <= ImdResult.MAX_ORDER; k++) {
             drawHarmonicLabel(gc, plot, "d" + k + "L",
-                    imd.dnLHz[k], imd.dnLDbFs[k], unit, freqMin, freqMax,
-                    magTop, magBot, logFreq);
+                    imd.dnL[k].frequencyHz(), imd.dnL[k].deembeddedAmplitudeDbFs(),
+                    unit, freqMin, freqMax, magTop, magBot, logFreq);
             drawHarmonicLabel(gc, plot, "d" + k + "H",
-                    imd.dnHHz[k], imd.dnHDbFs[k], unit, freqMin, freqMax,
-                    magTop, magBot, logFreq);
+                    imd.dnH[k].frequencyHz(), imd.dnH[k].deembeddedAmplitudeDbFs(),
+                    unit, freqMin, freqMax, magTop, magBot, logFreq);
         }
     }
 
@@ -2686,7 +2561,7 @@ public final class FftView extends AbstractFreqDomainView {
         setTraceLineAttributes(gc, (float) prefs.getFftLineWidth(), SWT.LINE_SOLID);
         double binBw   = r.freqResolution;
         int n = r.amplitudeDbFs.length;
-        double[] drawnDbFs = toneLobesLifted(heldLinesLifted(r), r);
+        double[] drawnDbFs = r.amplitudeDbFs;
         int kFirst = Math.max(1,  (int) Math.floor(freqMin / binBw));
         int kLast  = Math.min(n - 1, (int) Math.ceil (freqMax / binBw));
         if (kLast <= kFirst) return;
@@ -2715,10 +2590,9 @@ public final class FftView extends AbstractFreqDomainView {
         // freqToX + the unit conversion on the two extremes of each pixel
         // column.  That cuts the transcendental count from one log10+pow
         // PER BIN (~1 M at fftSize 2 M - a 10-40 ms UI stall per rebuilt
-        // frame) to ~4 per pixel column.  Only the lobe lifts (the tones to
-        // the manual fundamental, the held lines to their readout), applied
-        // to drawnDbFs beforehand, stay per-bin - they span a few thousand
-        // bins at most.
+        // frame) to ~4 per pixel column.  The lobe lifts (the tones to the
+        // manual fundamental, the clamped lines to their readout) are already
+        // in the result: the statistics put them on the trace.
         ColumnBucketPainter painter = new ColumnBucketPainter(plot);
         int    curCol   = Integer.MIN_VALUE;          // column being accumulated
         // The TRUE fractional X of the bin that opened that column.  The column
@@ -2772,79 +2646,6 @@ public final class FftView extends AbstractFreqDomainView {
         painter.drawTo(gc);
     }
 
-    /** {@code r}'s spectrum as drawn: every distortion line - each harmonic
-     *  and, for a dual tone, each intermodulation product - whose readout the
-     *  line-floor hold raised has its lobe stretched up to that readout, its
-     *  red dot, with {@link #stretchLobe}.  The red dot and the drawn spectrum
-     *  stand in one domain, de-embedded or not, so the lobe meets its dot
-     *  either way.  On a copy: the result's own spectrum stays as measured,
-     *  the way a saved file writes it.  Without a line-floor table (a loaded
-     *  file) or with no line held, the spectrum itself. */
-    private double[] heldLinesLifted(FftResult r) {
-        double[] dbFs = r.amplitudeDbFs;
-        if (r.lineFloorBins == null) return dbFs;
-        double[] out = dbFs;
-        for (DistortionLine line : r.harmonicLines()) {
-            out = liftHeldLine(out, r, line.bin(), line.readoutDbFs());
-        }
-        for (DistortionLine line : r.intermodLines()) {
-            out = liftHeldLine(out, r, line.bin(), line.readoutDbFs());
-        }
-        return out;
-    }
-
-    /** Lifts the lobe of the line at {@code bin} in {@code out} to
-     *  {@code readoutDbFs} when the line-floor hold set that readout - it
-     *  stands on the line's floor, above the bin as measured - copying
-     *  {@code r}'s spectrum first if {@code out} still is it.  A line read
-     *  above its floor is left as measured.  Returns the array to go on
-     *  with. */
-    private double[] liftHeldLine(double[] out, FftResult r, int bin, double readoutDbFs) {
-        int half = r.amplitudeDbFs.length - 1;
-        if (bin < 1 || bin > half || !Double.isFinite(readoutDbFs)) return out;
-        double floorDbFs = r.lineFloorDbFs(bin);
-        if (!Double.isFinite(floorDbFs) || Math.abs(readoutDbFs - floorDbFs) > LINE_FLOOR_MATCH_DB
-                || !(readoutDbFs > r.amplitudeDbFs[bin])) {
-            return out;
-        }
-        return liftLobeTo(out, r, bin, readoutDbFs);
-    }
-
-    /** {@code out} with the tone lobes lifted to the manual fundamental when
-     *  one is set, so each lobe meets its red dot: a single tone's lobe to the
-     *  manual level, a dual tone's two lobes each to its share of it - the
-     *  manual level split by the measured ratio, as the IMD readout splits
-     *  it.  The WHOLE main lobe is lifted, proportionally above the local
-     *  noise floor so the wings stay on the floor, not just the peak bin,
-     *  which left a narrow spike on the unlifted lobe.  Without a manual
-     *  fundamental, {@code out} as given. */
-    private double[] toneLobesLifted(double[] out, FftResult r) {
-        double binBw = r.freqResolution;
-        if (!Double.isFinite(r.fundamentalTrueDbFs) || !(binBw > 0)) return out;
-        ImdResult imd = r.imd;
-        if (imd == null) {
-            if (!Double.isFinite(r.fundamentalDbFs) || !Double.isFinite(r.fundamentalHzRefined)) {
-                return out;
-            }
-            return liftLobeTo(out, r, (int) Math.round(r.fundamentalHzRefined / binBw),
-                    r.fundamentalTrueDbFs);
-        }
-        out = liftLobeTo(out, r, (int) Math.round(imd.f1Hz / binBw), dbFsOfMagnitude(imd.f1Mag));
-        return liftLobeTo(out, r, (int) Math.round(imd.f2Hz / binBw), dbFsOfMagnitude(imd.f2Mag));
-    }
-
-    /** Lifts the lobe at {@code bin} in {@code out} to {@code targetDbFs}
-     *  with {@link #stretchLobe}, copying {@code r}'s spectrum first if
-     *  {@code out} still is it.  Returns the array to go on with. */
-    private double[] liftLobeTo(double[] out, FftResult r, int bin, double targetDbFs) {
-        int half = r.amplitudeDbFs.length - 1;
-        if (bin < 1 || bin > half || !Double.isFinite(targetDbFs)) return out;
-        final double[] lifted = out == r.amplitudeDbFs ? out.clone() : out;
-        stretchLobe(lifted, k -> Math.pow(10.0, lifted[k] / 20.0), bin, half,
-                Math.pow(10.0, (targetDbFs - lifted[bin]) / 20.0), r.freqResolution, r.windowType);
-        return lifted;
-    }
-
     /** Emits one accumulated spectrum column to the painter: the column's
      *  min/max raw-dBFS extremes converted to the display unit and Y.  A
      *  single-bin column adds one point (no envelope bar - matching the
@@ -2893,14 +2694,13 @@ public final class FftView extends AbstractFreqDomainView {
         // IMD mode - H2 isn't marked there.
         double anchorFreq, anchorDbFs;
         ImdResult imd = r.imd;
-        if (imd != null && imd.dnLHz != null && imd.dnLHz.length > 2
-                && Double.isFinite(imd.dnLDbFs[2])) {
-            anchorFreq = imd.dnLHz[2];
-            anchorDbFs = imd.dnLDbFs[2];
+        if (imd != null && Double.isFinite(imd.dnL[2].deembeddedAmplitudeDbFs())) {
+            anchorFreq = imd.dnL[2].frequencyHz();
+            anchorDbFs = imd.dnL[2].deembeddedAmplitudeDbFs();
         } else if (r.harmonicCount > 0 && r.harmonicBins != null
                 && r.harmonicBins.length > 0 && r.harmonicBins[0] > 0) {
             anchorFreq = r.harmonicHz[0];
-            anchorDbFs = r.harmonicDbFs[0];
+            anchorDbFs = r.harmonics[0].deembeddedAmplitudeDbFs();
         } else {
             return;
         }
@@ -3016,7 +2816,9 @@ public final class FftView extends AbstractFreqDomainView {
      *  built from.  The rows split into the two groups the cascade takes: one
      *  divides every bin, the other only the tone lobes.  Half a million
      *  log-domain interpolations at a 2^20-point FFT go into this, which is why
-     *  the answer is held rather than derived per displayed frame. */
+     *  the answer is held rather than derived per displayed frame.
+     *
+     * @param r the spectrum, its harmonic ladder placed */
     private void buildCalInverse(FftResult r) {
         List<FreqRespCalibration> withNoise = new ArrayList<>();
         List<FreqRespCalibration> toneOnly  = new ArrayList<>();
@@ -3030,49 +2832,26 @@ public final class FftView extends AbstractFreqDomainView {
                 toneOnly.add(cal);
             }
         }
-        double[] tones = FreqRespCalHelper.toneFrequencies(r);
-        ToneLobe[] spans = FreqRespCalHelper.toneLobeSpans(r, tones);
-        calInv = FreqRespCalHelper.cascadeInverse(withNoise, toneOnly, tones, spans,
-                r.fftSize, r.sampleRate);
-        calInvToneKeys   = !toneOnly.isEmpty();
-        calInvFundBin    = r.fundamentalBin;
-        calInvF2Bin      = secondFundamentalBin(r);
-        calInvSpans      = spans;
+        calInv = FreqRespCalHelper.cascadeInverse(withNoise, toneOnly,
+                FreqRespCalHelper.toneFrequencies(r), r.fftSize, r.sampleRate);
+        calInvToneKeys = !toneOnly.isEmpty();
+        calInvToneBins = FreqRespCalHelper.toneBins(r);
     }
 
-    /** Whether the held response still fits {@code r}: its tone positions and
-     *  lobe extents, while a tone-only row is loaded - that row's one value per
-     *  tone stands in exactly the bins those spans named.  With only with-noise
-     *  rows the response depends on no tone, so the tone keys are not compared
-     *  and no frame costs their recompute. */
+    /** Whether the held response still fits {@code r}: its tone bins, while a
+     *  tone-only row is loaded - that row's one value per tone stands at
+     *  exactly those tones.  With only with-noise rows the response depends on
+     *  no tone, so the tone bins are not compared and no frame costs their
+     *  recompute.
+     *
+     * @param r the spectrum, its harmonic ladder placed
+     * @return {@code true} when the held response is valid for {@code r} */
     private boolean calInverseFits(FftResult r) {
         if (calInv == null) return false;
         if (!calInvToneKeys) return true;
-        if (r.fundamentalBin != calInvFundBin || secondFundamentalBin(r) != calInvF2Bin) {
-            return false;
-        }
-        double[] tones = FreqRespCalHelper.toneFrequencies(r);
-        return FreqRespCalHelper.sameGeometry(calInvSpans, FreqRespCalHelper.toneLobeSpans(r, tones));
+        return Arrays.equals(calInvToneBins, FreqRespCalHelper.toneBins(r));
     }
 
-    /** The second fundamental's bin on {@code r}'s grid, or
-     *  {@link #NO_TONE_BIN} when the frame carries no second tone. */
-    private int secondFundamentalBin(FftResult r) {
-        double f2 = r.fundamental2HzRefined;
-        if (Double.isNaN(f2) || !(f2 > 0.0) || r.fftSize <= 0) return NO_TONE_BIN;
-        return (int) Math.round(f2 / (r.sampleRate / (double) r.fftSize));
-    }
-
-    /** The dB the calibration cascade {@code inv} takes off the bin nearest
-     *  {@code hz} - what a level measured after the correction has to gain back
-     *  to read as it was measured.  0 with no cascade (a static spectrum shown
-     *  after a reset is not corrected either, so its blue dot coincides with
-     *  the red one) and for a bin no row reached. */
-    private double calGainDbAt(InverseCascade inv, FftResult r, double hz) {
-        if (inv == null || !(hz > 0.0)) return 0.0;
-        double binWidth = r.sampleRate / (double) r.fftSize;
-        return FreqRespCalHelper.gainDbAt(inv, (int) Math.round(hz / binWidth));
-    }
 
     /** Emits one accumulated cal-overlay column - min/max dB extremes
      *  converted to the display unit and Y (single-point columns add one
@@ -3158,11 +2937,11 @@ public final class FftView extends AbstractFreqDomainView {
         // ── Centred F1 / F2 headers (bold). ────────────────────────────
         gc.setFont(monoBoldFont);
         drawCentred(gc, String.format("F1: %.4f Hz   %.2f dBFS   %.2f dBV",
-                imd.f1Hz, imd.f1DbFs,
+                imd.f1.frequencyHz(), imd.f1.deembeddedAmplitudeDbFs(),
                 convertFromDbFs(dbFsOfMagnitude(imd.f1Mag), MagnitudeUnit.DBV, null)), centreX, y);
         y += lineH;
         drawCentred(gc, String.format("F2: %.4f Hz   %.2f dBFS   %.2f dBV",
-                imd.f2Hz, imd.f2DbFs,
+                imd.f2.frequencyHz(), imd.f2.deembeddedAmplitudeDbFs(),
                 convertFromDbFs(dbFsOfMagnitude(imd.f2Mag), MagnitudeUnit.DBV, null)), centreX, y);
         y += lineH;
 
@@ -3186,9 +2965,9 @@ public final class FftView extends AbstractFreqDomainView {
                 // While a tone's frequency lock tracks, the frequency it steers
                 // on: its readings averaged over two FFT lengths of samples.
                 double f1Hz = Double.isFinite(lastResult.fllAveragedHz)
-                        ? lastResult.fllAveragedHz : imd.f1Hz;
+                        ? lastResult.fllAveragedHz : imd.f1.frequencyHz();
                 double f2Hz = Double.isFinite(lastResult.fllAveraged2Hz)
-                        ? lastResult.fllAveraged2Hz : imd.f2Hz;
+                        ? lastResult.fllAveraged2Hz : imd.f2.frequencyHz();
                 drawCentred(gc, formatDeltaF("Δf1", emitted[0], f1Hz, sr), centreX, y);
                 y += lineH;
                 drawCentred(gc, formatDeltaF("Δf2", emitted[1], f2Hz, sr), centreX, y);
@@ -3221,10 +3000,10 @@ public final class FftView extends AbstractFreqDomainView {
         for (int k = 2; k <= ImdResult.MAX_ORDER; k++) {
             rows.add(new String[]{
                     String.format("d%dL:", k),
-                    imdRowText(levelInDistortionUnit(imd.dnLDbFs[k],
+                    imdRowText(levelInDistortionUnit(imd.dnL[k].deembeddedAmplitudeDbFs(),
                             refDbFs, tableUnit, dbvOff), imd.dnLPct[k], unitLabel),
                     String.format("d%dH:", k),
-                    imdRowText(levelInDistortionUnit(imd.dnHDbFs[k],
+                    imdRowText(levelInDistortionUnit(imd.dnH[k].deembeddedAmplitudeDbFs(),
                             refDbFs, tableUnit, dbvOff), imd.dnHPct[k], unitLabel)});
         }
         drawColumnRows(gc, rows, xLeft, y, lineH);
@@ -3382,17 +3161,20 @@ public final class FftView extends AbstractFreqDomainView {
                 "SNR:",  fmtDb(r.snrDb),
                 "ENOB:", String.format("%.1f bits", (r.enobSinadDb - 1.76) / 6.02)});
         rows.add(null);   // small gap between the metric and harmonic blocks
-        int harmCount = (r.harmonicDbFs == null) ? 0 : r.harmonicDbFs.length;
+        List<SpectralLine> harmonics = r.harmonicLines();
+        int harmCount = harmonics.size();
         for (int i = 0; i < harmCount; i += 2) {
             String l = String.format("H%d:", i + 2);
             String lv = String.format("%8.2f %s  %.8f %%",
-                    levelInDistortionUnit(r.harmonicDbFs[i], refDbFs, tableUnit, dbvOffsetDb),
+                    levelInDistortionUnit(harmonics.get(i).deembeddedAmplitudeDbFs(),
+                            refDbFs, tableUnit, dbvOffsetDb),
                     unitLabel, r.harmonicPct[i]);
             String rkey = "", rval = "";
             if (i + 1 < harmCount) {
                 rkey = String.format("H%d:", i + 3);
                 rval = String.format("%8.2f %s  %.8f %%",
-                        levelInDistortionUnit(r.harmonicDbFs[i + 1], refDbFs, tableUnit, dbvOffsetDb),
+                        levelInDistortionUnit(harmonics.get(i + 1).deembeddedAmplitudeDbFs(),
+                                refDbFs, tableUnit, dbvOffsetDb),
                         unitLabel, r.harmonicPct[i + 1]);
             }
             rows.add(new String[]{ l, lv, rkey, rval });

@@ -20,11 +20,13 @@ package org.edgo.audio.measure.gui.fft;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.edgo.audio.measure.common.SpectrumStatistics;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.WindowType;
-import org.edgo.audio.measure.fft.CoherentAccumulator;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
+import org.edgo.audio.measure.fft.ReadoutSettings;
+import org.edgo.audio.measure.fft.SpectrumAccumulator;
 import org.edgo.audio.measure.test.AbstractReflectiveTest;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -50,7 +52,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p>Same driving pattern as {@link FftCrossCycleDriftTest}: the real
  * {@link FftAnalyzerWorker} accumulator + PLL headlessly, read back
  * through the accumulator's overlay +
- * {@link FftAnalyzer#recomputeStats} - the exact display path.  Both of
+ * {@link SpectrumStatistics#calculateStat} - the exact display path.  Both of
  * those worker members are private - a productive class is not widened to
  * let a test in - so this harness reaches them by reflection.  The
  * geometry mirrors the reported bench: 32 kHz, 64k FFT, Hann, 0 %
@@ -72,6 +74,10 @@ class FftBlankStartupTest extends AbstractReflectiveTest {
     private static final int        CYCLES      = 12;
     /** A displayed fundamental this far above the clamp floor counts as drawn. */
     private static final double     HEALTHY_DBFS = -30.0;
+    /** The readout settings: H2..H9, no distortion band, no manual
+     *  fundamental. */
+    private static final ReadoutSettings SETTINGS =
+            new ReadoutSettings(HARMONICS, HARMONICS, 0.0, 0.0, Double.NaN);
 
     /** The worker members this harness drives, by name because that is what
      *  reflection takes: the private accumulate step and the private
@@ -82,13 +88,17 @@ class FftBlankStartupTest extends AbstractReflectiveTest {
 
     private static final Logger LOG = LogManager.getLogger("FftBlankStartup");
 
-    /** The worker's accumulator, written back onto {@code r}. */
+    /** The worker's accumulator, written back onto {@code r}.
+     *
+     * @param worker the worker whose accumulator is read
+     * @param r      the result the average is written onto */
     private void overlay(FftAnalyzerWorker worker, FftResult r) {
-        this.<CoherentAccumulator>field(worker, ACCUMULATOR).overlayOnto(r);
+        this.<SpectrumAccumulator>field(worker, ACCUMULATOR).overlayOnto(r);
     }
 
     /** How the capture begins, before the continuous clean sine. */
     private enum Start {
+        /** The clean sine from the first sample on. */
         CLEAN     { @Override void mangle(double[] sig, int winLen) { } },
         /** Whole first window digital zeros - the line delivered nothing yet. */
         ZERO_WIN  { @Override void mangle(double[] sig, int winLen) {
@@ -102,9 +112,16 @@ class FftBlankStartupTest extends AbstractReflectiveTest {
         DC_STEP   { @Override void mangle(double[] sig, int winLen) {
             for (int i = 0; i < winLen / 2; i++) sig[i] = 0.5;
         } };
+
+        /** Lays this start over the beginning of the signal.
+         *
+         * @param sig    the signal, changed in place
+         * @param winLen the analysis window's length, samples */
         abstract void mangle(double[] sig, int winLen);
     }
 
+    /** Every start - clean, a zero first window, a half window, a DC step -
+     *  ends with the displayed fundamental drawn. */
     @Test
     void startTransientMustNotBlankTheAverageForever() {
         int hop    = FFT_SIZE;                       // 0 % overlap
@@ -124,28 +141,35 @@ class FftBlankStartupTest extends AbstractReflectiveTest {
                 "Displayed average never recovered from the start transient: " + failures);
     }
 
+    /** Drives one start through every analysis cycle.
+     *
+     * @param start  how the capture begins
+     * @param hop    the spacing of the analysis cycles, samples
+     * @param winLen the analysis window's length, samples
+     * @param total  the signal's length, samples
+     * @return the displayed fundamental after the last cycle, dBFS */
     private double run(Start start, int hop, int winLen, int total) {
         double[] sig = synthesize(total);
         start.mangle(sig, winLen);
 
-        FftAnalyzer       analyzer = new FftAnalyzer();
-        FftAnalyzerWorker worker   = new FftAnalyzerWorker(null);      // headless
+        FftAnalyzer        analyzer   = new FftAnalyzer();
+        SpectrumStatistics statistics = new SpectrumStatistics();
+        FftAnalyzerWorker  worker     = new FftAnalyzerWorker(null);      // headless
         double[] win = new double[winLen];
 
         double lastFund = Double.NEGATIVE_INFINITY;
         long base = 0;
         for (int t = 0; t < CYCLES; t++) {
             System.arraycopy(sig, (int) base, win, 0, winLen);
-            analyzer.setSpectrumOnly(true);
             analyzer.setMultiTone(false);
             analyzer.setSecondToneHintHz(Double.NaN);
-            FftResult r = analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, HARMONICS, HARMONICS,
-                    WINDOW, OVERLAP, 0.0, 0.0, true, Double.NaN, false, FUND_HZ,
+            FftResult r = analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, SETTINGS,
+                    WINDOW, OVERLAP, true, FUND_HZ,
                     new FftResult(), OVERLAP.hopSamples(FFT_SIZE));
             call(worker, ACCUMULATE, r, base, true, TARGET_N);
 
             overlay(worker, r);                      // the display path, every analysis cycle
-            analyzer.recomputeStats(r);
+            statistics.calculateStat(r, SETTINGS, null);
             int nanBins = 0, liveBins = 0;
             for (int k = 1; k < r.amplitudeDbFs.length; k++) {
                 if (Double.isNaN(r.amplitudeDbFs[k])) nanBins++;
@@ -161,7 +185,10 @@ class FftBlankStartupTest extends AbstractReflectiveTest {
         return lastFund;
     }
 
-    /** Continuous clean tone + light noise for the whole run. */
+    /** Continuous clean tone + light noise for the whole run.
+     *
+     * @param total the signal's length, samples
+     * @return the signal */
     private double[] synthesize(int total) {
         Random rnd = new Random(SEED);
         double[] sig = new double[total];

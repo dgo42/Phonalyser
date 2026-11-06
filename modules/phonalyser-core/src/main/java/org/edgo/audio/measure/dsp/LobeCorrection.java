@@ -18,22 +18,26 @@
 
 package org.edgo.audio.measure.dsp;
 
+import org.edgo.audio.measure.fft.SpectralLine;
+
 /**
- * What the tone-only calibration rows do to one tone's lobe: the reciprocal
- * of their product at the tone's own frequency, and the lobe it is applied
- * to.  The phase of the reciprocal turns every bin of the lobe in full; its
- * magnitude is applied stretched - in full at the peak, not at all at a bin
- * on the floor, in between by the bin's log-height above the floor - so the
- * lobe grows taller on its feet instead of lifting off the floor as a box.
+ * What the tone-only calibration rows do to one tone: the reciprocal of their
+ * product at the tone's own frequency.  Applied to the tone's lobe as the
+ * spectrum measured it (its {@link SpectralLine}) by
+ * {@link FreqRespCalHelper#liftLobe}:
+ * the phase turns every bin of the lobe in full, the magnitude is applied
+ * stretched - in full at the peak, not at all at a bin on the floor, in
+ * between by the bin's log-height above the floor.
  *
- * @param lobe  the lobe the correction is written across
  * @param invRe real part of {@code 1/G}, {@code G} the rows' product at the
  *              tone frequency
  * @param invIm imaginary part of {@code 1/G}
  */
-public record LobeCorrection(ToneLobe lobe, double invRe, double invIm) {
+public record LobeCorrection(double invRe, double invIm) {
 
-    /** {@code |1/G|} - the full lift, the one the peak gets. */
+    /** {@code |1/G|} - the full lift, the one the peak gets.
+     *
+     * @return the magnitude of the reciprocal */
     public double magnitude() {
         return Math.hypot(invRe, invIm);
     }

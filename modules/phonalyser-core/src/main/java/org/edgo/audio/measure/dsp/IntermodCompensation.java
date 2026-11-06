@@ -175,7 +175,7 @@ public final class IntermodCompensation {
      * frame identically.  A product the analyzer did not publish this
      * analysis cycle carries {@code (0, 0)} at frequency 0.
      * The clearance is the product's raw level over the upper border of the
-     * noise band beside its bin ({@link ToneLobeLift#lineFloor}), as
+     * noise band beside its bin ({@link FftDsp#lineFloor}), as
      * {@link HarmonicCompensation#measurePhasors} reads it for a harmonic;
      * {@link Double#NaN} where either is unknown.
      *
@@ -305,7 +305,7 @@ public final class IntermodCompensation {
     /**
      * Grid slot {@code g}'s clearance in {@code r}, dB: the product's raw
      * level {@code rawDbFs} over the upper border of the noise band beside
-     * its bin ({@link ToneLobeLift#lineFloor} on
+     * its bin ({@link FftDsp#lineFloor} on
      * {@link FftResult#amplitudeDbFs}), read the way
      * {@link HarmonicCompensation#measurePhasors} reads a harmonic's.
      * {@link Double#NaN} when the result carries no spectrum or no bin for
@@ -318,7 +318,7 @@ public final class IntermodCompensation {
         int bin = r.imdProductBin[i];
         double[] ampDb = r.amplitudeDbFs;
         if (bin <= 0 || bin >= ampDb.length) return Double.NaN;
-        double floorLin = ToneLobeLift.lineFloor(k -> Math.pow(10.0, ampDb[k] / 20.0), bin, ampDb.length - 1,
+        double floorLin = FftDsp.lineFloor(k -> Math.pow(10.0, ampDb[k] / 20.0), bin, ampDb.length - 1,
                 r.freqResolution, r.windowNenbwBins);
         double floorDb  = floorLin > 0.0 ? 20.0 * Math.log10(floorLin) : Double.NaN;
         return Double.isFinite(rawDbFs) && Double.isFinite(floorDb) ? rawDbFs - floorDb : Double.NaN;

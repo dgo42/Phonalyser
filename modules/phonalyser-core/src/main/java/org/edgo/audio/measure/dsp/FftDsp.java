@@ -3,15 +3,40 @@ package org.edgo.audio.measure.dsp;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.function.IntToDoubleFunction;
 
 import org.edgo.audio.measure.enums.WindowType;
-import org.edgo.audio.measure.fft.CoherentAccumulator;
 import org.edgo.audio.measure.fft.Fft;
 import org.edgo.audio.measure.fft.MathUtil;
 
 public final class FftDsp {
 
     private FftDsp() {}
+
+    /** Noise ceiling = median + {@code CEIL_K}·MAD of the flank band. */
+    private static final double CEIL_K = 4.0;
+
+    /** Width of each flank band {@link #pedestalFloor} reads the noise on, in
+     *  Hz - converted to bins with the spectrum's own resolution, so the band
+     *  covers the same stretch of spectrum at every sample rate and FFT size
+     *  (about 983 bins at 384 kHz with a 2 M-point FFT). */
+    private static final double FLOOR_SPAN_HZ = 180.0;
+
+    /** Half-width of a distortion line's floor window, in Hz - converted to
+     *  bins with the spectrum's own resolution, so the window covers the same
+     *  spectral neighbourhood at every sample rate and FFT size. */
+    private static final double LINE_FLOOR_SPAN_HZ = 25.0;
+
+    /** The lobe exclusion at the line-floor window's centre, in equivalent
+     *  noise bandwidths of the spectrum's window function: the main lobe
+     *  widens with the window's NENBW, so the exclusion follows it instead of
+     *  assuming one window type. */
+    private static final double LINE_FLOOR_EXCLUDE_NENBW = 4.0;
+
+    /** The window's bins stand for the local floor only over enough bins;
+     *  fewer than this beyond the exclusion and the window is too narrow to
+     *  read a floor from. */
+    private static final int LINE_FLOOR_MIN_BINS = 16;
 
     // =========================================================================
     // Window functions
@@ -154,7 +179,8 @@ public final class FftDsp {
      *       {@code √((π/2)² + acosh(10^(A/20))²)/π} for every transform size
      *       in use, far inside the one bin the ceiling rounds to.</li>
      * </ul>
-     * The hump the coherent average turns as one ({@link CoherentAccumulator})
+     * The hump the coherent average turns as one
+     * ({@link org.edgo.audio.measure.fft.SpectrumAccumulator})
      * is this many bins to either side of a line.
      */
     public static int mainLobeBins(WindowType window) {
@@ -388,5 +414,211 @@ public final class FftDsp {
         }
         return window;
     }
+
+    // =========================================================================
+    // Order statistics
+    // =========================================================================
+
+    /**
+     * The entry of rank {@code rank} among the first {@code length} entries
+     * of {@code values} - the one an ascending sort would put at index
+     * {@code rank}.  In-place Hoare quickselect: O(length) on average against
+     * the O(length log length) of a full sort, which at FFT lengths of
+     * millions of bins dominated every noise-floor read that needs only one
+     * rank.  The median-of-three pivot keeps the sorted and constant runs a
+     * quiet noise floor produces from degrading it.  The entries are
+     * reordered, so the caller hands in a working array.
+     *
+     * @param values the entries, reordered in place
+     * @param length how many leading entries take part
+     * @param rank   the rank asked for, 0 for the smallest
+     * @return the entry of that rank
+     */
+    public static double selectKth(double[] values, int length, int rank) {
+        int low  = 0;
+        int high = length - 1;
+        while (low < high) {
+            double first  = values[low];
+            double middle = values[(low + high) >>> 1];
+            double last   = values[high];
+            double pivot  = Math.max(Math.min(first, middle),
+                                     Math.min(Math.max(first, middle), last));
+            int left  = low;
+            int right = high;
+            while (left <= right) {
+                while (values[left] < pivot) left++;
+                while (values[right] > pivot) right--;
+                if (left <= right) {
+                    double swap   = values[left];
+                    values[left]  = values[right];
+                    values[right] = swap;
+                    left++;
+                    right--;
+                }
+            }
+            if (rank <= right)     high = right;
+            else if (rank >= left) low  = left;
+            else                   return values[rank];
+        }
+        return values[rank];
+    }
+
+    /** Inclusive {@code [lo, hi]} bin span of the main lobe: the contiguous bins
+     *  around {@code peak} that stand above the noise floor {@code floor}.  The
+     *  peak itself is always included (so a sub-floor tone still yields its one
+     *  peak bin); the walk runs out to where the lobe drops to the noise, at
+     *  most to the outer end of the flank band {@link #pedestalFloor} reads the
+     *  floor on - a lobe still above the floor there was itself inside that
+     *  band.
+     *
+     * @param mag    a bin's magnitude, by bin index
+     * @param peak   the tone's peak bin
+     * @param maxBin highest bin index {@code mag} may be read at
+     * @param floor  the level a lobe bin must stand above
+     * @param binHz  the spectrum's bin width in Hz
+     * @param window the spectrum's window function
+     * @return {@code [lo, hi]}, the lobe's first and last bin
+     */
+    public static int[] lobeBins(IntToDoubleFunction mag, int peak, int maxBin, double floor,
+            double binHz, WindowType window) {
+        int maxLobeBins = FftDsp.mainLobeBins(window) + FftDsp.LEAKAGE_GUARD_BINS
+                + (int) Math.round(FLOOR_SPAN_HZ / binHz);
+        return new int[]{ edge(mag, peak, -1, maxBin, floor, maxLobeBins),
+                          edge(mag, peak, +1, maxBin, floor, maxLobeBins) };
+    }
+
+    /** One side of {@link #lobeBins}: the last bin out from {@code peak} in
+     *  direction {@code dir} that still stands above {@code floor}.
+     *
+     * @param mag         a bin's magnitude, by bin index
+     * @param peak        the tone's peak bin
+     * @param dir         -1 for the lower side, +1 for the upper
+     * @param maxBin      highest bin index {@code mag} may be read at
+     * @param floor       the level a lobe bin must stand above
+     * @param maxLobeBins the walk's reach, bins
+     * @return the side's last lobe bin; {@code peak} when its neighbour is
+     *         already at or below the floor */
+    private static int edge(IntToDoubleFunction mag, int peak, int dir, int maxBin, double floor,
+            int maxLobeBins) {
+        int foot = peak;
+        for (int step = 1; step <= maxLobeBins; step++) {
+            int k = peak + dir * step;
+            if (k < 1 || k > maxBin) break;
+            if (mag.applyAsDouble(k) <= floor) break;   // dropped to the noise - lobe ends
+            foot = k;
+        }
+        return foot;
+    }
+
+    /** Noise-floor <b>ceiling</b> (same units as {@code mag}) near {@code peak}:
+     *  {@code median + CEIL_K·MAD} of the bins flanking the tone.  Robust - a
+     *  wide main lobe, harmonics, mains lines or spurs falling inside the band
+     *  are outliers the median/MAD ignore.  Returns 0 when no flanks are in
+     *  range.  (Named "floor" because it is the level a bin must rise ABOVE to
+     *  count as part of the lobe, and the level the lobe's feet taper back to.)
+     *  Each flank starts past the window's main lobe and the leakage guard -
+     *  a width in bins, the same at every FFT size - and runs
+     *  {@link #FLOOR_SPAN_HZ} on.
+     *
+     * @param mag    a bin's magnitude, by bin index
+     * @param peak   the tone's peak bin
+     * @param maxBin highest bin index {@code mag} may be read at
+     * @param binHz  the spectrum's bin width in Hz
+     * @param window the spectrum's window function
+     * @return the band-top of the flanks; 0 when no flank bin is in range
+     */
+    public static double pedestalFloor(IntToDoubleFunction mag, int peak, int maxBin,
+            double binHz, WindowType window) {
+        int gap  = FftDsp.mainLobeBins(window) + FftDsp.LEAKAGE_GUARD_BINS;
+        int span = (int) Math.round(FLOOR_SPAN_HZ / binHz);
+        double[] buf = new double[2 * span];
+        int m = 0;
+        for (int k = peak - gap - span; k < peak - gap; k++) {
+            if (k >= 1 && k <= maxBin) buf[m++] = mag.applyAsDouble(k);
+        }
+        for (int k = peak + gap + 1; k <= peak + gap + span; k++) {
+            if (k >= 1 && k <= maxBin) buf[m++] = mag.applyAsDouble(k);
+        }
+        if (m == 0) return 0.0;
+        return bandTop(buf, m);
+    }
+
+    /** A distortion line's local noise floor (same units as {@code mag}):
+     *  the upper border of the noise band beside the line,
+     *  {@code median + CEIL_K·MAD} of the bins within
+     *  {@link #LINE_FLOOR_SPAN_HZ} of {@code bin}, the line's own lobe at the
+     *  centre excluded over {@link #LINE_FLOOR_EXCLUDE_NENBW} noise bandwidths
+     *  of the window.  The window is half the mains spacing wide to either
+     *  side, so it always holds one mains harmonic, which the median and MAD
+     *  ignore as an outlier. Unlike {@link #pedestalFloor}, whose flank band
+     *  runs {@link #FLOOR_SPAN_HZ} out past the window's main lobe for the
+     *  lobe walk, this reads the floor in the line's own neighbourhood.  A bin
+     *  whose magnitude is not finite is left out.  Returns 0 when the window
+     *  leaves too few floor bins to mean anything.
+     *
+     * @param mag       a bin's magnitude, by bin index
+     * @param bin       the line's bin
+     * @param maxBin    highest bin index {@code mag} may be read at
+     * @param binHz     the spectrum's bin width in Hz
+     * @param nenbwBins the window's equivalent noise bandwidth in bins
+     * @return the band-top beside the line; 0 when too few bins remain
+     */
+    public static double lineFloor(IntToDoubleFunction mag, int bin, int maxBin,
+            double binHz, double nenbwBins) {
+        if (!(binHz > 0.0)) return 0.0;
+        int exclude = (int) Math.ceil(LINE_FLOOR_EXCLUDE_NENBW * Math.max(1.0, nenbwBins));
+        int span = Math.max((int) Math.round(LINE_FLOOR_SPAN_HZ / binHz),
+                exclude + LINE_FLOOR_MIN_BINS);
+        int lo = Math.max(1, bin - span);
+        int hi = Math.min(maxBin, bin + span);
+        double[] buf = new double[Math.max(0, hi - lo + 1)];
+        int m = 0;
+        for (int k = lo; k <= hi; k++) {
+            if (Math.abs(k - bin) <= exclude) continue;
+            double v = mag.applyAsDouble(k);
+            if (Double.isFinite(v)) buf[m++] = v;
+        }
+        if (m < LINE_FLOOR_MIN_BINS) return 0.0;
+        return bandTop(buf, m);
+    }
+
+    /** The band-top of a noise band: {@code median + CEIL_K·MAD} of the first
+     *  {@code m} values of {@code buf} - the upper edge of the band's noise.
+     *
+     * @param buf the band's magnitudes; left as given
+     * @param m   how many leading values take part, at least 1
+     * @return the band-top, in the unit of {@code buf} */
+    public static double bandTop(double[] buf, int m) {
+        double[] c = Arrays.copyOf(buf, m);
+        double median = selectKth(c, m, m / 2);
+        for (int i = 0; i < m; i++) c[i] = Math.abs(buf[i] - median);
+        double mad = selectKth(c, m, m / 2);
+        return median + CEIL_K * mad;
+    }
+
+    /** The band-top ({@link #bandTop}) of a set of levels given in dB - the
+     *  floor over the bands a line test left free.  The levels are taken as
+     *  magnitudes; a level that is not finite is left out.  When every band
+     *  is skipped, all of them take part.
+     *
+     * @param levelsDb the bands' levels, dB
+     * @param skip     the bands to leave out (lines), by band
+     * @param n        how many leading bands take part
+     * @return the band-top, dB; NaN when no band has a finite level */
+    public static double bandTopOfLevelsDb(double[] levelsDb, boolean[] skip, int n) {
+        double[] mags = new double[n];
+        int m = 0;
+        for (int b = 0; b < n; b++) {
+            if (!skip[b] && Double.isFinite(levelsDb[b])) mags[m++] = Math.pow(10.0, levelsDb[b] / 20.0);
+        }
+        if (m == 0) {
+            for (int b = 0; b < n; b++) {
+                if (Double.isFinite(levelsDb[b])) mags[m++] = Math.pow(10.0, levelsDb[b] / 20.0);
+            }
+        }
+        if (m == 0) return Double.NaN;
+        return 20.0 * Math.log10(bandTop(mags, m) + 1e-300);
+    }
+
 
 }

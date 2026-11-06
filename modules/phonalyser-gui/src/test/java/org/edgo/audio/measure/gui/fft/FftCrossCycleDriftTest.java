@@ -20,11 +20,13 @@ package org.edgo.audio.measure.gui.fft;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.edgo.audio.measure.common.SpectrumStatistics;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.WindowType;
-import org.edgo.audio.measure.fft.CoherentAccumulator;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
+import org.edgo.audio.measure.fft.ReadoutSettings;
+import org.edgo.audio.measure.fft.SpectrumAccumulator;
 import org.edgo.audio.measure.test.AbstractReflectiveTest;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -42,7 +44,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * live FFT view actually uses: one frame per analysis cycle, accumulated across
  * cycles by {@code accumulateIntoForeverBuffer} with its type-1
  * phase-lock loop, then read back via the accumulator's overlay
- * + {@link FftAnalyzer#recomputeStats}.  Only the Thread/Display/MessageBus plumbing
+ * + {@link SpectrumStatistics#calculateStat}.  Only the Thread/Display/MessageBus plumbing
  * is bypassed; the accumulator + PLL are the production code, reached through
  * reflection because both worker members are private.
  *
@@ -63,6 +65,10 @@ class FftCrossCycleDriftTest extends AbstractReflectiveTest {
     private static final WindowType WINDOW         = WindowType.BH7;
     private static final FftOverlap OVERLAP        = FftOverlap.PCT_75;
     private static final int        HARMONIC_COUNT = 8;                 // H2..H9
+    /** The readout settings: H2..H9, no distortion band, no manual
+     *  fundamental. */
+    private static final ReadoutSettings SETTINGS  =
+            new ReadoutSettings(HARMONIC_COUNT, HARMONIC_COUNT, 0.0, 0.0, Double.NaN);
 
     private static final double     FUND_HZ        = 1001.953125;       // on-bin @ 64k/384k (bin 171)
     private static final double     FUND_DBFS      = -79.74;
@@ -88,9 +94,15 @@ class FftCrossCycleDriftTest extends AbstractReflectiveTest {
 
     private static final Logger LOG = LogManager.getLogger("FftCrossCycleDrift");
 
-    /** The worker's accumulator, written back onto {@code r}. */
+    /** The statistics the readouts are calculated with. */
+    private final SpectrumStatistics statistics = new SpectrumStatistics();
+
+    /** The worker's accumulator, written back onto {@code r}.
+     *
+     * @param worker the worker whose accumulator is read
+     * @param r      the result the average is written onto */
     private void overlay(FftAnalyzerWorker worker, FftResult r) {
-        this.<CoherentAccumulator>field(worker, ACCUMULATOR).overlayOnto(r);
+        this.<SpectrumAccumulator>field(worker, ACCUMULATOR).overlayOnto(r);
     }
 
     @Test
@@ -122,22 +134,20 @@ class FftCrossCycleDriftTest extends AbstractReflectiveTest {
             FftResult r;
             for (int t = 0; t < CYCLES; t++) {
                 System.arraycopy(sig, (int) base, win, 0, winLen);
-                analyzer.setSpectrumOnly(true);
                 analyzer.setMultiTone(false);
                 analyzer.setSecondToneHintHz(Double.NaN);
-                r = analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, HARMONIC_COUNT, HARMONIC_COUNT,
-                        WINDOW, OVERLAP, 0.0, 0.0, true, Double.NaN, false, Double.NaN,
+                r = analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, SETTINGS,
+                        WINDOW, OVERLAP, true, Double.NaN,
                         new FftResult(), OVERLAP.hopSamples(FFT_SIZE));
                 call(worker, ACCUMULATE, r, base, true, Integer.MAX_VALUE);
 
                 if ((t + 1) % READOUT_EVERY == 0) {
                     overlay(worker, r);
-                    analyzer.recomputeStats(r);
+                    statistics.calculateStat(r, SETTINGS, null);
                     StringBuilder sb = new StringBuilder();
                     for (int i = 0; i < HARMONIC_COUNT; i++) {
-                        double h = (r.harmonicDbFs != null && i < r.harmonicDbFs.length)
-                                ? r.harmonicDbFs[i] : Double.NaN;
-                        sb.append(String.format(" H%d=%.2f", i + 2, h));
+                        sb.append(String.format(" H%d=%.2f", i + 2,
+                                r.harmonics[i].deembeddedAmplitudeDbFs()));
                     }
                     LOG.info(String.format("  cycle %4d  frames=%6d  fund=%.2f |%s",
                             t + 1, worker.getAccumulatedFrames(), r.fundamentalDbFs, sb));
@@ -149,7 +159,7 @@ class FftCrossCycleDriftTest extends AbstractReflectiveTest {
                         // reading by up to ~2.2 dB; a rotation defect sinks
                         // harmonics by tens of dB and still trips this.
                         for (int i = 0; i < HARMONIC_COUNT; i++) {
-                            assertEquals(HARMONIC_DBFS[i], r.harmonicDbFs[i], 3.0,
+                            assertEquals(HARMONIC_DBFS[i], r.harmonics[i].deembeddedAmplitudeDbFs(), 3.0,
                                     "H" + (i + 2) + " off its set level at " + driftPpmMin + " ppm/min");
                         }
                     }
@@ -191,22 +201,19 @@ class FftCrossCycleDriftTest extends AbstractReflectiveTest {
                 int hop = minHop + (1 + hopDraw.nextInt(FftOverlap.RAND_HOP_STEPS))
                         * ((maxHop - minHop) / FftOverlap.RAND_HOP_STEPS);
                 System.arraycopy(sig, (int) base, win, 0, winLen);
-                analyzer.setSpectrumOnly(true);
                 analyzer.setMultiTone(false);
                 analyzer.setSecondToneHintHz(Double.NaN);
-                r = analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, HARMONIC_COUNT, HARMONIC_COUNT,
-                        WINDOW, FftOverlap.RAND, 0.0, 0.0, true, Double.NaN,
-                        false, Double.NaN, new FftResult(), hop);
+                r = analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, SETTINGS,
+                        WINDOW, FftOverlap.RAND, true, Double.NaN, new FftResult(), hop);
                 call(worker, ACCUMULATE, r, base, true, Integer.MAX_VALUE);
 
                 if ((t + 1) % READOUT_EVERY == 0) {
                     overlay(worker, r);
-                    analyzer.recomputeStats(r);
+                    statistics.calculateStat(r, SETTINGS, null);
                     StringBuilder sb = new StringBuilder();
                     for (int i = 0; i < HARMONIC_COUNT; i++) {
-                        double h = (r.harmonicDbFs != null && i < r.harmonicDbFs.length)
-                                ? r.harmonicDbFs[i] : Double.NaN;
-                        sb.append(String.format(" H%d=%.2f", i + 2, h));
+                        sb.append(String.format(" H%d=%.2f", i + 2,
+                                r.harmonics[i].deembeddedAmplitudeDbFs()));
                     }
                     LOG.info(String.format("  cycle %4d  frames=%6d  fund=%.2f |%s",
                             t + 1, worker.getAccumulatedFrames(), r.fundamentalDbFs, sb));
@@ -257,11 +264,10 @@ class FftCrossCycleDriftTest extends AbstractReflectiveTest {
             FftResult r;
             for (int t = 0; t < CYCLES; t++) {
                 System.arraycopy(sig, (int) base, win, 0, winLen);
-                analyzer.setSpectrumOnly(true);
                 analyzer.setMultiTone(true);
                 analyzer.setSecondToneHintHz(freqs[1]);
-                r = analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, HARMONIC_COUNT, HARMONIC_COUNT,
-                        WINDOW, OVERLAP, 0.0, 0.0, true, Double.NaN, false, Double.NaN,
+                r = analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, SETTINGS,
+                        WINDOW, OVERLAP, true, Double.NaN,
                         new FftResult(), OVERLAP.hopSamples(FFT_SIZE));
                 call(worker, ACCUMULATE, r, base, true, Integer.MAX_VALUE);
 
@@ -326,11 +332,10 @@ class FftCrossCycleDriftTest extends AbstractReflectiveTest {
             FftResult r;
             for (int t = 0; t < CYCLES; t++) {
                 System.arraycopy(sig, (int) base, win, 0, winLen);
-                analyzer.setSpectrumOnly(true);
                 analyzer.setMultiTone(true);
                 analyzer.setSecondToneHintHz(freqs[1]);
-                r = analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, HARMONIC_COUNT, HARMONIC_COUNT,
-                        WINDOW, OVERLAP, 0.0, 0.0, true, Double.NaN, false, freqs[0],  // seed fund = F1
+                r = analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, SETTINGS,
+                        WINDOW, OVERLAP, true, freqs[0],  // seed fund = F1
                         new FftResult(), OVERLAP.hopSamples(FFT_SIZE));
                 if (t == 0) {   // SINGLE-capture levels - before any cross-cycle accumulation
                     LOG.info(String.format("    single capture (1 avg):  F1=%.2f  F2=%.2f  (F2-F1=%.2f dB)",
@@ -375,11 +380,10 @@ class FftCrossCycleDriftTest extends AbstractReflectiveTest {
             double[] freqs = { f1Bin * binHz, f2Bin * binHz };
             double[] dbfs  = { -10.0, -10.0 };
             double[] sig = synthesizeTones(SEED, winLen, 0.0, freqs, dbfs);
-            analyzer.setSpectrumOnly(true);
             analyzer.setMultiTone(true);
             analyzer.setSecondToneHintHz(Double.NaN);        // NO hint - get-fund-from-gen OFF
-            FftResult r = analyzer.analyze(sig, SAMPLE_RATE, FFT, HARMONIC_COUNT, HARMONIC_COUNT,
-                    WINDOW, OVERLAP, 0.0, 0.0, true, Double.NaN, false, Double.NaN,   // no expectedFundHz
+            FftResult r = analyzer.analyze(sig, SAMPLE_RATE, FFT, SETTINGS,
+                    WINDOW, OVERLAP, true, Double.NaN,   // no expectedFundHz
                     new FftResult(), OVERLAP.hopSamples(FFT));
             long resid = f2Bin - Math.round((double) f2Bin / f1Bin) * (long) f1Bin;    // off-harmonic distance
             LOG.info(String.format("  Δf=%6d bins:  F1=%.2f  F2=%.2f  (F2-F1=%6.2f dB)  fund2refHz=%.3f  residual=%d bins",
@@ -406,11 +410,10 @@ class FftCrossCycleDriftTest extends AbstractReflectiveTest {
 
         double[] sig = synthesizeTones(SEED, winLen, 0.0, freqs, dbfs);
         FftAnalyzer analyzer = new FftAnalyzer();
-        analyzer.setSpectrumOnly(true);
         analyzer.setMultiTone(true);
         analyzer.setSecondToneHintHz(freqs[1]);              // get-fund-from-gen ON
-        FftResult r = analyzer.analyze(sig, SAMPLE_RATE, FFT, HARMONIC_COUNT, HARMONIC_COUNT,
-                WINDOW, OVERLAP, 0.0, 0.0, true, Double.NaN, false, freqs[0],
+        FftResult r = analyzer.analyze(sig, SAMPLE_RATE, FFT, SETTINGS,
+                WINDOW, OVERLAP, true, freqs[0],
                 new FftResult(), OVERLAP.hopSamples(FFT));
         LOG.info("=== IMD PRODUCTS 2M (single capture): set vs measured ===");
         for (int i = 0; i < bins.length; i++) {
@@ -459,11 +462,10 @@ class FftCrossCycleDriftTest extends AbstractReflectiveTest {
             long base = 0;
             for (int t = 0; t < cycles; t++) {
                 System.arraycopy(sig, (int) base, win, 0, winLen);
-                analyzer.setSpectrumOnly(true);
                 analyzer.setMultiTone(true);
                 analyzer.setSecondToneHintHz(f2);
-                FftResult r = analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, HARMONIC_COUNT, HARMONIC_COUNT,
-                        WINDOW, OVERLAP, 0.0, 0.0, true, Double.NaN, false, Double.NaN,
+                FftResult r = analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, SETTINGS,
+                        WINDOW, OVERLAP, true, Double.NaN,
                         new FftResult(), OVERLAP.hopSamples(FFT_SIZE));
                 call(worker, ACCUMULATE, r, base, true, Integer.MAX_VALUE);
                 if (t == 50 || t == cycles - 1) {
@@ -509,11 +511,10 @@ class FftCrossCycleDriftTest extends AbstractReflectiveTest {
         long base = 0;
         for (int t = 0; t < cycles; t++) {
             System.arraycopy(sig, (int) base, win, 0, winLen);
-            analyzer.setSpectrumOnly(true);
             analyzer.setMultiTone(false);
             analyzer.setSecondToneHintHz(Double.NaN);
-            FftResult r = analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, HARMONIC_COUNT, HARMONIC_COUNT,
-                    WINDOW, OVERLAP, 0.0, 0.0, true, Double.NaN, false, Double.NaN,
+            FftResult r = analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, SETTINGS,
+                    WINDOW, OVERLAP, true, Double.NaN,
                     new FftResult(), OVERLAP.hopSamples(FFT_SIZE));
             if (t == 0) {   // single-capture reference, before any accumulation
                 fund0 = r.amplitudeDbFs[fundBin];

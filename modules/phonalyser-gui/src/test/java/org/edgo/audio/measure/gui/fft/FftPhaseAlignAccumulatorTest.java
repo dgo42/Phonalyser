@@ -25,9 +25,10 @@ import org.edgo.audio.measure.bind.Property;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.FundamentalPhaseAlignment;
 import org.edgo.audio.measure.enums.WindowType;
-import org.edgo.audio.measure.fft.CoherentAccumulator;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
+import org.edgo.audio.measure.fft.ReadoutSettings;
+import org.edgo.audio.measure.fft.SpectrumAccumulator;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.test.AbstractReflectiveTest;
 import org.junit.jupiter.api.Test;
@@ -90,6 +91,10 @@ class FftPhaseAlignAccumulatorTest extends AbstractReflectiveTest {
      *  and nothing else. */
     private static final int        FUND_BIN      = 64;
     private static final int        HARMONICS     = 8;          // H2..H9
+    /** The readout settings the analysis-cycle loop stamps: H2..H9, no
+     *  distortion band, no manual fundamental. */
+    private static final ReadoutSettings SETTINGS =
+            new ReadoutSettings(HARMONICS, HARMONICS, 0.0, 0.0, Double.NaN);
     private static final double     FUND_DBFS     = -20.0;
     /** Harmonics far above the analysis floor (the noise below reaches about
      *  -170 dBFS per bin), which is what makes a 0.1 dB tolerance reachable. */
@@ -997,7 +1002,7 @@ class FftPhaseAlignAccumulatorTest extends AbstractReflectiveTest {
             accumulateCycle(worker, 0.0, r, base);
             base += PILOT_ACCUM_HOP;
         }
-        CoherentAccumulator accumulator = field(worker, ACCUMULATOR);
+        SpectrumAccumulator accumulator = field(worker, ACCUMULATOR);
         double[] accumRe = accumulator.getSumRe();
         double[] accumIm = accumulator.getSumIm();
         int weight = Math.max(1, r.frameCount);
@@ -1192,7 +1197,7 @@ class FftPhaseAlignAccumulatorTest extends AbstractReflectiveTest {
         System.arraycopy(analysed, (int) base, win, 0, WIN_LEN);
         FftResult extra = analyze(analyzer, win, base);
         accumulateCycle(worker, heldExcessRad(base), extra, base);
-        this.<CoherentAccumulator>field(worker, ACCUMULATOR).subtractPreviousCycles();
+        this.<SpectrumAccumulator>field(worker, ACCUMULATOR).subtractPreviousCycles();
         double[] after = levels(worker, extra);
         for (int i = 0; i <= HARMONICS; i++) {
             assertEquals(held[i], after[i], IDENTICAL_TOL_DB,
@@ -1266,18 +1271,16 @@ class FftPhaseAlignAccumulatorTest extends AbstractReflectiveTest {
     /** The worker's accumulator, written back onto {@code r} - the display
      *  path's step. */
     private void overlay(FftAnalyzerWorker worker, FftResult r) {
-        this.<CoherentAccumulator>field(worker, ACCUMULATOR).overlayOnto(r);
+        this.<SpectrumAccumulator>field(worker, ACCUMULATOR).overlayOnto(r);
     }
 
     /** One analysis cycle's analysis, with the worker's own settings: the
-     *  spectrum only (the stats are re-derived from the accumulator), single
-     *  tone, no hint. */
+     *  raw frame (the statistics are the view's), single tone, no hint. */
     private FftResult analyze(FftAnalyzer analyzer, double[] win, long base) {
-        analyzer.setSpectrumOnly(true);
         analyzer.setMultiTone(false);
         analyzer.setSecondToneHintHz(Double.NaN);
-        return analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, HARMONICS, HARMONICS, WINDOW, OVERLAP,
-                0.0, 0.0, true, Double.NaN, false, Double.NaN,
+        return analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, SETTINGS, WINDOW, OVERLAP,
+                true, Double.NaN,
                 new FftResult(), OVERLAP.hopSamples(FFT_SIZE));
     }
 

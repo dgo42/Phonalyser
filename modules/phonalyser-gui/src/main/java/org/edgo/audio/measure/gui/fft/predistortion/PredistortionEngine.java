@@ -273,7 +273,7 @@ public final class PredistortionEngine {
      *  frames before it the fundamental's fractional bin is still being
      *  refined, so a result of a lower count reads its lines' phases against
      *  a reference still in motion.  The accumulator's own constant
-     *  ({@code CoherentAccumulator.KAPPA_MEAS_FRAMES}) is package-private in
+     *  ({@code SpectrumAccumulator.KAPPA_MEAS_FRAMES}) is package-private in
      *  the core module and not reachable from here. */
     public static final int    SKIPPED_FRAMES   = 24;
     /** The highest harmonic a single-tone run corrects: its lines are

@@ -41,9 +41,11 @@ import org.edgo.audio.measure.enums.WindowType;
  *       running {@code median + k·MAD} over the collected blocks is the
  *       threshold, so the clean baseline is learned rather than fixed.</li>
  *   <li><b>Broadband floor.</b>  Reduce the spectrum to {@code B} log-spaced
- *       band levels (dB), keep a per-band running median over the last
- *       {@code L} accepted blocks, and reject when the mean lift over the
- *       floor bands exceeds a self-calibrated {@code median + k·MAD}.
+ *       bands, each read as its band-top - the upper edge of its noise,
+ *       {@link FftDsp#bandTop} of its bins' magnitudes, in dB - keep a
+ *       per-band running median over the last {@code L} accepted blocks, and
+ *       reject when the mean lift over the floor bands exceeds a
+ *       self-calibrated {@code median + k·MAD}.
  *       Catches a uniform broadband rise the pedestal excess can't see.</li>
  *   <li><b>Total power.</b>  A generator stall / long ADC dropout where the
  *       lines collapse instead of the floor rising.</li>
@@ -113,13 +115,17 @@ public final class SpectralDiscontinuityDetector {
     private double[] powerHist;    private int powerFill, powerHead;
     private double[] pedestalHist; private int pedFill, pedHead;     // pedestal-over-floor excess (dB)
 
-    // scratch
-    private double[] level, mref, rho, scratch;
+    // working arrays: per-band band-top (dB), the reference, the lifts, the
+    // reused input of every median, a band's magnitudes for its band-top
+    private double[] topLevel, mref, rho, medianInput;
+    private double[] bandMagnitudes = new double[0];
     private boolean[] lineBand;
 
     private double lastScore = Double.NaN, lastThreshold = Double.NaN;
     private double lastPowerDb = Double.NaN, lastPedestalDb = Double.NaN;
     private double lastFloorDb = Double.NaN, lastPedestalExcess = Double.NaN;
+    // gate 1 reference: median of the fundamentals' flank floors (dB), NaN when none
+    private double lastPedestalFloorDb = Double.NaN;
 
     private Gates lastGates;
 
@@ -140,7 +146,9 @@ public final class SpectralDiscontinuityDetector {
     }
 
     /** (Re)builds the log-spaced band layout for a spectrum of {@code halfSize}
-     *  bins and clears all history.  Call when the FFT length changes. */
+     *  bins and clears all history.  Call when the FFT length changes.
+     *
+     * @param halfSize the spectrum's bin count */
     public void configure(int halfSize) {
         if (halfSize == this.halfSize) return;
         this.halfSize = halfSize;
@@ -148,11 +156,11 @@ public final class SpectralDiscontinuityDetector {
         scoreHist    = new double[calibBlocks];
         powerHist    = new double[calibBlocks];
         pedestalHist = new double[calibBlocks];
-        level        = new double[numBands];
+        topLevel     = new double[numBands];
         mref         = new double[numBands];
         rho          = new double[numBands];
         lineBand     = new boolean[numBands];
-        scratch      = new double[Math.max(historyBlocks, Math.max(numBands, calibBlocks))];
+        medianInput  = new double[Math.max(historyBlocks, Math.max(numBands, calibBlocks))];
         reset();
     }
 
@@ -164,7 +172,7 @@ public final class SpectralDiscontinuityDetector {
         powerFill = powerHead = 0;
         pedFill = pedHead = 0;
         lastScore = lastThreshold = lastPowerDb = Double.NaN;
-        lastPedestalDb = lastFloorDb = lastPedestalExcess = Double.NaN;
+        lastPedestalDb = lastFloorDb = lastPedestalExcess = lastPedestalFloorDb = Double.NaN;
         lastGates = null;
     }
 
@@ -173,34 +181,48 @@ public final class SpectralDiscontinuityDetector {
      *  {@code peakBins} are the known fundamental bin(s) whose near-carrier
      *  pedestal excess is gated (may be null/empty to skip that gate);
      *  {@code window} is the block's window function: the local floor the
-     *  pedestal's lobe walk stops at is read past its main lobe. */
+     *  pedestal's lobe walk stops at is read past its main lobe.
+     *
+     * @param re         the block's real parts, by bin
+     * @param im         the block's imaginary parts, by bin
+     * @param halfSize   the spectrum's bin count
+     * @param binWidthHz the bin width, Hz
+     * @param window     the block's window function
+     * @param peakBins   the fundamentals' bins; {@code null} or empty to skip gate 1
+     * @return {@code true} when the block is rejected */
     public boolean reject(double[] re, double[] im, int halfSize, double binWidthHz,
                           WindowType window, int[] peakBins) {
         this.binWidthHz = binWidthHz > 0.0 ? binWidthHz : 1.0;
         configure(halfSize);
         buildBands(halfSize, peakBins);   // re-apply the ±FLOOR_GUARD_HZ tone-band narrowing
 
-        // --- band levels (dB) + total power ---
+        // --- band levels (dB): band-top, + total power ---
         double totalPow = 0.0;
         for (int b = 0; b < bands; b++) {
-            double sum = 0.0;
-            for (int k = bandLo[b]; k < bandHi[b]; k++) sum += re[k] * re[k] + im[k] * im[k];
             int n = bandHi[b] - bandLo[b];
-            level[b] = 10.0 * Math.log10((n > 0 ? sum / n : 0.0) + 1e-300);
+            if (bandMagnitudes.length < n) bandMagnitudes = new double[n];
+            double sum = 0.0;
+            for (int k = bandLo[b]; k < bandHi[b]; k++) {
+                double pow = re[k] * re[k] + im[k] * im[k];
+                sum += pow;
+                bandMagnitudes[k - bandLo[b]] = Math.sqrt(pow);
+            }
+            topLevel[b] = 20.0 * Math.log10((n > 0 ? FftDsp.bandTop(bandMagnitudes, n) : 0.0) + 1e-300);
             totalPow += sum;
         }
         lastPowerDb = 10.0 * Math.log10(totalPow + 1e-300);
 
         // Per-block line detection (no history needed) -> noise floor + pedestal excess.
-        for (int b = 0; b < bands; b++) lineBand[b] = isLocalLine(level, b);
-        lastFloorDb        = floorMedian(level);
+        for (int b = 0; b < bands; b++) lineBand[b] = isLocalLine(topLevel, b);
+        // Noise floor = band-top of the non-line bands' band-tops, all bands
+        // when every band is a line.
+        lastFloorDb        = FftDsp.bandTopOfLevelsDb(topLevel, lineBand, bands);
         // The pedestal is sampled past at least the window's main lobe and the
-        // leakage guard, over SKIRT_WIDTH_HZ - one geometry per block, handed
-        // on with the gates so the overlay reads the same bins.
+        // leakage guard, over SKIRT_WIDTH_HZ - one geometry per block.
         int pedGap  = FftDsp.mainLobeBins(window) + FftDsp.LEAKAGE_GUARD_BINS;
         int pedSpan = Math.max(8, (int) Math.round(SKIRT_WIDTH_HZ / this.binWidthHz));
         lastPedestalDb     = pedestalDb(re, im, peakBins, window, pedGap, pedSpan);
-        double pedFloorDb  = pedestalFloorDb(peakBins);    // two bands flanking the tone
+        double pedFloorDb  = lastPedestalFloorDb;          // the tones' flank floors
         if (Double.isNaN(pedFloorDb)) pedFloorDb = lastFloorDb;
         lastPedestalExcess = Double.isNaN(lastPedestalDb) ? Double.NaN
                 : lastPedestalDb - pedFloorDb;
@@ -208,11 +230,11 @@ public final class SpectralDiscontinuityDetector {
         if (refFill == 0) {                    // first block: seed the history, accept
             pushPower(lastPowerDb);
             pushPedestal(lastPedestalExcess);
-            pushRef(level);
-            lastGates = new Gates(bandLo, bandHi, level.clone(), lastFloorDb, 0.0, 0.0,
+            pushRef(topLevel);
+            double[] tops = topLevel.clone();  // the reference is the block itself
+            lastGates = new Gates(bandLo, bandHi, tops, tops, lineBand.clone(), lastFloorDb, 0.0, 0.0,
                     lastPedestalExcess, Double.NaN, lastPowerDb, lastPowerDb, 0.0, halfSize,
-                    false, false, false, peakBins == null ? null : peakBins.clone(),
-                    pedGap, pedSpan);
+                    false, false, false, peakBins == null ? null : peakBins.clone());
             return false;
         }
 
@@ -226,15 +248,16 @@ public final class SpectralDiscontinuityDetector {
             pedestalOut = lastPedestalExcess > pedestalThresh;
         }
 
-        // --- gate 2: broadband floor lift vs the running-median reference ---
+        // --- gate 2: broadband floor lift - each band's band-top vs its
+        //     running-median reference ---
         for (int b = 0; b < bands; b++) {
-            for (int i = 0; i < refFill; i++) scratch[i] = ref[i][b];
-            mref[b] = median(scratch, refFill);
+            for (int i = 0; i < refFill; i++) medianInput[i] = ref[i][b];
+            mref[b] = median(medianInput, refFill);
         }
         int m = 0;
         for (int b = 0; b < bands; b++) {
             if (lineBand[b]) continue;         // a real line / skirt - self-references, skip
-            rho[m++] = level[b] - mref[b];
+            rho[m++] = topLevel[b] - mref[b];
         }
         double score = m > 0 ? mean(rho, m) : 0.0;
         lastScore = score;
@@ -250,15 +273,15 @@ public final class SpectralDiscontinuityDetector {
         boolean powerOut = Math.abs(lastPowerDb - pMed) > powerThresh;
 
         boolean rejected = pedestalOut || scoreOut || powerOut;
-        lastGates = new Gates(bandLo, bandHi, mref.clone(), lastFloorDb, lastThreshold, score,
+        lastGates = new Gates(bandLo, bandHi, mref.clone(), topLevel.clone(), lineBand.clone(),
+                lastFloorDb, lastThreshold, score,
                 lastPedestalExcess, pedestalThresh, lastPowerDb, pMed, powerThresh, halfSize,
-                pedestalOut, scoreOut, powerOut, peakBins == null ? null : peakBins.clone(),
-                pedGap, pedSpan);
+                pedestalOut, scoreOut, powerOut, peakBins == null ? null : peakBins.clone());
 
         pushScore(score);                     // baselines track all blocks (robust to outliers)
         pushPower(lastPowerDb);
         pushPedestal(lastPedestalExcess);
-        if (!rejected) pushRef(level);         // reference only from accepted blocks
+        if (!rejected) pushRef(topLevel);      // reference only from accepted blocks
         return rejected;
     }
 
@@ -275,66 +298,62 @@ public final class SpectralDiscontinuityDetector {
 
     // ---------------------------------------------------------------- internals
 
-    /** Median power (-> dB) of the {@code skirt} bins flanking each
-     *  fundamental past its lobe - at least {@code peakHalf} bins out.  NaN
-     *  when no peaks are supplied. */
+    /** Band-top ({@link FftDsp#bandTop}, -> dB) of the magnitudes of the
+     *  {@code skirt} bins flanking each fundamental past its lobe - at least
+     *  {@code peakHalf} bins out.  Each fundamental's flank floor
+     *  ({@link FftDsp#pedestalFloor}), the stop of its lobe walk, is kept as
+     *  well: their median in dB becomes {@link #lastPedestalFloorDb}, the
+     *  reference gate 1 measures the pedestal against; NaN when no
+     *  fundamental has a flank bin in range.
+     *
+     * @param re       the frame's real parts, by bin
+     * @param im       the frame's imaginary parts, by bin
+     * @param peakBins the fundamentals' bins; {@code null} or empty for none
+     * @param window   the analysis window, for the lobe walk
+     * @param peakHalf least distance, in bins, of the sampled bins from a fundamental
+     * @param skirt    bins sampled on each side
+     * @return the pedestal, dB; NaN when no peaks are supplied or no bin is sampled */
     private double pedestalDb(double[] re, double[] im, int[] peakBins, WindowType window,
                               int peakHalf, int skirt) {
+        lastPedestalFloorDb = Double.NaN;
         if (peakBins == null || peakBins.length == 0) return Double.NaN;
         IntToDoubleFunction mag = k -> Math.hypot(re[k], im[k]);
         double[] buf = new double[peakBins.length * 2 * skirt];
+        double[] floorsDb = new double[peakBins.length];
         int n = 0;
+        int nFloors = 0;
         for (int f : peakBins) {
             // Exclude the tone's DATA-DERIVED main lobe (not a fixed width) so
             // normal window leakage isn't counted; sample the skirt just beyond.
             int mb = halfSize - 1;   // bins here run 1..halfSize-1 (as buildBands/collectSkirt assume)
-            int[] e = ToneLobeLift.lobeBins(mag, f, mb,
-                    ToneLobeLift.localFloor(mag, f, mb, binWidthHz, window), binWidthHz, window);
+            double floor = FftDsp.pedestalFloor(mag, f, mb, binWidthHz, window);
+            if (floor > 0.0) floorsDb[nFloors++] = 20.0 * Math.log10(floor);
+            int[] e = FftDsp.lobeBins(mag, f, mb, floor, binWidthHz, window);
             int lo = Math.min(e[0], f - peakHalf);
             int hi = Math.max(e[1], f + peakHalf);
             n = collectSkirt(re, im, lo - skirt, lo, buf, n);
             n = collectSkirt(re, im, hi + 1, hi + 1 + skirt, buf, n);
         }
+        if (nFloors > 0) lastPedestalFloorDb = median(floorsDb, nFloors);
         if (n == 0) return Double.NaN;
-        return 10.0 * Math.log10(median(buf, n) + 1e-300);
+        return 20.0 * Math.log10(FftDsp.bandTop(buf, n) + 1e-300);
     }
 
+    /** Appends the magnitudes of bins {@code [from, to)}, clipped to the
+     *  spectrum, to {@code buf} from index {@code n} on.
+     *
+     * @param re   the frame's real parts, by bin
+     * @param im   the frame's imaginary parts, by bin
+     * @param from the first bin
+     * @param to   one past the last bin
+     * @param buf  the buffer the magnitudes go into
+     * @param n    how many values {@code buf} already holds
+     * @return how many values {@code buf} holds afterwards */
     private int collectSkirt(double[] re, double[] im, int from, int to, double[] buf, int n) {
         from = Math.max(1, from);
         to   = Math.min(halfSize, to);
-        for (int k = from; k < to && n < buf.length; k++) buf[n++] = re[k] * re[k] + im[k] * im[k];
+        for (int k = from; k < to && n < buf.length; k++) buf[n++] = Math.hypot(re[k], im[k]);
         return n;
-    }
-
-    /** Noise floor = median of the non-line band levels (dB). */
-    private double floorMedian(double[] lvl) {
-        int n = 0;
-        for (int b = 0; b < bands; b++) if (!lineBand[b]) scratch[n++] = lvl[b];
-        if (n == 0) for (int b = 0; b < bands; b++) scratch[n++] = lvl[b];   // all lines: fall back
-        return median(scratch, n);
-    }
-
-    /** Pedestal-gate noise floor: median of the two ALREADY-computed bands
-     *  flanking each fundamental (the left and right neighbours of its now-narrow
-     *  ±FLOOR_GUARD_HZ band) - the local floor right beside the tone, free of the
-     *  jittery far-out bands.  NaN when no flanking band exists. */
-    private double pedestalFloorDb(int[] peakBins) {
-        if (peakBins == null || peakBins.length == 0) return Double.NaN;
-        double[] buf = new double[peakBins.length * 2];
-        int n = 0;
-        for (int f : peakBins) {
-            int bf = bandOf(f);
-            if (bf < 0) continue;
-            if (bf - 1 >= 0)    buf[n++] = level[bf - 1];
-            if (bf + 1 < bands) buf[n++] = level[bf + 1];
-        }
-        return n == 0 ? Double.NaN : median(buf, n);
-    }
-
-    /** Index of the band containing {@code bin}, or −1. */
-    private int bandOf(int bin) {
-        for (int b = 0; b < bands; b++) if (bin >= bandLo[b] && bin < bandHi[b]) return b;
-        return -1;
     }
 
     /** A band is a line / skirt when its level towers over the local median of
@@ -416,20 +435,35 @@ public final class SpectralDiscontinuityDetector {
         if (pedFill < calibBlocks) pedFill++;
     }
 
-    private static double median(double[] a, int n) {
+    /** Median of the first {@code n} values of {@code a}; the mean of the two
+     *  middle values for an even count.  After the upper middle is selected,
+     *  every entry below its index is no larger, so the lower middle is the
+     *  largest of those.
+     *
+     * @param a the values; left as given
+     * @param n how many leading values take part
+     * @return the median; 0 when {@code n} is not positive */
+    private double median(double[] a, int n) {
         if (n <= 0) return 0.0;
         double[] c = Arrays.copyOf(a, n);
-        Arrays.sort(c);
-        return (n % 2 == 1) ? c[n / 2] : 0.5 * (c[n / 2 - 1] + c[n / 2]);
+        double upper = FftDsp.selectKth(c, n, n / 2);
+        if (n % 2 == 1) return upper;
+        return 0.5 * (FftDsp.selectKth(c, n / 2, n / 2 - 1) + upper);
     }
 
-    private static double mad(double[] a, int n, double med) {
+    /** Median absolute deviation of the first {@code n} values of {@code a}
+     *  from {@code med}, scaled to the standard deviation of a normal
+     *  distribution.
+     *
+     * @param a   the values; left as given
+     * @param n   how many leading values take part
+     * @param med their median
+     * @return the scaled MAD; 0 when {@code n} is not positive */
+    private double mad(double[] a, int n, double med) {
         if (n <= 0) return 0.0;
         double[] d = new double[n];
         for (int i = 0; i < n; i++) d[i] = Math.abs(a[i] - med);
-        Arrays.sort(d);
-        double m = (n % 2 == 1) ? d[n / 2] : 0.5 * (d[n / 2 - 1] + d[n / 2]);
-        return 1.4826 * m;                     // scaled to ≈σ for a normal distribution
+        return 1.4826 * median(d, n);          // scaled to ≈σ for a normal distribution
     }
 
     private static double mean(double[] a, int n) {
@@ -446,7 +480,9 @@ public final class SpectralDiscontinuityDetector {
      *  whatever calibration the chart applies. */
     public static final class Gates {
         public final int[]    bandLo, bandHi;   // band bin ranges (shared, immutable)
-        public final double[] mref;             // gate 2: per-band median floor reference (dB)
+        public final double[] mref;             // gate 2: per-band median band-top reference (dB)
+        public final double[] bandTopDb;        // gate 2: this block's band-top per band (dB)
+        public final boolean[] lineBand;        // gate 2: bands the line test left out of the score
         public final double   floorDb;          // current noise floor (dB) - the excess anchor
         public final double   scoreThreshDb;    // gate 2: lift over mref that rejects (dB)
         public final double   scoreDb;          // gate 2: this block's mean lift (dB)
@@ -456,22 +492,39 @@ public final class SpectralDiscontinuityDetector {
         public final int      bins;             // bins summed for total power
         public final boolean  pedestalOut, scoreOut, powerOut;
         public final int[]    peakBins;         // gate 1 placement (near-carrier)
-        public final int      pedestalGapBins;  // gate 1: pedestal sampled at least this far out
-        public final int      pedestalSpanBins; // gate 1: pedestal bins sampled each side
 
-        Gates(int[] bandLo, int[] bandHi, double[] mref, double floorDb, double scoreThreshDb,
-              double scoreDb, double pedestalExcessDb, double pedestalThreshDb,
+        /** One block's gate state.
+         *
+         * @param bandLo           each band's first bin
+         * @param bandHi           each band's end bin, exclusive
+         * @param mref             gate 2: per-band median band-top reference, dB
+         * @param bandTopDb        gate 2: this block's band-top per band, dB
+         * @param lineBand        gate 2: bands the line test left out of the score
+         * @param floorDb          the detector's noise floor, dB
+         * @param scoreThreshDb    gate 2: lift over the reference that rejects, dB
+         * @param scoreDb          gate 2: this block's mean lift, dB
+         * @param pedestalExcessDb gate 1: the pedestal over its reference, dB
+         * @param pedestalThreshDb gate 1: the excess that rejects, dB; NaN when not armed
+         * @param powerDb          gate 3: this block's total power, dB
+         * @param powerMedDb       gate 3: median of the recent total powers, dB
+         * @param powerThreshDb    gate 3: the deviation that rejects, dB
+         * @param bins             bins summed for the total power
+         * @param pedestalOut      whether gate 1 rejected
+         * @param scoreOut         whether gate 2 rejected
+         * @param powerOut         whether gate 3 rejected
+         * @param peakBins         the fundamentals' bins gate 1 is placed at */
+        Gates(int[] bandLo, int[] bandHi, double[] mref, double[] bandTopDb, boolean[] lineBand, double floorDb,
+              double scoreThreshDb, double scoreDb, double pedestalExcessDb, double pedestalThreshDb,
               double powerDb, double powerMedDb, double powerThreshDb, int bins,
-              boolean pedestalOut, boolean scoreOut, boolean powerOut, int[] peakBins,
-              int pedestalGapBins, int pedestalSpanBins) {
-            this.bandLo = bandLo; this.bandHi = bandHi; this.mref = mref;
+              boolean pedestalOut, boolean scoreOut, boolean powerOut, int[] peakBins) {
+            this.bandLo = bandLo; this.bandHi = bandHi; this.mref = mref; this.bandTopDb = bandTopDb;
+            this.lineBand = lineBand;
             this.floorDb = floorDb; this.scoreThreshDb = scoreThreshDb; this.scoreDb = scoreDb;
             this.pedestalExcessDb = pedestalExcessDb; this.pedestalThreshDb = pedestalThreshDb;
             this.powerDb = powerDb; this.powerMedDb = powerMedDb; this.powerThreshDb = powerThreshDb;
             this.bins = bins;
             this.pedestalOut = pedestalOut; this.scoreOut = scoreOut; this.powerOut = powerOut;
             this.peakBins = peakBins;
-            this.pedestalGapBins = pedestalGapBins; this.pedestalSpanBins = pedestalSpanBins;
         }
     }
 }

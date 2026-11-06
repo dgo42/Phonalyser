@@ -29,14 +29,16 @@ import java.util.Random;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.edgo.audio.measure.common.SpectrumStatistics;
 import org.edgo.audio.measure.dsp.FreqRespCalHelper;
 import org.edgo.audio.measure.dsp.FreqRespCalibration;
 import org.edgo.audio.measure.dsp.InverseCascade;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.WindowType;
-import org.edgo.audio.measure.fft.CoherentAccumulator;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
+import org.edgo.audio.measure.fft.ReadoutSettings;
+import org.edgo.audio.measure.fft.SpectrumAccumulator;
 import org.edgo.audio.measure.test.AbstractReflectiveTest;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Tag;
@@ -57,9 +59,9 @@ import org.junit.jupiter.api.Test;
  * <p>Both averages are collected the way the live FFT collects them: one
  * frame per analysis cycle, analysed as the worker analyses it and added by
  * the worker's own accumulate step, then written back through the worker's
- * accumulator and the statistics recomputed - the display path.  The
- * accumulate step and the accumulator are private, so they are reached by
- * reflection.
+ * accumulator, the statistics calculated with the correction and the
+ * correction applied - the display path.  The accumulate step and the
+ * accumulator are private, so they are reached by reflection.
  *
  * <p>Geometry as the bench runs it: 384 kHz, 2 M points, BH7, 93.75 %
  * overlap, the seed frame plus 100 averages.  The calibration is the bench's
@@ -116,6 +118,16 @@ class CoherentNoiseBasisTest extends AbstractReflectiveTest {
 
     private static final Logger LOG = LogManager.getLogger("CoherentNoiseBasis");
 
+    /** The statistics every stage of each run is read with, one per run: each
+     *  keeps what it lifted its run's trace with, and takes that off again
+     *  before it calculates the next stage. */
+    private final SpectrumStatistics cohStatistics = new SpectrumStatistics();
+    private final SpectrumStatistics incStatistics = new SpectrumStatistics();
+
+    /** The power averages of the two runs agree before any calibration, and
+     *  N agrees on both with and without the bench's tone-only rows.
+     *
+     * @throws Exception when a calibration file cannot be read */
     @Test
     void theTwoAveragesOfOneCapturePartOnlyAfterTheirCollection() throws Exception {
         for (Path row : ROWS) {
@@ -137,26 +149,35 @@ class CoherentNoiseBasisTest extends AbstractReflectiveTest {
                 collected.bin));
         assertEquals(0.0, collected.maxDb, IDENTICAL_DB,
                 "the coherent run's power average is the incoherent average of the same frames");
-        logNoise("no calibration (the mask alone)", coh, inc);
+        logNoise("no calibration (the mask alone)", coh, null, inc, null);
 
-        // 2. After the bench's tone-only rows - the stretch takes its exponents
-        //    from each run's own displayed spectrum.
-        deEmbed(coh, rows);
-        deEmbed(inc, rows);
+        // 2. With the bench's tone-only rows - the stretch takes its exponents
+        //    from each run's own displayed spectrum.  The statistics read the
+        //    correction's gains on the uncorrected spectrum and apply the
+        //    correction to the trace as they end, as the view's pipeline does.
+        InverseCascade cohInv = toneOnlyInverse(coh, rows);
+        InverseCascade incInv = toneOnlyInverse(inc, rows);
+        logNoise("tone-only rows applied (mask and stretch)", coh, cohInv, inc, incInv);
         Diff restored = diff(coh.powerAverageDbFs, inc.amplitudeDbFs);
         LOG.info(String.format(Locale.US, "tone-only rows applied: largest difference %.3f dB at bin %d "
                         + "(%d bins from the tone), %d bins differ by more than %.2f dB",
                 restored.maxDb, restored.bin, restored.bin - toneBin, restored.over, LISTED_DB));
-        logNoise("tone-only rows applied (mask and stretch)", coh, inc);
     }
 
     /** N of both runs in each band, logged with their difference, coherent
      *  minus incoherent; the two must agree - both read the same power
-     *  average through a mask found on it. */
-    private void logNoise(String stage, FftResult coh, FftResult inc) {
+     *  average through a mask found on it.
+     *
+     * @param stage  the stage's name in the log
+     * @param coh    the coherent run's average
+     * @param cohInv the correction of the coherent run; null for none
+     * @param inc    the incoherent run's average
+     * @param incInv the correction of the incoherent run; null for none */
+    private void logNoise(String stage, FftResult coh, InverseCascade cohInv,
+                          FftResult inc, InverseCascade incInv) {
         for (double[] band : BANDS) {
-            double nCoh = bandNoiseDb(coh, band);
-            double nInc = bandNoiseDb(inc, band);
+            double nCoh = bandNoiseDb(cohStatistics, coh, cohInv, band);
+            double nInc = bandNoiseDb(incStatistics, inc, incInv, band);
             String bandName = band[1] > 0.0
                     ? String.format(Locale.US, "%.0f-%.0f Hz", band[0], band[1]) : "full";
             LOG.info(String.format(Locale.US, "N, %s, band %s: coherent %.4f dBFS, incoherent %.4f dBFS, "
@@ -165,16 +186,25 @@ class CoherentNoiseBasisTest extends AbstractReflectiveTest {
         }
     }
 
-    /** N of {@code r} recomputed in {@code band}. */
-    private double bandNoiseDb(FftResult r, double[] band) {
-        r.snrFreqMin = band[0];
-        r.snrFreqMax = band[1];
-        new FftAnalyzer().recomputeStats(r);
+    /** N of {@code r} calculated in {@code band}, the lifts the run's last
+     *  stage put on the trace taken off first.
+     *
+     * @param statistics the run's statistics
+     * @param r          the average
+     * @param inv        the correction the statistics de-embed with; null for none
+     * @param band       the band's lower and upper edge, Hz; 0 for no edge
+     * @return N, dBFS */
+    private double bandNoiseDb(SpectrumStatistics statistics, FftResult r, InverseCascade inv,
+                               double[] band) {
+        statistics.recalculateStat(r,
+                new ReadoutSettings(HARMONICS, HARMONICS, band[0], band[1], Double.NaN), inv);
         return 10.0 * Math.log10(r.noisePower);
     }
 
     /** The capture: the notched tone with its wander, the mains lines, the
-     *  white and the rising floor. */
+     *  white and the rising floor.
+     *
+     * @return the signal */
     private double[] capture() {
         int hop = OVERLAP.hopSamples(FFT_SIZE);
         double[] s = new double[FFT_SIZE + (FRAMES - 1) * hop];
@@ -205,44 +235,50 @@ class CoherentNoiseBasisTest extends AbstractReflectiveTest {
     /** The average of {@code signal} as the live FFT collects it: every frame
      *  one analysis cycle - analysed with the worker's own settings and added
      *  by the worker's accumulate step at its sample offset - then the
-     *  accumulator written back onto the last cycle's result and the
-     *  statistics recomputed. */
+     *  accumulator written back onto the last cycle's result.
+     *
+     * @param signal   the capture
+     * @param coherent whether the frames are averaged coherently
+     * @return the average */
     private FftResult average(double[] signal, boolean coherent) {
         FftAnalyzer       analyzer = new FftAnalyzer();
         FftAnalyzerWorker worker   = new FftAnalyzerWorker(null);   // headless
+        ReadoutSettings   settings = new ReadoutSettings(HARMONICS, HARMONICS, 0.0, 0.0, Double.NaN);
         int       hop = OVERLAP.hopSamples(FFT_SIZE);
         double[]  win = new double[FFT_SIZE];
         FftResult r   = null;
         for (int f = 0; f < FRAMES; f++) {
             long base = (long) f * hop;
             System.arraycopy(signal, (int) base, win, 0, FFT_SIZE);
-            analyzer.setSpectrumOnly(true);
             analyzer.setMultiTone(false);
             analyzer.setSecondToneHintHz(Double.NaN);
-            r = analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, HARMONICS, HARMONICS, WINDOW, OVERLAP,
-                    0.0, 0.0, coherent, Double.NaN, false, TONE_HZ, new FftResult(), hop);
+            r = analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, settings, WINDOW, OVERLAP,
+                    coherent, TONE_HZ, new FftResult(), hop);
             call(worker, ACCUMULATE, r, base, coherent, Integer.MAX_VALUE);
         }
-        this.<CoherentAccumulator>field(worker, ACCUMULATOR).overlayOnto(r);
+        this.<SpectrumAccumulator>field(worker, ACCUMULATOR).overlayOnto(r);
         r.captureRawPeaks();
-        analyzer.recomputeStats(r);
         return r;
     }
 
-    /** The view's correction of a frame by tone-only rows: the cascade
-     *  sampled on the frame's own tone lobes, applied, the statistics
-     *  recomputed. */
-    private void deEmbed(FftResult r, List<FreqRespCalibration> rows) {
-        double[] tones = FreqRespCalHelper.toneFrequencies(r);
-        InverseCascade inv = FreqRespCalHelper.cascadeInverse(List.of(), rows, tones,
-                FreqRespCalHelper.toneLobeSpans(r, tones), r.fftSize, r.sampleRate);
-        FreqRespCalHelper.applyInverseInPlace(r, inv);
-        new FftAnalyzer().recomputeStats(r);
+    /** The view's correction of a frame by tone-only rows: one value per tone
+     *  of the frame.
+     *
+     * @param r    the frame
+     * @param rows the tone-only calibrations
+     * @return the cascade */
+    private InverseCascade toneOnlyInverse(FftResult r, List<FreqRespCalibration> rows) {
+        return FreqRespCalHelper.cascadeInverse(List.of(), rows,
+                FreqRespCalHelper.toneFrequencies(r), r.fftSize, r.sampleRate);
     }
 
     /** The largest per-bin difference of two dBFS spectra, where it stands,
      *  and how many bins differ by more than {@link #LISTED_DB}; bins both
-     *  spectra hold at the floor are skipped. */
+     *  spectra hold at the floor are skipped.
+     *
+     * @param a the first spectrum, dBFS
+     * @param b the second spectrum, dBFS
+     * @return the comparison's outcome */
     private Diff diff(double[] a, double[] b) {
         Diff d = new Diff();
         for (int k = 1; k < a.length - 1; k++) {

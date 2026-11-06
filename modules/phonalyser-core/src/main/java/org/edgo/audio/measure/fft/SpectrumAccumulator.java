@@ -24,16 +24,18 @@ import java.util.Locale;
 import java.util.Objects;
 import java.util.function.IntToDoubleFunction;
 
-import org.edgo.audio.measure.dsp.ToneLobeLift;
+import org.edgo.audio.measure.dsp.FftDsp;
 
 import lombok.Getter;
 import lombok.extern.log4j.Log4j2;
 
 /**
- * The average of FFT frames over a collection: the per-bin sums, the frames
- * they hold, and the rotation that aligns every frame to the collection's
- * first before it is added.  One instance serves a live collection, fed one
- * frame per analysis cycle, and an offline one, fed the frames of a capture.
+ * The average of FFT frames over a collection, coherent or incoherent: the
+ * per-bin sums, the frames they hold, and the rotation that aligns every
+ * frame to the collection's first before it is added.  One instance serves a
+ * live collection, fed one frame per analysis cycle, and an offline one, fed
+ * the frames of a capture.  A collection that holds no frame - averaging off -
+ * hands the raw frame through unchanged ({@link #overlayOnto}).
  *
  * <h2>Coherent rotation</h2>
  * A frame starting {@code delta} samples after the reference frame carries
@@ -95,7 +97,7 @@ import lombok.extern.log4j.Log4j2;
  * readouts of a coherent average are taken from this power average.
  */
 @Log4j2
-public final class CoherentAccumulator {
+public final class SpectrumAccumulator {
 
     /** Frames of turned-back fundamental phase the κ measurement spans
      *  before it closes - ~24 give κ to ~1e-4 bin at high SNR, landing before
@@ -133,19 +135,26 @@ public final class CoherentAccumulator {
 
     /**
      * The turns one frame is turned back by, radians, and the advance they
-     * belong to: {@code delta} is the frame's advance since the reference
-     * frame in samples (fractional where a measured advance says so),
-     * {@code phi2} the second tone's turn over it, {@code phiF} and
-     * {@code phiF2} the two tones' phase excesses taken out of their humps,
-     * {@code phiPilot1} and {@code phiPilot2} the two pilot lines' turns.  A
-     * turn given as {@link Double#NaN} is counted from the advance - the
-     * second tone's from its fractional bin, a pilot's from its whole bin -
-     * where no reading of that line placed it.
+     * belong to.  A turn given as {@link Double#NaN} is counted from the
+     * advance - the second tone's from its fractional bin, a pilot's from its
+     * whole bin - where no reading of that line placed it.
+     *
+     * @param delta     the frame's advance since the reference frame in
+     *                  samples, fractional where a measured advance says so
+     * @param phi2      the second tone's turn over the advance
+     * @param phiF      the fundamental's phase excess, taken out of its hump
+     * @param phiF2     the second tone's phase excess, taken out of its hump
+     * @param phiPilot1 the first pilot line's turn
+     * @param phiPilot2 the second pilot line's turn
      */
     public record FrameTurns(double delta, double phi2, double phiF, double phiF2,
                              double phiPilot1, double phiPilot2) {
-        /** The turns of an advance of {@code delta} samples with every turn
-         *  counted from it and no excess. */
+        /** The turns of an advance with every turn counted from it and no
+         *  excess.
+         *
+         * @param delta the frame's advance since the reference frame, samples
+         * @return the turns of that advance
+         */
         public static FrameTurns of(double delta) {
             return new FrameTurns(delta, Double.NaN, 0.0, 0.0, Double.NaN, Double.NaN);
         }
@@ -309,7 +318,10 @@ public final class CoherentAccumulator {
     }
 
     /** Re-pins the fundamental's fractional bin and rebuilds the family's
-     *  positions on it; the statistics lines find their lines again. */
+     *  positions on it; the statistics lines find their lines again.
+     *
+     * @param kappa the fundamental's fractional bin, 0 for none
+     */
     private void setKappa(double kappa) {
         this.kappa = kappa;
         buildFamily();
@@ -352,24 +364,34 @@ public final class CoherentAccumulator {
         clearStats();
     }
 
-    /** The fundamental's turn over an advance of {@code delta} samples,
-     *  {@code -2π·κ·delta/N} folded to one turn - the angle the fundamental's
-     *  hump is turned back by, and the base of every member's angle. */
+    /** The fundamental's turn over an advance - the angle the fundamental's
+     *  hump is turned back by, and the base of every member's angle.
+     *
+     * @param delta the advance since the reference frame, samples
+     * @return {@code -2π·κ·delta/N} folded to one turn, radians; 0 while no
+     *         fundamental is pinned
+     */
     public double fundamentalAngle(double delta) {
         return kappa > 0.0 ? binAngle(kappa, delta) : 0.0;
     }
 
-    /** The second tone's turn over a COUNTED advance of {@code delta} samples,
-     *  {@code -2π·κ2·delta/N} folded to one turn - the {@code phi2} of
-     *  {@link #add} where no reading of the tone places it; 0 without a
-     *  dual pair. */
+    /** The second tone's turn over a COUNTED advance - the {@code phi2} of
+     *  {@link #add} where no reading of the tone places it.
+     *
+     * @param delta the advance since the reference frame, samples
+     * @return {@code -2π·κ2·delta/N} folded to one turn, radians; 0 without a
+     *         dual pair
+     */
     private double secondToneAngle(double delta) {
         return kappa2 > 0.0 ? binAngle(kappa2, delta) : 0.0;
     }
 
-    /** The turn a line at fractional bin {@code bin} is turned back by over
-     *  an advance of {@code delta} samples, {@code -2π·bin·delta/N} folded to
-     *  one turn. */
+    /** The turn a line at a fractional bin is turned back by over an advance.
+     *
+     * @param bin   the line's fractional bin
+     * @param delta the advance since the reference frame, samples
+     * @return {@code -2π·bin·delta/N} folded to one turn, radians
+     */
     private double binAngle(double bin, double delta) {
         return -2.0 * Math.PI * Math.IEEEremainder(delta * bin, fftSize) / fftSize;
     }
@@ -382,6 +404,11 @@ public final class CoherentAccumulator {
      * once.  Under an advance that was placed by the fundamental's own turn
      * (the aligning modes) the reading stands still and κ stays where it was
      * pinned.
+     *
+     * @param re    the frame's real parts, bins 0 .. fftSize/2
+     * @param im    the frame's imaginary parts
+     * @param delta the frame's advance since the reference frame, samples
+     * @param phiF  the fundamental's phase excess, radians
      */
     private void measureKappa(double[] re, double[] im, double delta, double phiF) {
         if (kappaRefined) return;
@@ -428,21 +455,25 @@ public final class CoherentAccumulator {
     /**
      * Writes the average the sums hold onto {@code r}: the mean phasor per
      * bin into {@code re} / {@code im} (the mean magnitude into {@code re}
-     * for the incoherent average, the analyser's convention), the amplitude
-     * in dBFS and the phase in degrees, the fundamental's level scalars from
-     * the bin just written, and the frames held as the result's frame count.
-     * A coherent average also writes the power average of its frames
-     * ({@link FftResult#powerAverageDbFs}), on the same scale.
-     * The amplitude scale is the result's own window gain, so an average and
-     * the single frame the analyser wrote read on one scale.  The statistics
-     * on the average are then {@link FftAnalyzer#recomputeStats}'s.
+     * for the incoherent average, the analyser's convention) - the phase
+     * stays in the phasor - the amplitude in dBFS, the fundamental's level
+     * scalars from the bin just written, and the frames held as the result's
+     * frame count.  A coherent average also writes the power average of its
+     * frames ({@link FftResult#powerAverageDbFs}), on the same scale.  The
+     * amplitude scale is the result's own window gain, so an average and the
+     * single frame the analyser wrote read on one scale.  A collection that
+     * holds no frame - averaging off - leaves {@code r} as analysed: the raw
+     * frame passes through.  The statistics on whatever {@code r} then holds
+     * are {@link org.edgo.audio.measure.common.SpectrumStatistics}'.
+     *
+     * @param r the frame the average is written onto
      */
     public void overlayOnto(FftResult r) {
         if (!started || !(frames > 0.0)) return;
         final int    n     = halfSize + 1;
         final double mean  = 1.0 / frames;
         final double conv  = r.amplitudePerMagnitude();
-        final double[] re = r.re, im = r.im, dbFs = r.amplitudeDbFs, deg = r.phaseDeg;
+        final double[] re = r.re, im = r.im, dbFs = r.amplitudeDbFs;
         if (coherent) {
             final double[] accRe = sumRe, accIm = sumIm, accPow = sumPow;
             if (r.powerAverageDbFs == null || r.powerAverageDbFs.length != n) {
@@ -459,7 +490,6 @@ public final class CoherentAccumulator {
                     double mag = Math.sqrt(avgRe * avgRe + avgIm * avgIm);
                     double amp = mag * conv * edge;
                     dbFs[k] = amp > 1e-15 ? 20.0 * Math.log10(amp) : -300.0;
-                    deg[k]  = Math.toDegrees(Math.atan2(avgIm, avgRe));
                     double rms = Math.sqrt(accPow[k] * mean) * conv * edge;
                     powDbFs[k] = rms > 1e-15 ? 20.0 * Math.log10(rms) : -300.0;
                 }
@@ -474,7 +504,6 @@ public final class CoherentAccumulator {
                     re[k]   = mag;
                     im[k]   = 0.0;
                     dbFs[k] = amp > 1e-15 ? 20.0 * Math.log10(amp) : -300.0;
-                    deg[k]  = 0.0;
                 }
             });
         }
@@ -615,8 +644,12 @@ public final class CoherentAccumulator {
         frames += weight;
     }
 
-    /** Scales the sums and the frames held by {@code factor} - the step that
-     *  turns a running sum into an exponential window. */
+    /** Scales the sums and the frames held - the step that turns a running
+     *  sum into an exponential window.
+     *
+     * @param factor the scale every sum, the frames held and the subtractable
+     *               ring are multiplied by
+     */
     public void scale(double factor) {
         if (coherent) {
             for (int k = 0; k < sumRe.length; k++) {
@@ -646,8 +679,12 @@ public final class CoherentAccumulator {
         }
     }
 
-    /** Claim this cycle's slot in the subtractable ring; the accumulator
-     *  fills it with the contribution exactly as accumulated. */
+    /** Claims this cycle's slot in the subtractable ring; the accumulator
+     *  fills it with the contribution exactly as accumulated.
+     *
+     * @param weight the frames the cycle's frame counts for
+     * @return the slot claimed
+     */
     private int claimPrevCycleSlot(double weight) {
         final int prevSlot = prevCyclePos;
         prevCyclePos = (prevCyclePos + 1) % DISCONTINUITY_DROP_CYCLES;
@@ -685,7 +722,11 @@ public final class CoherentAccumulator {
     }
 
     /** Takes a frame's complex contribution out of the coherent sums again,
-     *  exactly as {@link #add} added it; the frames held are the caller's. */
+     *  exactly as {@link #add} added it; the frames held are the caller's.
+     *
+     * @param contribRe the contribution's real parts, bins 0 .. fftSize/2
+     * @param contribIm the contribution's imaginary parts
+     */
     private void remove(double[] contribRe, double[] contribIm) {
         for (int k = 0; k < sumRe.length; k++) {
             sumRe[k] -= contribRe[k];
@@ -694,13 +735,18 @@ public final class CoherentAccumulator {
     }
 
     /** Takes a frame's power contribution out of the power sum again; the
-     *  frames held are the caller's. */
+     *  frames held are the caller's.
+     *
+     * @param contribPow the contribution's power per bin, bins 0 .. fftSize/2
+     */
     private void removePower(double[] contribPow) {
         for (int k = 0; k < sumPow.length; k++) sumPow[k] -= contribPow[k];
     }
 
-    /** The rows the statistics hold: one per frame {@link #add} has added
-     *  since the restart. */
+    /** The rows the statistics hold.
+     *
+     * @return one row per frame {@link #add} has added since the restart
+     */
     public int statisticsRowCount() {
         synchronized (statsLock) {
             return statsRowCount;
@@ -708,10 +754,9 @@ public final class CoherentAccumulator {
     }
 
     /**
-     * The statistics' column names, unmodifiable: {@code frames}, the frame
-     * count after the add; then per line, named by its coefficients
-     * ({@code (2,0)} for H2, {@code (1,1)} for F1 + F2), at the line's centre
-     * bin:
+     * The statistics' column names: {@code frames}, the frame count after
+     * the add; then per line, named by its coefficients ({@code (2,0)} for
+     * H2, {@code (1,1)} for F1 + F2), at the line's centre bin:
      * <ul>
      *   <li>{@code (a,b) raw} - the frame's magnitude as it was added;</li>
      *   <li>{@code (a,b) accumulated} - the average's magnitude after the
@@ -730,6 +775,8 @@ public final class CoherentAccumulator {
      * </ul>
      * The lines are the fundamental (1,0), the second tone (0,1) where a
      * pair is pinned, H2 .. H9 and every intermodulation product.
+     *
+     * @return the column names, unmodifiable
      */
     public List<String> statisticsColumns() {
         synchronized (statsLock) {
@@ -745,6 +792,9 @@ public final class CoherentAccumulator {
      * measured - a band top with no band geometry set, or a line the family
      * no longer held.
      *
+     * @param row    the row, 0 .. {@link #statisticsRowCount} - 1
+     * @param column the column, in the order of {@link #statisticsColumns}
+     * @return the value
      * @throws IndexOutOfBoundsException outside the rows or the columns held
      */
     public double statistic(int row, int column) {
@@ -830,7 +880,12 @@ public final class CoherentAccumulator {
     }
 
     /** The family index of the line at {@code f1Coef F1 + f2Coef F2} other
-     *  than a pilot, -1 where the family holds none. */
+     *  than a pilot.
+     *
+     * @param f1Coef the line's coefficient on the fundamental
+     * @param f2Coef the line's coefficient on the second tone
+     * @return the member index, -1 where the family holds none
+     */
     private int lineIndex(int f1Coef, int f2Coef) {
         for (int m = 0; m < memberCount; m++) {
             if (memberPilot[m] == 0 && memberA[m] == f1Coef && memberB[m] == f2Coef) return m;
@@ -838,9 +893,13 @@ public final class CoherentAccumulator {
         return -1;
     }
 
-    /** True for a family line the statistics follow beside the tones: H2 ..
+    /** Whether the statistics follow a family line beside the tones: H2 ..
      *  {@link #STATS_MAX_HARMONIC} or a product - never a pilot, the
-     *  fundamental (1, 0) or the second tone (0, 1). */
+     *  fundamental (1, 0) or the second tone (0, 1).
+     *
+     * @param member the family member
+     * @return true for a followed line
+     */
     private boolean followed(int member) {
         int f1Coef = memberA[member];
         int f2Coef = memberB[member];
@@ -850,18 +909,25 @@ public final class CoherentAccumulator {
         return f2Coef != 0 || f1Coef <= STATS_MAX_HARMONIC;
     }
 
-    /** Family line {@code member}'s centre bin: its position rounded, clamped
-     *  to the spectrum. */
+    /** A family line's centre bin.
+     *
+     * @param member the family member
+     * @return its position rounded, clamped to the spectrum
+     */
     private int centreBin(int member) {
         return Math.min(halfSize, Math.max(0, (int) Math.round(memberPos[member])));
     }
 
-    /** Appends the row of the frame just added from {@code frameRe} /
-     *  {@code frameIm}: the frame count, then per statistics line at its
-     *  centre bin the frame's and the average's magnitude and phase (the
-     *  frame's as turned back), and for a line other than a tone the band top
-     *  over the frame's bins and over the average's bins beside it.  The row
-     *  is assembled outside the lock and copied in under it. */
+    /** Appends the row of the frame just added: the frame count, then per
+     *  statistics line at its centre bin the frame's and the average's
+     *  magnitude and phase (the frame's as turned back), and for a line other
+     *  than a tone the band top over the frame's bins and over the average's
+     *  bins beside it.  The row is assembled outside the lock and copied in
+     *  under it.
+     *
+     * @param frameRe the frame's real parts, bins 0 .. fftSize/2
+     * @param frameIm the frame's imaginary parts
+     */
     private void recordStats(double[] frameRe, double[] frameIm) {
         if (statsRow.length != statsWidth) statsRow = new double[statsWidth];
         final double   mean  = frames > 0.0 ? 1.0 / frames : 0.0;
@@ -898,24 +964,33 @@ public final class CoherentAccumulator {
         }
     }
 
-    /** The band top beside the line centred on {@code bin} over the
-     *  magnitudes {@code mag} gives: {@link ToneLobeLift#lineFloor}, median +
-     *  4 MAD of the bins within 25 Hz beside the line's lobe;
-     *  {@link Double#NaN} while no band geometry is set or the band reads
-     *  none. */
+    /** The band top beside a line: {@link FftDsp#lineFloor}, median +
+     *  4 MAD of the bins within 25 Hz beside the line's lobe.
+     *
+     * @param bin the line's centre bin
+     * @param mag the magnitude per bin the band is read off
+     * @return the band top, {@link Double#NaN} while no band geometry is set
+     *         or the band reads none
+     */
     private double bandTop(int bin, IntToDoubleFunction mag) {
         if (!(bandBinHz > 0.0)) return Double.NaN;
-        double top = ToneLobeLift.lineFloor(mag, bin, halfSize, bandBinHz, bandNenbw);
+        double top = FftDsp.lineFloor(mag, bin, halfSize, bandBinHz, bandNenbw);
         return top > 0.0 ? top : Double.NaN;
     }
 
-    /** The phase in degrees of the frame's {@code bin} - the centre bin of
-     *  family line {@code member} - as {@link #add} turned it back: by the
-     *  angle of the line the hump walk gives the bin to, which is
-     *  {@code member} unless a lower line's hump reaches over it.  The very
-     *  phase the bin's contribution to the sums carries, so it compares with
-     *  the accumulated phase directly.  Valid right after the add, while the
-     *  family's phasors still hold that frame's angles. */
+    /** The phase of the frame's centre bin of a family line as {@link #add}
+     *  turned it back: by the angle of the line the hump walk gives the bin
+     *  to, which is {@code member} unless a lower line's hump reaches over
+     *  it.  The very phase the bin's contribution to the sums carries, so it
+     *  compares with the accumulated phase directly.  Valid right after the
+     *  add, while the family's phasors still hold that frame's angles.
+     *
+     * @param member the family member
+     * @param bin    the member's centre bin
+     * @param binRe  the frame's real part at that bin
+     * @param binIm  the frame's imaginary part at that bin
+     * @return the turned-back phase, degrees
+     */
     private double turnedPhaseDeg(int member, int bin, double binRe, double binIm) {
         int owner = member;
         while (owner > 0 && memberHi[owner - 1] >= bin) owner--;
@@ -985,7 +1060,15 @@ public final class CoherentAccumulator {
         memberCount = n;
     }
 
-    /** Writes member {@code n} and returns the next index. */
+    /** Writes one family member.
+     *
+     * @param n     the member's index
+     * @param pos   its fractional bin
+     * @param a     its turn coefficient on the fundamental
+     * @param b     its turn coefficient on the second tone
+     * @param pilot which pilot it is: 0 for none, 1 or 2
+     * @return the next index
+     */
     private int addMember(int n, double pos, int a, int b, int pilot) {
         memberPos[n]   = pos;
         memberA[n]     = a;

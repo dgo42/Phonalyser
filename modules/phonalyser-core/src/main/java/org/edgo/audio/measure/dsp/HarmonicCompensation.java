@@ -63,7 +63,7 @@ public final class HarmonicCompensation {
 
     /** A reading moves the correction only when the harmonic stands this far
      *  above its own local noise floor, the upper border of the noise band
-     *  beside it ({@link ToneLobeLift#lineFloor}: median + 4 MAD of the
+     *  beside it ({@link FftDsp#lineFloor}: median + 4 MAD of the
      *  magnitudes within 25 Hz outside the lobe, about 2.97 sigma of complex
      *  Gaussian noise).  At
      *  5 dB over it the reading's phase scatters by about 11 degrees (one
@@ -145,15 +145,14 @@ public final class HarmonicCompensation {
      * n*phi1 as described on {@link #accumulate}; a harmonic that was not
      * located carries {@code (0, 0)} at frequency 0.  The clearance is the
      * same raw level over the upper border of the noise band beside the line
-     * ({@link ToneLobeLift#lineFloor}).
+     * ({@link FftDsp#lineFloor}).
      *
      * <p>Level and phase are read off the captured peak phasor at the
      * harmonic's bin ({@link FftResult#rawPeakRe}, captured from the averaged
      * spectrum), so the one bin carries the harmonic's averaged level and
      * phase together - the same single-bin reading the intermodulation
-     * products take.  The analyzer's harmonic table is one frame's reading on
-     * an averaged result, and is the level only on a result without captured
-     * peaks ({@link FftResult#rawHarmonicDbFs}).
+     * products take.  A result without captured peaks gives the level of the
+     * harmonic's bin as the spectrum carries it.
      */
     public HarmonicPhasors measurePhasors(FftResult r, double calFundPhaseRad) {
         double[] re = new double[maxHarmonics];
@@ -182,11 +181,8 @@ public final class HarmonicCompensation {
 
             // The averaged peak phasor where the result captured one: its
             // magnitude is the level, its argument the phase, both off the
-            // same averaged bin.  The result's harmonic table holds the
-            // analyzer's reading of the single frame just analysed: its level
-            // scatters from frame to frame with that frame's noise, and
-            // against a band top averaged over N frames it stands about
-            // 10 log10(N) dB clear on noise.
+            // same averaged bin.  Without one, the bin itself: its level as
+            // the spectrum carries it, its phase off the raw re / im.
             boolean captured = r.rawPeakRe != null && r.rawPeakIm != null
                     && h < r.rawPeakRe.length && h < r.rawPeakIm.length;
             double rawRe  = captured ? r.rawPeakRe[h] : r.re[bin];
@@ -197,7 +193,7 @@ public final class HarmonicCompensation {
                 magLin = Math.hypot(rawRe, rawIm);
                 rawDb  = 20.0 * Math.log10(magLin);
             } else {
-                rawDb  = r.rawHarmonicDbFs(h);
+                rawDb  = r.amplitudeDbFs[bin];
                 magLin = Math.pow(10.0, rawDb / 20.0);
             }
             double phiH   = Math.atan2(rawIm, rawRe);                       // RAW phase; .frc de-embed is downstream
@@ -213,7 +209,7 @@ public final class HarmonicCompensation {
             // that much clearance.
             if (r.amplitudeDbFs != null && bin < r.amplitudeDbFs.length) {
                 double[] ampDb  = r.amplitudeDbFs;
-                double floorLin = ToneLobeLift.lineFloor(k -> Math.pow(10.0, ampDb[k] / 20.0), bin, ampDb.length - 1,
+                double floorLin = FftDsp.lineFloor(k -> Math.pow(10.0, ampDb[k] / 20.0), bin, ampDb.length - 1,
                         r.freqResolution, r.windowNenbwBins);
                 double floorDb  = floorLin > 0.0 ? 20.0 * Math.log10(floorLin) : Double.NaN;
                 if (Double.isFinite(rawDb) && Double.isFinite(floorDb)) clearance[h] = rawDb - floorDb;

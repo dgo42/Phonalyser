@@ -57,11 +57,15 @@ class FftAnalyzerRefinedBinTest {
 
     private final FftAnalyzer analyzer = new FftAnalyzer();
 
+    /** The off-bin tone's fractional bin, read by the one-frame parabola
+     *  under the analysis default BH7, to a hundredth of a bin. */
     @Test
     void offBinToneIsRecoveredWithTheAnalysisWindow() {
         assertParabolaRecovers(WindowType.BH7, TOLERANCE_BINS);
     }
 
+    /** The off-bin tone's fractional bin, read from the phase change of its
+     *  bin between two frames: exact to rounding. */
     @Test
     void offBinToneIsRecoveredFromThePhaseChangeBetweenFrames() {
         // The analysis window only: under RECT the tone's own image at the
@@ -90,11 +94,15 @@ class FftAnalyzerRefinedBinTest {
     }
 
     /** The analysis of one frame of the tone, held to {@code toleranceBins}.
-     *  Returns the estimate in bins. */
+     *
+     * @param window        the analysis window
+     * @param toleranceBins how far the estimate may stand from the tone, bins
+     * @return the estimate in bins */
     private double assertParabolaRecovers(WindowType window, double toleranceBins) {
         double trueBin = TONE_BIN + TONE_OFFSET_BINS;
-        FftResult r = analyzer.analyze(tone(trueBin, FFT_SIZE), SAMPLE_RATE, FFT_SIZE, 8, 8,
-                window, FftOverlap.PCT_0, 0.0, 0.0, true, Double.NaN, false, Double.NaN,
+        FftResult r = analyzer.analyze(tone(trueBin, FFT_SIZE), SAMPLE_RATE, FFT_SIZE,
+                new ReadoutSettings(8, 8, 0.0, 0.0, Double.NaN),
+                window, FftOverlap.PCT_0, true, Double.NaN,
                 new FftResult(), FftOverlap.PCT_0.hopSamples(FFT_SIZE));
         double refined = r.fundamentalHzRefined / r.freqResolution;
         assertEquals(trueBin, refined, toleranceBins,
@@ -104,7 +112,10 @@ class FftAnalyzerRefinedBinTest {
     }
 
     /** The phase change of the tone's bin between two frames {@code step}
-     *  samples apart, which on a clean tone is exact. */
+     *  samples apart, which on a clean tone is exact.
+     *
+     * @param window the analysis window
+     * @param step   the frames' spacing, samples */
     private void assertPhaseStepRecovers(WindowType window, int step) {
         double trueBin = TONE_BIN + TONE_OFFSET_BINS;
         double[] samples = tone(trueBin, step + FFT_SIZE);
@@ -116,8 +127,11 @@ class FftAnalyzerRefinedBinTest {
                 "fractional bin from the phase step (" + window + ", step " + step + ")");
     }
 
-    /** {@code length} samples of a unit sine whose frequency is
-     *  {@code bins} bins of an {@link #FFT_SIZE}-point transform. */
+    /** A unit sine on the grid of an {@link #FFT_SIZE}-point transform.
+     *
+     * @param bins   its frequency, bins
+     * @param length the samples wanted
+     * @return {@code length} samples of the sine */
     private double[] tone(double bins, int length) {
         double[] samples = new double[length];
         double w = 2.0 * Math.PI * bins / FFT_SIZE;

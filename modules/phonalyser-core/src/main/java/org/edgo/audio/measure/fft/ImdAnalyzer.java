@@ -18,37 +18,48 @@
 
 package org.edgo.audio.measure.fft;
 
+import org.edgo.audio.measure.dsp.FreqRespCalHelper;
+import org.edgo.audio.measure.dsp.InverseCascade;
+
 /**
- * Compiles a {@link ImdResult} from a dual-tone {@link FftResult}.
- * {@link FftAnalyzer} owns one instance and calls it wherever it derives
- * the statistics of a result that carries a second tone; the only state is
- * a scratch buffer reused across calls - no threads, no widgets.  Every
- * level in and out is full-scale relative (dBFS); the dBV lift belongs to
- * the reader.
+ * Compiles a {@link ImdResult} from a dual-tone {@link FftResult} and the
+ * lines the statistics created for it.
+ * {@link org.edgo.audio.measure.common.SpectrumStatistics} owns one instance
+ * and calls it whenever it calculates the statistics of a result that carries
+ * a second tone; it holds no state - no threads, no widgets.  Every level in
+ * and out is full-scale relative (dBFS); the dBV lift belongs to the reader.
  *
  * <h2>Algorithm</h2>
  * <ol>
  *   <li><b>Tone detection</b> - search a small bin window (±
- *       {@value #TONE_SEARCH_BINS}) around each given tone frequency,
- *       pick the bin with the highest dBFS, refine with quadratic
- *       peak interpolation.</li>
- *   <li><b>IMD product levels</b> - for each {@code n ∈ [2, 5]} read
- *       the nearest bin to {@code n·f₁ − (n−1)·f₂} (lower) and
- *       {@code n·f₂ − (n−1)·f₁} (upper).  Also read the {@code f₂ − f₁}
- *       bin for DFD2 and the {@code 2f₁ − f₂} / {@code 2f₂ − f₁} bins
- *       for DFD3.  Every product reading is held at the product's local
- *       noise floor from below where the result carries one.</li>
- *   <li><b>Ratios</b> - the IMD-product reference is {@code |F1| +
- *       |F2|} (linear-magnitude sum of the two fundamentals).  Each
+ *       {@value #TONE_SEARCH_BINS}) around each tone's line, pick the bin
+ *       with the highest dBFS, refine with quadratic peak
+ *       interpolation.</li>
+ *   <li><b>IMD product levels</b> - each product line's bin, for every
+ *       order from 2 to {@link ImdResult#MAX_ORDER}: {@code f2 - f1} and
+ *       {@code f1 + f2}, then {@code (n-1)f1 - (n-2)f2} (lower) and
+ *       {@code (n-1)f2 - (n-2)f1} (upper).  DFD2 is the order-2 lower
+ *       product, DFD3 the two order-3 ones.  Every product reading is
+ *       clamped at the product's band-top from below.</li>
+ *   <li><b>De-embedding</b> - every line is read on the spectrum as
+ *       measured and de-embedded with the {@code .frc} correction's constant
+ *       value for it ({@link FreqRespCalHelper#gainDbAt}), so the
+ *       de-embedded level stands the same distance above the measured one
+ *       whether the measured level is clamped at the line's floor or not; both
+ *       levels travel in the line.</li>
+ *   <li><b>Ratios</b> - on the de-embedded levels.  The IMD-product
+ *       reference is {@code |F1| + |F2|} (linear-magnitude sum of the
+ *       two fundamentals).  Each
  *       dnL / dnH product is expressed as a percent of that
  *       reference; IMDpwr is the RMS sum of all listed products,
  *       same denominator.  TD+N is computed differently: it's the
  *       residual RMS (everything that isn't F1, F2 or one of the phase
  *       alignment's two pilot lines) as a fraction
  *       of the total signal Vrms, derived via Parseval from the
- *       spectrum itself - so it matches what
+ *       spectrum itself, every bin's power weighted by the correction's
+ *       gain there - so it matches what
  *       {@code √(Vrms² − F1² − F2²) / Vrms} would yield if the
- *       analyser had access to the raw time-domain signal.</li>
+ *       analyser had access to the de-embedded time-domain signal.</li>
  * </ol>
  */
 public final class ImdAnalyzer {
@@ -59,42 +70,48 @@ public final class ImdAnalyzer {
      *  sample-rate / FFT-length rounding when snap is off. */
     private static final int TONE_SEARCH_BINS = 8;
 
-    /** Scratch buffer for {@link #noiseFloorDbFs}'s quickselect, grown on
-     *  demand and reused across calls - meaningful because the owning
-     *  {@link FftAnalyzer} keeps one instance, so the per-call multi-MB
-     *  copy allocation disappears after the first call. */
-    private double[] floorScratch;
-
-    /** Drops the noise-floor scratch buffer (8 bytes per spectrum bin, about
-     *  16 MB at 4 M points); it reallocates on demand at the next
-     *  {@link #analyze}.  For a stop path only - no analysis may be in
-     *  flight. */
-    public void releaseScratch() {
-        floorScratch = null;
-    }
-
-    /** Builds an {@link ImdResult} from {@code r} using {@code f1Hz}
-     *  and {@code f2Hz} as the tone frequencies (Hz) to search around.
-     *  Returns {@code null} when there isn't enough data to compute (e.g.
-     *  spectrum array is missing or the tone frequencies fall outside the
-     *  analysed band). */
-    public ImdResult analyze(FftResult r, double f1Hz, double f2Hz) {
+    /** Builds an {@link ImdResult} from {@code r} and its lines.
+     *
+     * @param r            the spectrum, as measured
+     * @param lines        its lines in the slot order of
+     *                     {@link FreqRespCalHelper#toneFrequencies}, as the
+     *                     statistics created them: the two tones' and every
+     *                     product's geometry
+     * @param binPowerGain the power gain the {@code .frc} correction gives
+     *                     each bin {@code 0 .. fftSize/2} as it reshapes the
+     *                     spectrum - 1 where it leaves a bin alone - which
+     *                     weights the TD+N residual; {@code null} for a
+     *                     spectrum that is not de-embedded
+     * @param frc          the {@code .frc} correction whose constant value
+     *                     for a line de-embeds the line; {@code null} for none
+     * @return the readout; {@code null} when there isn't enough data to
+     *         compute (the spectrum array is missing or the tone frequencies
+     *         fall outside the analysed band) */
+    public ImdResult analyze(FftResult r, SpectralLine[] lines, double[] binPowerGain,
+                             InverseCascade frc) {
         if (r == null || r.amplitudeDbFs == null) return null;
         double binBw = r.freqResolution;
         if (!(binBw > 0)) return null;
-        // All math runs on the raw dBFS spectrum - peak picking, the skirt
-        // walk and every figure of merit (dnL/dnH %, DFD2/3 %, IMD-power %,
-        // TD+N %) are offset-invariant: a constant dB shift moves every bin
-        // equally and cancels in each ratio.  The absolute outputs stay dBFS
-        // too, so a reader lifts the dozen scalars it shows instead of a
-        // per-bin copy of the spectrum.
+        // All math runs on the raw dBFS spectrum - peak picking and every
+        // figure of merit (dnL/dnH %, DFD2/3 %, IMD-power %, TD+N %) are
+        // offset-invariant: a constant dB shift moves every bin equally and
+        // cancels in each ratio.  The absolute outputs stay dBFS too, so a
+        // reader lifts the dozen scalars it shows instead of a per-bin copy of
+        // the spectrum.
         double[] amplitudeDbFs = r.amplitudeDbFs;
 
-        // The smaller-index ("lower") fundamental is always F1 even if
-        // the tones arrive in the other order, so the IMD sideband
-        // labels (dnL = below F1, dnH = above F2) stay meaningful.
-        double fLow  = Math.min(f1Hz, f2Hz);
-        double fHigh = Math.max(f1Hz, f2Hz);
+        // The lower tone is always F1 even if the tones arrive in the other
+        // order, so the IMD sideband labels (dnL = below F1, dnH = above F2)
+        // stay meaningful: the fundamental is slot 0, its partner the second
+        // tone's slot, either of them the lower.
+        int secondSlot = FreqRespCalHelper.secondToneSlot(r);
+        boolean fundamentalIsF1 = lines[0].frequencyHz() <= lines[secondSlot].frequencyHz();
+        int slotF1 = fundamentalIsF1 ? 0 : secondSlot;
+        int slotF2 = fundamentalIsF1 ? secondSlot : 0;
+        SpectralLine lineF1 = lines[slotF1];
+        SpectralLine lineF2 = lines[slotF2];
+        double fLow  = lineF1.frequencyHz();
+        double fHigh = lineF2.frequencyHz();
 
         // --- Detect F1 / F2 (argmax + quadratic refinement; offset-invariant,
         // so it runs on the raw dBFS bins).
@@ -111,21 +128,23 @@ public final class ImdAnalyzer {
         // partner may lie below it, while F1 here is always the lower one -
         // a reversed pair gives a negative difference frequency and swaps
         // every dnL / dnH.
-        out.f1Hz   = fLow;
-        out.f2Hz   = fHigh;
+        // Each tone's level as measured - which drives the dBFS column and the
+        // markers - and de-embedded by the correction's value at its peak bin.
+        double f1DeembeddedDbFs = p1.levelDbFs - FreqRespCalHelper.gainDbAt(frc, slotF1, p1.bin);
+        double f2DeembeddedDbFs = p2.levelDbFs - FreqRespCalHelper.gainDbAt(frc, slotF2, p2.bin);
+        out.f1 = lineF1.withLevels(p1.levelDbFs, f1DeembeddedDbFs);
+        out.f2 = lineF2.withLevels(p2.levelDbFs, f2DeembeddedDbFs);
         // Manual fundamental override: the mandatory twin-T notch suppresses the
         // measured tones, so when a true level is supplied it is the TRUE
-        // COMBINED level - split across the two tones by their measured ratio
-        // (equal tones at 1 V together -> each √(½) = −3.01 dBV).  Only the
-        // absolute tone magnitudes are anchored; the spectrum dBFS is left
+        // COMBINED level - split across the two tones by their de-embedded
+        // ratio (equal tones at 1 V together -> each √(½) = −3.01 dBV).  Only
+        // the absolute tone magnitudes are anchored; the spectrum dBFS is left
         // untouched, and the ratio = product/(|F1|+|F2|) stays honest.
-        out.f1DbFs = p1.levelDbFs;   // measured - drives the dBFS column + markers
-        out.f2DbFs = p2.levelDbFs;
-        double f1Lvl = p1.levelDbFs;
-        double f2Lvl = p2.levelDbFs;
+        double f1Lvl = f1DeembeddedDbFs;
+        double f2Lvl = f2DeembeddedDbFs;
         if (Double.isFinite(r.fundamentalTrueDbFs)) {
-            double m1 = Math.pow(10.0, p1.levelDbFs / 20.0);
-            double m2 = Math.pow(10.0, p2.levelDbFs / 20.0);
+            double m1 = Math.pow(10.0, f1DeembeddedDbFs / 20.0);
+            double m2 = Math.pow(10.0, f2DeembeddedDbFs / 20.0);
             double mTot = Math.hypot(m1, m2);
             if (mTot > 0.0) {
                 f1Lvl = r.fundamentalTrueDbFs + 20.0 * Math.log10(m1 / mTot);
@@ -135,17 +154,43 @@ public final class ImdAnalyzer {
         // f1Mag / f2Mag are linear magnitudes relative to full scale.
         out.f1Mag  = Math.pow(10.0, f1Lvl / 20.0);
         out.f2Mag  = Math.pow(10.0, f2Lvl / 20.0);
-        out.diffHz = out.f2Hz - out.f1Hz;
+        out.diffHz = fHigh - fLow;
 
         // Reference magnitude for ratios = |F1| + |F2|, full-scale relative.
         // Floored at a tiny positive so the % divide doesn't blow up
         // when both tones are muted.
         double refMag = Math.max(1e-12, out.f1Mag + out.f2Mag);
 
-        // --- DFD2 (= f2 − f1) and DFD3 (= 2f1 − f2 / 2f2 − f1).
-        double dfd2Mag     = readProductLinear(r, out.f2Hz - out.f1Hz);
-        double dfd3LowMag  = readProductLinear(r, 2.0 * out.f1Hz - out.f2Hz);
-        double dfd3HighMag = readProductLinear(r, 2.0 * out.f2Hz - out.f1Hz);
+        // --- n-th-order IMD products (n = 2..5), each its line from the
+        // second tone's slot on.  CCIF/DIN naming:
+        //   d2L = f2 − f1            (2nd-order difference)
+        //   d2H = f1 + f2            (2nd-order sum)
+        //   dnL = (n−1)·f1 − (n−2)·f2  for n ≥ 3 (sideband below F1)
+        //   dnH = (n−1)·f2 − (n−2)·f1  for n ≥ 3 (sideband above F2)
+        // So d3L / d3H are the 3rd-order intermod products
+        // 2f1 − f2 and 2f2 − f1; d4 is 5th-order; d5 is 7th-order.
+        double imdPwrSq = 0.0;
+        int slot = secondSlot + 1;
+        for (int k = 2; k <= ImdResult.MAX_ORDER; k++) {
+            out.dnL[k] = productLine(r, lines[slot], slot, frc);
+            slot++;
+            out.dnH[k] = productLine(r, lines[slot], slot, frc);
+            slot++;
+            // A product outside the measurable range is NaN, not a level;
+            // the power sum counts only measurable products.
+            double magL = deembeddedLinear(out.dnL[k]);
+            double magH = deembeddedLinear(out.dnH[k]);
+            out.dnLPct[k] = 100.0 * magL / refMag;
+            out.dnHPct[k] = 100.0 * magH / refMag;
+            if (Double.isFinite(magL)) imdPwrSq += magL * magL;
+            if (Double.isFinite(magH)) imdPwrSq += magH * magH;
+        }
+
+        // --- DFD2 (= f2 − f1, the order-2 difference) and DFD3 (= 2f1 − f2 /
+        // 2f2 − f1, the two order-3 products).
+        double dfd2Mag     = deembeddedLinear(out.dnL[2]);
+        double dfd3LowMag  = deembeddedLinear(out.dnL[3]);
+        double dfd3HighMag = deembeddedLinear(out.dnH[3]);
         // DFD3 is the RMS of its two sidebands; a sideband outside the
         // measurable range (NaN) is skipped so the other still reports -
         // SMPTE-style tone pairs routinely put 2f1 − f2 below DC.  Both
@@ -157,37 +202,6 @@ public final class ImdAnalyzer {
         double dfd3Mag = dfd3N > 0 ? Math.sqrt(dfd3Sq) : Double.NaN;
         out.dfd2Pct = 100.0 * dfd2Mag / refMag;
         out.dfd3Pct = 100.0 * dfd3Mag / refMag;
-
-        // --- n-th-order IMD products (n = 2..5).  CCIF/DIN naming:
-        //   d2L = f2 − f1            (2nd-order difference)
-        //   d2H = f1 + f2            (2nd-order sum)
-        //   dnL = (n−1)·f1 − (n−2)·f2  for n ≥ 3 (sideband below F1)
-        //   dnH = (n−1)·f2 − (n−2)·f1  for n ≥ 3 (sideband above F2)
-        // So d3L / d3H are the 3rd-order intermod products
-        // 2f1 − f2 and 2f2 − f1; d4 is 5th-order; d5 is 7th-order.
-        double imdPwrSq = 0.0;
-        for (int k = 2; k <= ImdResult.MAX_ORDER; k++) {
-            double fL, fH;
-            if (k == 2) {
-                fL = out.f2Hz - out.f1Hz;          // difference
-                fH = out.f2Hz + out.f1Hz;          // sum
-            } else {
-                fL = (k - 1) * out.f1Hz - (k - 2) * out.f2Hz;
-                fH = (k - 1) * out.f2Hz - (k - 2) * out.f1Hz;
-            }
-            double magL = readProductLinear(r, fL);
-            double magH = readProductLinear(r, fH);
-            out.dnLHz[k]  = fL;
-            out.dnHHz[k]  = fH;
-            out.dnLPct[k] = 100.0 * magL / refMag;
-            out.dnHPct[k] = 100.0 * magH / refMag;
-            // A product outside the measurable range is NaN, not a level;
-            // the power sum counts only measurable products.
-            out.dnLDbFs[k] = magL > 0 ? 20.0 * Math.log10(magL) : Double.NaN;
-            out.dnHDbFs[k] = magH > 0 ? 20.0 * Math.log10(magH) : Double.NaN;
-            if (Double.isFinite(magL)) imdPwrSq += magL * magL;
-            if (Double.isFinite(magH)) imdPwrSq += magH * magH;
-        }
         // Include DFD2 / DFD3 components in the combined IMD power (finite
         // sidebands only; dfd3Sq already holds just the measurable ones).
         if (Double.isFinite(dfd2Mag)) imdPwrSq += dfd2Mag * dfd2Mag;
@@ -203,33 +217,27 @@ public final class ImdAnalyzer {
         // ratio - correct for Hann, Blackman-Harris, ... without knowing
         // which window the analyser used.
         //
-        // F1 / F2 are stripped with the SAME dynamic skirt search
-        // FftAnalyzer uses for its fundamental-exclusion zone: estimate
-        // a leakage-immune noise floor (10th-percentile bin level) and
-        // walk outward from each tone's peak while the level stays above
-        // it, stopping at the first bin that dips into the noise.  A
-        // fixed ±{@code TONE_SEARCH_BINS} window can't track BH7's wide
-        // main lobe nor the tones' close-in phase noise; under heavy
-        // coherent averaging that leftover skirt sits tens of dB above
-        // the averaged-down floor and used to dominate the residual,
-        // inflating TD+N.  The walk follows the measured skirt to the
-        // floor whatever its width while stopping well short of the IMD
+        // F1 / F2 are stripped over their lines' skirts - the SAME skirt walk
+        // the fundamental's line takes, measured on the noise spectrum when
+        // the lines were created.  A fixed ±{@code TONE_SEARCH_BINS} window
+        // can't track BH7's wide main lobe nor the tones' close-in phase
+        // noise; under heavy coherent averaging that leftover skirt sits tens
+        // of dB above the averaged-down floor and used to dominate the
+        // residual, inflating TD+N.  The walk follows the measured skirt to
+        // the floor whatever its width while stopping well short of the IMD
         // products (kHz away), which stay in the residual as they should.
         //
-        // Every bin's power, the floor and the skirts come off the power
-        // average where the result carries one: the coherent mean lets the
-        // noise and every part of a tone not coherent with it fall with the
-        // frames held, its power does not - so the skirt is found on the same
-        // spectrum the sums read.
+        // Every bin's power comes off the power average where the result
+        // carries one: the coherent mean lets the noise and every part of a
+        // tone not coherent with it fall with the frames held, its power does
+        // not.  Each bin enters the sums with the correction's power gain
+        // there, which is what summing the de-embedded spectrum gives.
         double[] powerDbFs = r.hasPowerAverage ? r.powerAverageDbFs : amplitudeDbFs;
         int nBins = powerDbFs.length;
-        double floorDbFs = noiseFloorDbFs(powerDbFs);
-        int binF1 = (int) Math.round(out.f1Hz / binBw);
-        int binF2 = (int) Math.round(out.f2Hz / binBw);
-        int lo1 = skirtEdge(powerDbFs, binF1, -1, floorDbFs);
-        int hi1 = skirtEdge(powerDbFs, binF1, +1, floorDbFs);
-        int lo2 = skirtEdge(powerDbFs, binF2, -1, floorDbFs);
-        int hi2 = skirtEdge(powerDbFs, binF2, +1, floorDbFs);
+        int lo1 = lineF1.bin() - lineF1.skirtHalfWidthBins();
+        int hi1 = lineF1.bin() + lineF1.skirtHalfWidthBins();
+        int lo2 = lineF2.bin() - lineF2.skirtHalfWidthBins();
+        int hi2 = lineF2.bin() + lineF2.skirtHalfWidthBins();
         // The two pilot lines of the fundamental phase alignment are generated
         // as a time base, not measured: neither is one of the tones nor a
         // distortion product, and at their level they would lay a floor of
@@ -250,7 +258,7 @@ public final class ImdAnalyzer {
             if (b >= pilot2Lo && b <= pilot2Hi) continue;
             // FS-relative bin voltage - TD+N is a ratio.
             double vBin = Math.pow(10.0, powerDbFs[b] / 20.0);
-            double sq = vBin * vBin;
+            double sq = vBin * vBin * powerGain(binPowerGain, b);
             sumAll += sq;
             boolean inSkirt = (b >= lo1 && b <= hi1)
                            || (b >= lo2 && b <= hi2);
@@ -296,94 +304,55 @@ public final class ImdAnalyzer {
         Peak p = new Peak();
         // Interpolated peak value (Smith & Serra, eqn. 6).
         p.levelDbFs = yC - 0.25 * (yL - yR) * delta;
+        p.bin       = kMax;
         return p;
     }
 
-    /** Returns a product's linear magnitude (full scale = 1) at the bin
-     *  nearest {@code freqHz}, held at the product's local noise floor from
-     *  below where {@code r} carries one ({@link FftResult#lineFloorDbFs}).
-     *  Frequencies outside the representable bin range (at or below DC, or
-     *  beyond the spectrum) return {@code NaN} - the product is not
-     *  measurable at this sample rate. */
-    private double readProductLinear(FftResult r, double freqHz) {
-        if (!(freqHz > 0)) return Double.NaN;
-        int n = r.amplitudeDbFs.length;
-        int b = (int) Math.round(freqHz / r.freqResolution);
-        if (b < 1 || b >= n) return Double.NaN;
-        return r.atLeastLineFloor(b, Math.pow(10.0, r.amplitudeDbFs[b] / 20.0));
+    /** One product line measured: its level at its bin, clamped at its
+     *  band-top from below ({@link SpectralLine#clampedAtBandTop}), and that
+     *  level de-embedded by the correction's constant value for the line, so a
+     *  clamp moves both levels by the same amount.  A product outside the
+     *  representable bin range (at or below DC, or beyond the spectrum) gets
+     *  {@code NaN} levels - it is not measurable at this sample rate.
+     *
+     * @param r    the spectrum, as measured
+     * @param line the product's line, its geometry measured
+     * @param slot the line's slot of {@link FreqRespCalHelper#toneFrequencies}
+     * @param frc  the {@code .frc} correction; {@code null} for none
+     * @return the product's line with its levels */
+    private SpectralLine productLine(FftResult r, SpectralLine line, int slot, InverseCascade frc) {
+        if (!line.measurable()) return line.withLevels(Double.NaN, Double.NaN);
+        int b = line.bin();
+        double rawLinear = line.clampedAtBandTop(Math.pow(10.0, r.amplitudeDbFs[b] / 20.0));
+        double rawDbFs   = 20.0 * Math.log10(rawLinear);
+        return line.withLevels(rawDbFs, rawDbFs - FreqRespCalHelper.gainDbAt(frc, slot, b));
     }
 
-    /** Leakage-immune noise-floor estimate: the 10th-percentile bin
-     *  level (dBFS) across the spectrum (DC excluded).  Mirrors the
-     *  {@code globalMedianNoisePow} model FftAnalyzer uses to size its
-     *  dynamic fundamental-exclusion walk - the 10th percentile sits
-     *  below the bulk of spurs and leakage, close to the true
-     *  quantization / noise floor.  dB is monotonic in power, so the
-     *  percentile bin is identical whether taken on levels or powers. */
-    private double noiseFloorDbFs(double[] amplitudeDbFs) {
-        int n = amplitudeDbFs.length;
-        if (n <= 1) return Double.NEGATIVE_INFINITY;
-        int len = n - 1;
-        if (floorScratch == null || floorScratch.length < len) {
-            floorScratch = new double[len];
-        }
-        System.arraycopy(amplitudeDbFs, 1, floorScratch, 0, len);
-        return selectKth(floorScratch, len, len / 10);
+    /** A line's de-embedded level as a linear magnitude (full scale = 1).
+     *
+     * @param line the line
+     * @return the magnitude; {@code NaN} for a line outside the measurable
+     *         range */
+    private double deembeddedLinear(SpectralLine line) {
+        return Math.pow(10.0, line.deembeddedAmplitudeDbFs() / 20.0);
     }
 
-    /** In-place quickselect: partitions {@code a[0..len)} until the
-     *  {@code k}-th smallest element sits at index {@code k}, and returns it.
-     *  Same result as {@code sort(a)[k]} at O(n) expected instead of
-     *  O(n·log n) - the full sort dominated the IMD analysis cycle at large
-     *  FFT lengths.  Hoare partition with a median-of-three pivot, so the
-     *  near-sorted spectra a stable noise floor produces don't degrade it. */
-    private double selectKth(double[] a, int len, int k) {
-        int lo = 0;
-        int hi = len - 1;
-        while (lo < hi) {
-            double pivot = medianOfThree(a[lo], a[(lo + hi) >>> 1], a[hi]);
-            int i = lo;
-            int j = hi;
-            while (i <= j) {
-                while (a[i] < pivot) i++;
-                while (a[j] > pivot) j--;
-                if (i <= j) {
-                    double tmp = a[i]; a[i] = a[j]; a[j] = tmp;
-                    i++; j--;
-                }
-            }
-            if (k <= j)      hi = j;
-            else if (k >= i) lo = i;
-            else             return a[k];
-        }
-        return a[k];
+    /** The correction's power gain at {@code bin}.
+     *
+     * @param binPowerGain the gains by bin; {@code null} for none
+     * @param bin          the bin
+     * @return the gain; 1 without a correction, outside the array and where
+     *         the correction leaves the bin alone */
+    private double powerGain(double[] binPowerGain, int bin) {
+        if (binPowerGain == null || bin < 0 || bin >= binPowerGain.length) return 1.0;
+        double g = binPowerGain[bin];
+        return g > 0.0 ? g : 1.0;
     }
 
-    /** Middle value of the three - pivot choice for {@link #selectKth}. */
-    private double medianOfThree(double a, double b, double c) {
-        if (a > b) { double t = a; a = b; b = t; }
-        if (b > c) { b = c; }
-        return Math.max(a, b);
-    }
-
-    /** Walks from {@code peakBin} in direction {@code dir} (+1 / −1)
-     *  while bins stay above {@code floorDbFs}, returning the farthest
-     *  bin still on the fundamental's skirt.  This is the same dynamic
-     *  exclusion FftAnalyzer performs around its fundamental: follow the
-     *  measured skirt (window main lobe + close-in phase noise) down to
-     *  the noise floor, whatever its width and whichever window is in
-     *  use - no fixed window that BH7's wide lobe could leak past. */
-    private int skirtEdge(double[] amplitudeDbFs, int peakBin,
-                          int dir, double floorDbFs) {
-        int n = amplitudeDbFs.length;
-        int b = peakBin;
-        while (b + dir >= 1 && b + dir < n && amplitudeDbFs[b + dir] > floorDbFs) {
-            b += dir;
-        }
-        return b;
-    }
-
+    /** A tone's peak, as {@link #refinePeak} finds it. */
     private static final class Peak {
         double levelDbFs;
+        /** The bin the level was read around - where it is de-embedded. */
+        int    bin;
     }
 }

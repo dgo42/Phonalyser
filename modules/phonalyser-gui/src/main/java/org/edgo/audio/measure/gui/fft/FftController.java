@@ -30,6 +30,7 @@ import java.util.List;
 import org.edgo.audio.measure.common.FileVersions;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.FftOverlap;
+import org.edgo.audio.measure.enums.WindowType;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.gui.common.CorrectionStore;
@@ -50,7 +51,7 @@ import lombok.Getter;
  * <p>The controller builds its worker and owns it; the controller itself
  * never imports SWT.  The dual-tone IMD products
  * travel on the result itself ({@link FftResult#imd}), filled by the
- * statistics recompute of the finalized frame.  The pane that owns this
+ * statistics of the finalized frame.  The pane that owns this
  * controller builds it and passes itself in; the worker's messages reach that
  * pane through the {@code on...} methods below, and the generator events go
  * over the bus.
@@ -72,10 +73,11 @@ public final class FftController {
      *  messages. */
     private final FftPane pane;
 
-    /** A loaded {@code .fft} spectrum: the reconstructed result, carrying the
-     *  re-measured IMD products in {@link FftResult#imd} when the file was
-     *  captured in IMD mode ({@code null} for THD captures - the view stays in
-     *  THD mode). */
+    /** A loaded {@code .fft} spectrum: the reconstructed raw result.  A file
+     *  captured in IMD mode carries its second tone
+     *  ({@link FftResult#fundamental2HzRefined}), from which the view's
+     *  statistics derive the IMD products; a THD capture carries none, and
+     *  the view stays in THD mode. */
     public record LoadedSpectrum(FftResult result) {}
 
     public FftController(FftPane pane) {
@@ -247,11 +249,14 @@ public final class FftController {
     /** Loads a spectrum {@code .fft} file (as written by
      *  {@link #saveSpectrum} - {@code frequency_hz;magnitude_dBV;phase_deg}
      *  rows, a coherent average's with {@code power_dBV} beside them, under
-     *  {@code # mode=} / {@code # tone*_hz=} header comments),
-     *  reconstructs an {@link FftResult} and recomputes its fundamental /
-     *  harmonic / THD / SNR metrics (and the IMD products when the file
-     *  was captured in IMD mode) from the loaded bins.
+     *  {@code # mode=} / {@code # tone*_hz=} header comments) into a raw
+     *  {@link FftResult}, built the way the analysis builds a frame: the
+     *  spectrum, its phasors, the fundamental and - for a file captured in IMD
+     *  mode - the second tone, and the geometry.  No statistics: the view
+     *  calculates them on it as on a live frame.
      *
+     *  @param path the file to read
+     *  @return the loaded spectrum
      *  @throws IOException              on a read / number-parse problem
      *  @throws IllegalArgumentException when the file holds no usable rows */
     public LoadedSpectrum loadSpectrum(String path) throws IOException {
@@ -262,6 +267,7 @@ public final class FftController {
         double fundHz  = Double.NaN;
         double binBwHz = Double.NaN;
         FftOverlap overlap = null;
+        WindowType window  = WindowType.RECT;
         int stepSamples = 0;
         try {
             for (String line : Files.readAllLines(Paths.get(path), StandardCharsets.UTF_8)) {
@@ -281,6 +287,16 @@ public final class FftController {
                     // nothing, null results wrote "n/a") stays null.
                     try {
                         overlap = FftOverlap.valueOf(s.substring(s.indexOf('=') + 1).trim());
+                    } catch (IllegalArgumentException ignored) { }
+                    continue;
+                }
+                if (s.startsWith("# window=")) {
+                    // The window the capture was analysed with - its main lobe
+                    // sizes the statistics' masks.  Known enum names only;
+                    // anything else ("n/a"), like a file without the header,
+                    // reads as rectangular.
+                    try {
+                        window = WindowType.valueOf(s.substring(s.indexOf('=') + 1).trim());
                     } catch (IllegalArgumentException ignored) { }
                     continue;
                 }
@@ -309,9 +325,10 @@ public final class FftController {
         }
 
         FftResult r = new FftResult();
-        Preferences prefs = Preferences.instance();
-        int harmCount = Math.max(9, prefs.getFftCalcMaxHarmonic());
-        r.ensureArrays(n, harmCount);
+        // The harmonic ladder is the view's to place, with the readout
+        // settings it calculates the statistics with.
+        r.ensureArrays(n, 0);
+        r.phaseDeg         = new double[n];
         r.freqResolution   = freqRes;
         // Old files lack the bin-bandwidth header; there the row spacing IS the
         // bandwidth the file was captured with.
@@ -323,7 +340,7 @@ public final class FftController {
         // to its no-overlap look-ahead exactly as before these headers.
         r.overlap          = overlap;
         r.stepSamples      = stepSamples;
-        r.harmonicCount    = harmCount;
+        r.windowType       = window;
         // The file stores dBV; dBFS is the result's base scale, so subtract the
         // analysed channel's ADC offset once on load (the writer adds it back
         // on save, so a round-trip is exact).
@@ -349,12 +366,15 @@ public final class FftController {
         // it rebuilds the bin phasors from the stored magnitude and phase.
         FftAnalyzer storedAnalyzer = new FftAnalyzer(r);
         storedAnalyzer.rebuildPhasors();
+        // The window's noise bandwidth, which the noise integrals divide by,
+        // as the live analysis stamps it on a frame.
+        storedAnalyzer.restoreNenbw();
         // A file captured in IMD mode stands on its two tones: the saved tone
         // frequencies are pinned (F1 = the lower, which is then the stated
         // fundamental, F2 = the upper) so the result reports them.  The IMD
-        // products then come out of the recompute below with the rest of the
-        // statistics; a THD capture carries no second tone and gets no IMD
-        // result, which keeps the view in single-tone THD mode.
+        // products then come out of the view's statistics with the rest; a
+        // THD capture carries no second tone and gets no IMD result, which
+        // keeps the view in single-tone THD mode.
         boolean tonesStated = modeImd && tone1Hz > 0 && tone2Hz > 0;
         if (tonesStated) {
             fundHz = Math.min(tone1Hz, tone2Hz);
@@ -376,38 +396,10 @@ public final class FftController {
         } else if (modeImd) {
             storedAnalyzer.findSecondTone();
         }
-        // Derive harmonic positions, apply the current THD settings and recompute
-        // - shared with the dynamic recompute that runs when a THD setting changes
-        // while this static spectrum is displayed.
-        recomputeStaticResult(r);
+        // The fractional bin the view places the harmonic ladder on - the
+        // stated or found fundamental's, as a raw frame carries it.
+        r.coherentKappa = r.fundamentalHzRefined / freqRes;
         return new LoadedSpectrum(r);
-    }
-
-    /**
-     * Re-applies the current THD settings to an already-built static spectrum
-     * and recomputes its harmonics / THD / SNR: derives harmonic positions for
-     * the max-harmonics count (resizing the harmonic arrays if it changed - the
-     * stored spectrum is preserved), sets the manual-fundamental amplitude anchor
-     * (Vrms &rarr; dBFS) and the high-pass / low-pass distortion band, then runs
-     * {@link FftAnalyzer#recomputeStats}.  Called at load and whenever a THD
-     * setting changes while a static (non-live) spectrum is displayed - the live
-     * worker re-reads these settings every analysis cycle, so only the static
-     * case needs it.
-     */
-    public void recomputeStaticResult(FftResult r) {
-        Preferences prefs = Preferences.instance();
-        double manualVrms = prefs.getFftManualFundVrms();
-        double fundRefDbFs = (prefs.isFftManualFundEnabled() && manualVrms > 0)
-                ? 20.0 * Math.log10(manualVrms) - analysedDbvOffsetDb()
-                : Double.NaN;
-        // H(N) counted from the 2nd is N - 1 harmonics - the live worker's rule,
-        // for the calculated ladder and the THD sum alike.
-        new FftAnalyzer(r).applyDistortionSettings(
-                Math.max(9, prefs.getFftCalcMaxHarmonic()) - 1,
-                Math.max(1, prefs.getFftThdMaxHarmonic() - 1),
-                fundRefDbFs,
-                prefs.isFftDistMinEnabled() ? prefs.getFftDistMinHz() : 0,
-                prefs.isFftDistMaxEnabled() ? prefs.getFftDistMaxHz() : 0);
     }
 
     /** Parses the value of a {@code # key=value} spectrum-header comment as a
@@ -424,7 +416,15 @@ public final class FftController {
      *  {@code frequency_hz;magnitude_dBV;phase_deg} rows, plus
      *  {@code power_dBV} for a result carrying a power average, under
      *  provenance header comments (capture mode, tones, analysis parameters,
-     *  applied calibrations). */
+     *  applied calibrations).  The pilot lines are cut out: each pilot's span
+     *  is written with the noise beside it ({@link FftResult#pilotFreeBin}).
+     *
+     *  @param file    the file to write
+     *  @param r       the spectrum, as the view shows it
+     *  @param imd     whether the capture runs in IMD (dual-tone) mode
+     *  @param tone1Hz the first tone's frequency, Hz - written in IMD mode
+     *  @param tone2Hz the second tone's frequency, Hz - written in IMD mode
+     *  @throws IOException when the file cannot be written */
     public void saveSpectrum(Path file, FftResult r, boolean imd,
                              double tone1Hz, double tone2Hz) throws IOException {
         try (PrintWriter pw = new PrintWriter(Files.newBufferedWriter(file, StandardCharsets.UTF_8))) {
@@ -487,10 +487,16 @@ public final class FftController {
                              : "frequency_hz;magnitude_dBV;phase_deg");
             for (int k = 0; k < r.amplitudeDbFs.length; k++) {
                 double f   = k * r.freqResolution;
-                double dbv = r.amplitudeDbFs[k] + dbvOffset;
-                double ph  = (r.phaseDeg != null && k < r.phaseDeg.length) ? r.phaseDeg[k] : 0;
+                // Inside a pilot's span every column reads the noise bin
+                // that stands in for it.
+                int src    = r.pilotFreeBin(k);
+                double dbv = r.amplitudeDbFs[src] + dbvOffset;
+                // The phase as the phasor holds it, worked out here: the
+                // spectrum carries no other copy of it.
+                double ph  = (r.re != null && src < r.re.length)
+                        ? Math.toDegrees(Math.atan2(r.im[src], r.re[src])) : 0;
                 if (power) {
-                    pw.printf("%.6f;%.6f;%.6f;%.6f%n", f, dbv, ph, r.powerAverageDbFs[k] + dbvOffset);
+                    pw.printf("%.6f;%.6f;%.6f;%.6f%n", f, dbv, ph, r.powerAverageDbFs[src] + dbvOffset);
                 } else {
                     pw.printf("%.6f;%.6f;%.6f%n", f, dbv, ph);
                 }

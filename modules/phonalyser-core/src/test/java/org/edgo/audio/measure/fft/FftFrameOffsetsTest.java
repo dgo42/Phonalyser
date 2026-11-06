@@ -41,7 +41,15 @@ class FftFrameOffsetsTest {
 
     private static final int SAMPLE_RATE = 48_000;
     private static final int FFT_SIZE    = 8_192;
+    /** The readout settings every analysis here runs with: H2..H9 evaluated
+     *  and summed, no distortion band, no manual fundamental. */
+    private static final ReadoutSettings SETTINGS = new ReadoutSettings(8, 8, 0.0, 0.0, Double.NaN);
 
+    /** A half-scale sine.
+     *
+     * @param freqHz  its frequency, Hz
+     * @param samples the samples wanted
+     * @return the sine at {@link #SAMPLE_RATE} */
     private double[] sine(double freqHz, int samples) {
         double[] signal = new double[samples];
         for (int n = 0; n < samples; n++) {
@@ -52,6 +60,7 @@ class FftFrameOffsetsTest {
 
     // ── FftOverlap.hopSamples ────────────────────────────────────────────────
 
+    /** Every fixed overlap derives its spacing, rounded, and never zero. */
     @Test
     void hopSamples_fixedModesDeriveTheRoundedSpacing() {
         assertEquals(FFT_SIZE,          FftOverlap.PCT_0.hopSamples(FFT_SIZE));
@@ -63,11 +72,13 @@ class FftFrameOffsetsTest {
         assertEquals(1, FftOverlap.PCT_93_75.hopSamples(2));
     }
 
+    /** The random overlap has no spacing to derive. */
     @Test
     void hopSamples_randomModeRefuses() {
         assertThrows(IllegalStateException.class, () -> FftOverlap.RAND.hopSamples(FFT_SIZE));
     }
 
+    /** No string names the random overlap. */
     @Test
     void fromString_neverYieldsTheRandomMode() {
         assertThrows(IllegalArgumentException.class, () -> FftOverlap.fromString("Random"));
@@ -76,6 +87,8 @@ class FftFrameOffsetsTest {
 
     // ── Geometry validation ──────────────────────────────────────────────────
 
+    /** A spacing that is not positive and a buffer shorter than the frame
+     *  are refused. */
     @Test
     void analyze_rejectsBadGeometry() {
         double[] signal = sine(1_000.0, FFT_SIZE * 2);
@@ -83,19 +96,19 @@ class FftFrameOffsetsTest {
 
         // The spacing must be positive.
         assertThrows(IllegalArgumentException.class, () -> analyzer.analyze(
-                signal, SAMPLE_RATE, FFT_SIZE, 8, 8, WindowType.HANN, FftOverlap.PCT_0,
-                0.0, 0.0, true, Double.NaN, false, Double.NaN, new FftResult(),
-                0));
+                signal, SAMPLE_RATE, FFT_SIZE, SETTINGS, WindowType.HANN, FftOverlap.PCT_0,
+                true, Double.NaN, new FftResult(), 0));
         // The frame must fit the buffer.
         double[] short1 = sine(1_000.0, FFT_SIZE - 1);
         assertThrows(IllegalArgumentException.class, () -> analyzer.analyze(
-                short1, SAMPLE_RATE, FFT_SIZE, 8, 8, WindowType.HANN, FftOverlap.PCT_0,
-                0.0, 0.0, true, Double.NaN, false, Double.NaN, new FftResult(),
-                4_096));
+                short1, SAMPLE_RATE, FFT_SIZE, SETTINGS, WindowType.HANN, FftOverlap.PCT_0,
+                true, Double.NaN, new FftResult(), 4_096));
     }
 
     // ── Variable spacing: the frame does not depend on it ────────────────────
 
+    /** The frame analysed is the one at the buffer's start whatever spacing
+     *  is stated; the spacing is only stamped. */
     @Test
     void statedStep_doesNotMoveTheFrame() {
         double binWidth = (double) SAMPLE_RATE / FFT_SIZE;
@@ -106,13 +119,11 @@ class FftFrameOffsetsTest {
         // share a sample.  The frame analysed is the one at the buffer's
         // start whatever the spacing, so its spectrum reads the same.
         FftResult a = new FftAnalyzer().analyze(
-                signal, SAMPLE_RATE, FFT_SIZE, 8, 8, WindowType.HANN, FftOverlap.RAND,
-                0.0, 0.0, true, Double.NaN, false, Double.NaN, new FftResult(),
-                1_000);
+                signal, SAMPLE_RATE, FFT_SIZE, SETTINGS, WindowType.HANN, FftOverlap.RAND,
+                true, Double.NaN, new FftResult(), 1_000);
         FftResult b = new FftAnalyzer().analyze(
-                signal, SAMPLE_RATE, FFT_SIZE, 8, 8, WindowType.HANN, FftOverlap.RAND,
-                0.0, 0.0, true, Double.NaN, false, Double.NaN, new FftResult(),
-                1_024);
+                signal, SAMPLE_RATE, FFT_SIZE, SETTINGS, WindowType.HANN, FftOverlap.RAND,
+                true, Double.NaN, new FftResult(), 1_024);
 
         assertEquals(freqHz, a.fundamentalHzRefined, binWidth * 0.1,
                 "refined Hz must track the tone");

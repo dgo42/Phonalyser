@@ -24,11 +24,12 @@ package org.edgo.audio.measure.fft;
  * whenever the spectrum holds a second tone
  * ({@link FftResult#fundamental2HzRefined} above 0); null otherwise.
  *
- * <p>Two fundamentals F1, F2 (F1 the lower) plus their dBFS levels, each
- * level refined via quadratic peak interpolation around its tone.  Every
- * absolute level here is full-scale relative (dBFS, or linear with full
- * scale = 1); the dBV lift is the reader's, one constant offset per value.
- * IMD products follow the CCIF / DIN difference-frequency convention:
+ * <p>Two fundamentals F1, F2 (F1 the lower) and every product, each a
+ * {@link SpectralLine}: its frequency and its level as measured and
+ * de-embedded.  Every absolute level here is full-scale relative (dBFS, or
+ * linear with full scale = 1); the dBV lift is the reader's, one constant
+ * offset per value.  Every ratio stands on the de-embedded levels.  IMD
+ * products follow the CCIF / DIN difference-frequency convention:
  *
  * <ul>
  *   <li>{@code dfd2Pct} - the {@code f2 − f1} component (2nd-order
@@ -50,33 +51,27 @@ package org.edgo.audio.measure.fft;
  *       ratio), so it's correct for Hann, Blackman-Harris, etc.</li>
  * </ul>
  *
- * <p>All arrays sized for {@code n = 0..5} with {@code [0]} / {@code [1]}
- * unused (so {@code dnL[2]} reads naturally as "d₂L").  Frequencies are
- * stored alongside the levels so the view can plot dot annotations
- * without recomputing.
+ * <p>All per-order arrays sized for {@code n = 0..5} with {@code [0]} /
+ * {@code [1]} unused (so {@code dnL[2]} reads naturally as "d₂L").
  */
 public final class ImdResult {
 
     /** Max IMD-order index (d2..d5).  Array slots {@code 0..1} unused. */
     public static final int MAX_ORDER = 5;
 
-    /** Refined F1 / F2 frequencies (Hz) - the analyzer's sub-bin tone
-     *  estimates, ordered so F1 is always the lower tone. */
-    public double f1Hz;
-    public double f2Hz;
+    /** F1 / F2 as measured: frequency - the analyzer's sub-bin tone estimate,
+     *  ordered so F1 is always the lower tone - and level read straight off
+     *  the spectrum peak, which the dBFS column, the dots and autoscale use. */
+    public SpectralLine f1;
+    public SpectralLine f2;
     /** F1 / F2 linear magnitudes in the FFT's full-scale unit (full
-     *  scale = 1).  When a manual fundamental is supplied these carry the
-     *  TRUE combined level split across the two tones (the notch-suppressed
-     *  measurement can't); otherwise they are the measured level.  The
-     *  anchored level in dBFS is {@code 20·log10(f1Mag)}. */
+     *  scale = 1), de-embedded.  When a manual fundamental is supplied these
+     *  carry the TRUE combined level split across the two tones (the
+     *  notch-suppressed measurement can't); otherwise they are the
+     *  de-embedded measured level.  The anchored level in dBFS is
+     *  {@code 20·log10(f1Mag)}. */
     public double f1Mag;
     public double f2Mag;
-    /** F1 / F2 MEASURED level in dBFS (straight off the spectrum peak) - used for
-     *  the dBFS column, the blue measured marker and autoscale, so they stay on
-     *  the real peak when {@link #f1Mag} is anchored to a manual fundamental
-     *  (the lobe lift and the red marker then stand on the anchored level). */
-    public double f1DbFs;
-    public double f2DbFs;
 
     /** {@code f2 − f1} (Hz) - the difference frequency tracked by the
      *  DFD2 measurement. */
@@ -99,42 +94,37 @@ public final class ImdResult {
      *  fundamental term.  Window-independent. */
     public double tdnPct;
 
-    /** Frequencies of the per-order sideband products, Hz.
-     *  Indexed by order in [2, {@link #MAX_ORDER}].  Slots 0/1 unused. */
-    public final double[] dnLHz = new double[MAX_ORDER + 1];
-    public final double[] dnHHz = new double[MAX_ORDER + 1];
-    /** Levels of the per-order sideband products, in % of the
-     *  fundamental reference |F1| + |F2|.  Slots 0/1 unused.  {@code NaN}
-     *  when the product frequency is outside the measurable range (below
-     *  DC or beyond the spectrum at this sample rate). */
+    /** The per-order sideband products: frequency and level as measured and
+     *  de-embedded.  Indexed by order in [2, {@link #MAX_ORDER}]; slots 0/1
+     *  {@code null}.  A product outside the measurable range (below DC or
+     *  beyond the spectrum at this sample rate) carries {@code NaN} levels
+     *  (the readout shows "---"). */
+    public final SpectralLine[] dnL = new SpectralLine[MAX_ORDER + 1];
+    public final SpectralLine[] dnH = new SpectralLine[MAX_ORDER + 1];
+    /** The same products' de-embedded levels, in % of the fundamental
+     *  reference |F1| + |F2|.  Slots 0/1 unused; {@code NaN} for an
+     *  unmeasurable product. */
     public final double[] dnLPct = new double[MAX_ORDER + 1];
     public final double[] dnHPct = new double[MAX_ORDER + 1];
-    /** Same levels expressed in dBFS, read off the spectrum bin;
-     *  {@code NaN} for unmeasurable products (the readout shows "---"). */
-    public final double[] dnLDbFs = new double[MAX_ORDER + 1];
-    public final double[] dnHDbFs = new double[MAX_ORDER + 1];
 
     /** Returns an independent copy: scalars by value, every per-order array
-     *  copied, so a later rewrite of this slot does not reach the copy. */
+     *  copied, so a later rewrite of this slot does not reach the copy.  The
+     *  lines themselves are immutable and shared. */
     public ImdResult copy() {
         ImdResult c = new ImdResult();
-        c.f1Hz      = f1Hz;
-        c.f2Hz      = f2Hz;
+        c.f1        = f1;
+        c.f2        = f2;
         c.f1Mag     = f1Mag;
         c.f2Mag     = f2Mag;
-        c.f1DbFs    = f1DbFs;
-        c.f2DbFs    = f2DbFs;
         c.diffHz    = diffHz;
         c.dfd2Pct   = dfd2Pct;
         c.dfd3Pct   = dfd3Pct;
         c.imdPwrPct = imdPwrPct;
         c.tdnPct    = tdnPct;
-        System.arraycopy(dnLHz,   0, c.dnLHz,   0, dnLHz.length);
-        System.arraycopy(dnHHz,   0, c.dnHHz,   0, dnHHz.length);
-        System.arraycopy(dnLPct,  0, c.dnLPct,  0, dnLPct.length);
-        System.arraycopy(dnHPct,  0, c.dnHPct,  0, dnHPct.length);
-        System.arraycopy(dnLDbFs, 0, c.dnLDbFs, 0, dnLDbFs.length);
-        System.arraycopy(dnHDbFs, 0, c.dnHDbFs, 0, dnHDbFs.length);
+        System.arraycopy(dnL,    0, c.dnL,    0, dnL.length);
+        System.arraycopy(dnH,    0, c.dnH,    0, dnH.length);
+        System.arraycopy(dnLPct, 0, c.dnLPct, 0, dnLPct.length);
+        System.arraycopy(dnHPct, 0, c.dnHPct, 0, dnHPct.length);
         return c;
     }
 }

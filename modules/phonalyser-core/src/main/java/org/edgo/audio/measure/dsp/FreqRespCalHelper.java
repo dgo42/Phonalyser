@@ -26,14 +26,15 @@ import java.io.FileWriter;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
-import java.util.function.IntToDoubleFunction;
 
 import org.edgo.audio.measure.common.FileVersions;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.fft.ImdResult;
 import org.edgo.audio.measure.fft.MathUtil;
+import org.edgo.audio.measure.fft.SpectralLine;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.jtransforms.fft.DoubleFFT_1D;
 
@@ -558,8 +559,8 @@ public class FreqRespCalHelper {
      * {@link ImdResult#MAX_ORDER}.
      *
      * <p>A position the frame does not carry keeps its SLOT and holds 0 - the
-     * list is never compacted, so a later frame's tone set and lobe spans line
-     * up with an earlier one's slot for slot and can be compared.
+     * list is never compacted, so a later frame's tone set lines up with an
+     * earlier one's slot for slot and can be compared.
      *
      * <p>The dual-tone products are the CCIF/DIN set the IMD analyser
      * measures:
@@ -567,10 +568,13 @@ public class FreqRespCalHelper {
      *   d2L = f2 - f1,               d2H = f2 + f1
      *   dnL = (n-1)*f1 - (n-2)*f2,   dnH = (n-1)*f2 - (n-2)*f1   (n &gt;= 3)
      * </pre>
+     *
+     * @param r the spectrum, its harmonic ladder placed
+     * @return the tone frequencies by slot, Hz; 0 for a slot not carried
      */
     public double[] toneFrequencies(FftResult r) {
         int harmonics = Math.max(0, r.harmonicCount);
-        double[] tones = new double[2 + harmonics + 2 * (ImdResult.MAX_ORDER - 1)];
+        double[] tones = new double[toneCount(r)];
         double binWidth = r.sampleRate / (double) r.fftSize;
         tones[0] = (Double.isFinite(r.fundamentalHzRefined) && r.fundamentalHzRefined > 0.0)
                 ? r.fundamentalHzRefined : r.fundamentalBin * binWidth;
@@ -602,53 +606,41 @@ public class FreqRespCalHelper {
         return tones;
     }
 
-    /**
-     * The main-lobe geometry of every tone of {@link #toneFrequencies},
-     * measured on the frame's RAW bin magnitudes: a tone's energy fills the
-     * analysis window's whole main lobe, so a tone-only row's single value
-     * {@code H(f_tone)} is written across exactly these bins.
+    /** How many slots {@link #toneFrequencies} has: the fundamental, the
+     *  harmonics, the second fundamental and the two products of every
+     *  intermodulation order from 2 to {@link ImdResult#MAX_ORDER}.
      *
-     * <p>All spans come from the frame as it arrives, in one pass, so no span
-     * is measured on bins an earlier tone or an earlier row has already
-     * rewritten.
-     *
-     * <p>The calibration's own frequency range is NOT applied here: each
-     * loaded row has its own range while this geometry is a property of the
-     * frame, shared by every row and compared frame to frame to decide whether
-     * the held response still fits.  The range filter therefore sits in
-     * {@link #cascadeInverse}, where the row is known.
-     *
-     * @return one {@link ToneLobe} per tone, in the slot order of
-     *         {@link #toneFrequencies}; {@code null} for a tone the frame does
-     *         not carry or whose peak falls outside {@code 1 .. fftSize/2}
-     */
-    public ToneLobe[] toneLobeSpans(FftResult r, double[] tones) {
-        int half = r.fftSize / 2;
-        double binWidth = r.sampleRate / (double) r.fftSize;
-        IntToDoubleFunction mag = k -> Math.hypot(r.re[k], r.im[k]);
-        ToneLobe[] lobes = new ToneLobe[tones.length];
-        for (int t = 0; t < tones.length; t++) {
-            double hz = tones[t];
-            if (!(hz > 0.0)) continue;
-            int peak = (int) Math.round(hz / binWidth);
-            if (peak < 1 || peak > half) continue;
-            double floor = ToneLobeLift.localFloor(mag, peak, half, binWidth, r.windowType);
-            int[] edges  = ToneLobeLift.lobeBins(mag, peak, half, floor, binWidth, r.windowType);
-            lobes[t] = new ToneLobe(peak, edges[0], edges[1], floor, mag.applyAsDouble(peak));
-        }
-        return lobes;
+     * @param r the spectrum
+     * @return the slot count */
+    public int toneCount(FftResult r) {
+        return 2 + Math.max(0, r.harmonicCount) + 2 * (ImdResult.MAX_ORDER - 1);
     }
 
-    /** Whether two lobe sets cover the same bins slot for slot - the fit test
-     *  between a held correction and a later frame.  The levels the stretch is
-     *  anchored on do not enter it: they move a little with every frame while
-     *  the bins the correction stands in do not. */
-    public boolean sameGeometry(ToneLobe[] a, ToneLobe[] b) {
-        if (a == null || b == null || a.length != b.length) return false;
-        for (int t = 0; t < a.length; t++) {
-            if (a[t] == null ? b[t] != null : !a[t].sameBins(b[t])) return false;
+    /** The slot of the second fundamental in {@link #toneFrequencies}: right
+     *  after the harmonics; the intermodulation products follow it.
+     *
+     * @param r the spectrum
+     * @return the slot index */
+    public int secondToneSlot(FftResult r) {
+        return 1 + Math.max(0, r.harmonicCount);
+    }
+
+    /** The bin of every tone of {@link #toneFrequencies} on {@code r}'s grid,
+     *  slot for slot - the positions a tone-only row's values stand at, so a
+     *  held correction fits a later frame exactly while these are the same.
+     *
+     * @param r the spectrum
+     * @return the bins by slot; -1 for a slot not carried or off the grid */
+    public int[] toneBins(FftResult r) {
+        double[] tones = toneFrequencies(r);
+        int half = r.fftSize / 2;
+        double binWidth = r.sampleRate / (double) r.fftSize;
+        int[] bins = new int[tones.length];
+        for (int t = 0; t < tones.length; t++) {
+            int bin = tones[t] > 0.0 ? (int) Math.round(tones[t] / binWidth) : -1;
+            bins[t] = bin >= 1 && bin <= half ? bin : -1;
         }
-        return true;
+        return bins;
     }
 
     /**
@@ -667,15 +659,23 @@ public class FreqRespCalHelper {
      * alone"; no with-noise row at all leaves the arrays {@code null}.  A
      * tone-only row contributes ONE value per tone, {@code H(f_tone)}, and
      * nothing between the tones: the rows' product at each tone is inverted
-     * into a {@link LobeCorrection} on that tone's lobe, applied at correction
-     * time with the lobe's stretch - the shaping needs the frame's own bin
-     * magnitudes, so it cannot be folded into a per-bin array here.  A tone
-     * whose lobe no tone-only row spans keeps {@code null}.
+     * into a {@link LobeCorrection}, applied at correction time across the
+     * tone's lobe as the spectrum measured it, with the lobe's stretch - the
+     * shaping needs the frame's own bin levels, so it cannot be folded into a
+     * per-bin array here.  A tone no tone-only row spans keeps {@code null}.
+     *
+     * @param withNoiseRows the rows that correct every bin
+     * @param toneOnlyRows  the rows that correct the tones only
+     * @param tones         the tone frequencies by slot
+     *                      ({@link #toneFrequencies}), Hz; 0 for a slot not
+     *                      carried
+     * @param fftSize       the FFT length, samples
+     * @param sampleRate    the capture rate, Hz
+     * @return the cascade
      */
     public InverseCascade cascadeInverse(List<FreqRespCalibration> withNoiseRows,
                                          List<FreqRespCalibration> toneOnlyRows,
-                                         double[] tones, ToneLobe[] toneLobes,
-                                         int fftSize, int sampleRate) {
+                                         double[] tones, int fftSize, int sampleRate) {
         int half = fftSize / 2;
         double binWidth = sampleRate / (double) fftSize;
         double[] gRe = null;
@@ -711,8 +711,7 @@ public class FreqRespCalHelper {
         LobeCorrection[] lobes = new LobeCorrection[tones.length];
         for (int t = 0; t < tones.length; t++) {
             double hz = tones[t];
-            ToneLobe lobe = toneLobes[t];
-            if (lobe == null || !(hz > 0.0)) continue;
+            if (!(hz > 0.0)) continue;
             double[] g = { 0.0, 0.0 };
             double[] gMagSq = { 0.0 };
             for (FreqRespCalibration cal : toneOnlyRows) {
@@ -722,7 +721,7 @@ public class FreqRespCalHelper {
                 multiplyIn(g, gMagSq, h[0], h[1]);
             }
             if (!(gMagSq[0] > 0.0)) continue;
-            lobes[t] = new LobeCorrection(lobe, g[0] / gMagSq[0], -g[1] / gMagSq[0]);
+            lobes[t] = new LobeCorrection(g[0] / gMagSq[0], -g[1] / gMagSq[0]);
         }
         return new InverseCascade(gRe, gIm, lobes);
     }
@@ -771,68 +770,236 @@ public class FreqRespCalHelper {
     }
 
     /**
-     * Divides every bin the cascade reached by its response, in place, and
-     * returns how many bins were written.  Every such bin has its level and
-     * phase restated; every other bin keeps exactly the numbers the analyser
-     * wrote, since a recompute would move them by a rounding step.
+     * Applies {@code inv} to {@code r} in place.  Every bin it reaches has
+     * its level and phase restated; every other bin keeps exactly the numbers
+     * the analyser wrote, since a recompute would move them by a rounding
+     * step.
      *
-     * <p>Two passes.  The tone lobes first, on the frame's RAW magnitudes,
-     * which the stretch reads: within a lobe the tone-only reciprocal turns
-     * every bin by its full phase, while its magnitude is raised to the bin's
-     * stretch exponent - in full at the peak, not at all on the floor, the
-     * log-height between ({@link ToneLobeLift#stretchExponent}) - so the lobe
-     * grows taller with its feet on the floor instead of lifting off it as a
-     * flat-topped box.  The first tone of the slot order owns a bin two lobes
-     * share.  Then, when a with-noise row is loaded, every bin of the
-     * spectrum gets one complex multiply by the stored per-bin reciprocal;
-     * without one that walk is skipped and the correction costs the lobes
-     * alone.
+     * <p>Two passes.  The tone lobes first: each tone's lobe is lifted by its
+     * tone-only reciprocal ({@link #liftLobe}).  Then, when a with-noise row
+     * is loaded, every bin of the spectrum gets one complex multiply by the
+     * per-bin reciprocal; without one that walk is skipped and the
+     * correction costs the lobes alone.  The caller guarantees that
+     * {@code inv} was sampled on this frame's grid.
      *
-     * <p>The level scale is read off the fundamental BEFORE any bin is
-     * changed, so the whole spectrum is restated on one consistent scale.  The
-     * caller guarantees that {@code inv} was sampled on this frame's grid.
+     * @param r     the spectrum as it arrived
+     * @param lines its lines, in the slot order of {@link #toneFrequencies}
+     * @param inv   the correction
      */
-    public int applyInverseInPlace(FftResult r, InverseCascade inv) {
+    public void applyInverseInPlace(FftResult r, SpectralLine[] lines, InverseCascade inv) {
+        liftLobes(r, lines, inv);
+        multiplyBins(r, inv);
+    }
+
+    /**
+     * Takes {@code inv} off a spectrum it was applied to, in place - the
+     * reverse of {@link #applyInverseInPlace}: first the with-noise rows'
+     * reciprocal per bin, then each tone lobe lowered by its tone-only
+     * reciprocal.  A lift leaves every bin at or below the floor where it is
+     * and the peak is read as it stands, so each bin's stretch exponent is
+     * the one it was lifted with and the spectrum comes back.
+     *
+     * @param r     the spectrum, corrected with {@code inv}
+     * @param lines its lines, in the slot order of {@link #toneFrequencies}
+     * @param inv   the correction to take off
+     */
+    public void removeInverseInPlace(FftResult r, SpectralLine[] lines, InverseCascade inv) {
+        InverseCascade back = inv.reciprocal();
+        multiplyBins(r, back);
+        liftLobes(r, lines, back);
+    }
+
+    /**
+     * Lifts the main lobe of one line of {@code r} in place by the complex
+     * {@code factor} - the one lift every correction of the trace takes: the
+     * tone-only rows, the manual fundamental, a clamped distortion line.  Every
+     * lobe bin's phase turns by the factor's argument and its magnitude grows
+     * by {@code |factor|} raised to the bin's stretch exponent
+     * ({@link #lobeScales}), so the lobe grows taller with its feet on the
+     * floor.  The lobe and its floor are the line's, measured on the
+     * spectrum as it arrived; the peak is read as it stands.  The level, the
+     * phasor and the power average are restated together, on the level scale
+     * the fundamental bin carries.
+     *
+     * <p>A spectrum that already carries with-noise rows ({@code carried})
+     * has the noise around the line moved by their gain at the line's bin, so
+     * the floor is moved by the same gain.
+     *
+     * @param r        the spectrum
+     * @param line     the line whose lobe is lifted
+     * @param factorRe real part of the factor
+     * @param factorIm imaginary part of the factor
+     * @param carried  the correction the spectrum already carries;
+     *                 {@code null} for none
+     */
+    public void liftLobe(FftResult r, SpectralLine line, double factorRe, double factorIm,
+                         InverseCascade carried) {
+        double full = Math.hypot(factorRe, factorIm);
+        if (line == null || !line.measurable() || !(full > 0.0)) return;
+        int lo = lobeLo(line);
+        double[] scales = lobeScales(r, line, line.bandTopDbFs() + noiseRowGainDb(carried, line.bin()), full);
+        double linPerMag = levelPerMagnitude(r);
+        double uRe = factorRe / full;
+        double uIm = factorIm / full;
+        for (int i = 0; i < scales.length; i++) {
+            restateBin(r, lo + i, uRe * scales[i], uIm * scales[i], linPerMag);
+        }
+        followFundamental(r);
+    }
+
+    /** Lifts the lobe of every line {@code inv} carries a tone-only
+     *  correction for.
+     *
+     * @param r     the spectrum
+     * @param lines the lines, in the slot order of {@link #toneFrequencies}
+     * @param inv   the correction */
+    private void liftLobes(FftResult r, SpectralLine[] lines, InverseCascade inv) {
+        LobeCorrection[] lobes = inv.lobes();
+        for (int t = 0; t < lobes.length && t < lines.length; t++) {
+            if (lobes[t] != null) liftLobe(r, lines[t], lobes[t].invRe(), lobes[t].invIm(), null);
+        }
+    }
+
+    /** Multiplies every bin the with-noise rows of {@code inv} reached by its
+     *  per-bin reciprocal; nothing without such a row.
+     *
+     * @param r   the spectrum
+     * @param inv the correction */
+    private void multiplyBins(FftResult r, InverseCascade inv) {
+        if (!inv.hasNoiseRows()) return;
+        double[] invRe = inv.invRe();
+        double[] invIm = inv.invIm();
+        double linPerMag = levelPerMagnitude(r);
+        for (int k = 1; k <= r.fftSize / 2; k++) {
+            if (invRe[k] == 0.0 && invIm[k] == 0.0) continue;
+            restateBin(r, k, invRe[k], invIm[k], linPerMag);
+        }
+        followFundamental(r);
+    }
+
+    /**
+     * The power gain {@link #applyInverseInPlace} gives every bin of {@code r}
+     * with {@code inv}, written into {@code gains} (bins {@code 0 .. fftSize/2}):
+     * {@code |v|^2} of the bin's whole correction - the line lobe's stretched
+     * magnitude ({@link #lobeScales}) times the with-noise rows' reciprocal -
+     * and 1 where the correction leaves the bin alone.  Read on {@code r} as
+     * it arrived, on the same lines the correction reads: a level measured on
+     * the spectrum times this gain is the level the corrected spectrum
+     * carries, so a sum over measured bins weighted by it is the sum over the
+     * corrected spectrum.
+     *
+     * @param r     the spectrum as it arrived
+     * @param lines its lines, in the slot order of {@link #toneFrequencies}
+     * @param inv   the correction
+     * @param gains the gains by bin, written
+     */
+    public void binPowerGains(FftResult r, SpectralLine[] lines, InverseCascade inv, double[] gains) {
         int half = r.fftSize / 2;
-        double oldFundMag = Math.hypot(r.re[r.fundamentalBin], r.im[r.fundamentalBin]);
-        double linPerMag  = oldFundMag > 0.0 ? r.fundamentalLinear / oldFundMag : 0.0;
-        boolean[] written = new boolean[half + 1];
-        int corrected = 0;
-        for (LobeCorrection lc : inv.lobes()) {
-            if (lc == null) continue;
-            ToneLobe lobe = lc.lobe();
-            double full = lc.magnitude();
-            if (!(full > 0.0)) continue;
-            double uRe = lc.invRe() / full;
-            double uIm = lc.invIm() / full;
-            for (int k = Math.max(1, lobe.lo()); k <= Math.min(half, lobe.hi()); k++) {
-                if (written[k]) continue;
-                double mag = Math.hypot(r.re[k], r.im[k]);
-                double t = ToneLobeLift.stretchExponent(mag, lobe.floorMag(), lobe.peakMag());
-                double scale = Math.pow(full, t);
-                restateBin(r, k, uRe * scale, uIm * scale, linPerMag);
-                written[k] = true;
-                corrected++;
+        Arrays.fill(gains, 0, half + 1, 1.0);
+        LobeCorrection[] lobes = inv.lobes();
+        for (int t = 0; t < lobes.length && t < lines.length; t++) {
+            SpectralLine line = lines[t];
+            if (lobes[t] == null || line == null || !line.measurable()) continue;
+            int lo = lobeLo(line);
+            double[] scales = lobeScales(r, line, line.bandTopDbFs(), lobes[t].magnitude());
+            for (int i = 0; i < scales.length; i++) {
+                gains[lo + i] = scales[i] * scales[i];
             }
         }
         if (inv.hasNoiseRows()) {
             double[] invRe = inv.invRe();
             double[] invIm = inv.invIm();
             for (int k = 1; k <= half; k++) {
-                double vRe = invRe[k];
-                double vIm = invIm[k];
-                if (vRe == 0.0 && vIm == 0.0) continue;
-                restateBin(r, k, vRe, vIm, linPerMag);
-                if (!written[k]) corrected++;
+                double vMagSq = invRe[k] * invRe[k] + invIm[k] * invIm[k];
+                if (vMagSq > 0.0) gains[k] *= vMagSq;
             }
         }
-        return corrected;
     }
 
-    /** One bin: {@code Z = X * v}, then the level and phase the display and
-     *  the statistics read.  A power average the result carries moves by the
-     *  same {@code |v|}: it is corrected exactly where and as much as the
-     *  spectrum is. */
+    /** The magnitude a lift of full magnitude {@code full} scales each bin
+     *  of {@code line}'s lobe by: {@code full} raised to the bin's stretch
+     *  exponent ({@link ToneLobeLift#stretchExponent}) - in full at the peak,
+     *  not at all at or below the floor, the bin's log-height between; the
+     *  whole lobe in full where no floor was measured.  The peak is read once,
+     *  before any bin changes.
+     *
+     * @param r         the spectrum
+     * @param line      the line
+     * @param floorDbFs the floor the stretch stands on, dBFS
+     * @param full      the lift's full magnitude
+     * @return the scale of every lobe bin, from the lobe's first bin on */
+    private double[] lobeScales(FftResult r, SpectralLine line, double floorDbFs, double full) {
+        int lo = lobeLo(line);
+        int hi = Math.min(r.amplitudeDbFs.length - 1, line.bin() + line.skirtHalfWidthBins());
+        double floorLin = linearOf(floorDbFs);
+        double peakLin  = linearOf(r.amplitudeDbFs[line.bin()]);
+        double[] scales = new double[Math.max(0, hi - lo + 1)];
+        for (int i = 0; i < scales.length; i++) {
+            double t = ToneLobeLift.stretchExponent(linearOf(r.amplitudeDbFs[lo + i]), floorLin, peakLin);
+            scales[i] = Math.pow(full, t);
+        }
+        return scales;
+    }
+
+    /** The first bin of {@code line}'s lobe.
+     *
+     * @param line the line
+     * @return the bin, at least 1 */
+    private int lobeLo(SpectralLine line) {
+        return Math.max(1, line.bin() - line.skirtHalfWidthBins());
+    }
+
+    /** The with-noise rows' gain at {@code bin}, {@code 20*log10|v|}: how
+     *  many dB they moved that bin.
+     *
+     * @param inv the correction; {@code null} for none
+     * @param bin the bin
+     * @return the gain, dB; 0 without with-noise rows or where they did not
+     *         reach */
+    private double noiseRowGainDb(InverseCascade inv, int bin) {
+        if (inv == null || !inv.hasNoiseRows() || bin < 1 || bin >= inv.invRe().length) return 0.0;
+        double vMagSq = inv.invRe()[bin] * inv.invRe()[bin] + inv.invIm()[bin] * inv.invIm()[bin];
+        return vMagSq > 0.0 ? POWER_DB_FACTOR * Math.log10(vMagSq) : 0.0;
+    }
+
+    /** A level in dBFS as a linear amplitude, full scale 1.
+     *
+     * @param dbFs the level, dBFS; {@link Double#NaN} stays NaN
+     * @return the linear amplitude */
+    private double linearOf(double dbFs) {
+        return Math.pow(10.0, dbFs / AMPLITUDE_DB_FACTOR);
+    }
+
+    /** Linear amplitude per unit of phasor magnitude, read off the
+     *  fundamental bin - its level against its phasor - before the pass
+     *  changes any bin, so the pass restates the spectrum on one scale.
+     *
+     * @param r the spectrum
+     * @return the scale; 0 where the fundamental bin is silent */
+    private double levelPerMagnitude(FftResult r) {
+        double fundMag = Math.hypot(r.re[r.fundamentalBin], r.im[r.fundamentalBin]);
+        return fundMag > 0.0 ? linearOf(r.amplitudeDbFs[r.fundamentalBin]) / fundMag : 0.0;
+    }
+
+    /** The fundamental's level scalars stand for the spectrum as it is: they
+     *  follow its bin after a pass.
+     *
+     * @param r the spectrum */
+    private void followFundamental(FftResult r) {
+        r.fundamentalDbFs   = r.amplitudeDbFs[r.fundamentalBin];
+        r.fundamentalLinear = linearOf(r.fundamentalDbFs);
+    }
+
+    /** One bin: {@code Z = X * v}, then the level the display reads; the
+     *  phase stays in the phasor, where the save reads it.  A power average
+     *  the result carries moves by the same {@code |v|}: it is corrected
+     *  exactly where and as much as the spectrum is.
+     *
+     * @param r         the spectrum
+     * @param k         the bin
+     * @param vRe       real part of the factor
+     * @param vIm       imaginary part of the factor
+     * @param linPerMag linear amplitude per unit of phasor magnitude */
     private void restateBin(FftResult r, int k, double vRe, double vIm, double linPerMag) {
         double xRe = r.re[k];
         double xIm = r.im[k];
@@ -843,7 +1010,6 @@ public class FreqRespCalHelper {
         double newAmpLin = Math.hypot(zRe, zIm) * linPerMag;
         r.amplitudeDbFs[k] = newAmpLin > MIN_LINEAR_AMPLITUDE
                 ? AMPLITUDE_DB_FACTOR * Math.log10(newAmpLin) : FLOOR_DB;
-        r.phaseDeg[k] = Math.toDegrees(Math.atan2(zIm, zRe));
         if (r.hasPowerAverage && r.powerAverageDbFs[k] > FLOOR_DB) {
             double gain = Math.hypot(vRe, vIm);
             r.powerAverageDbFs[k] = gain > 0.0
@@ -851,47 +1017,44 @@ public class FreqRespCalHelper {
         }
     }
 
-    /** The cascade's gain at one bin, {@code 20*log10|G|} - how many dB the
-     *  correction takes off that bin, so a level measured after the correction
-     *  plus this value is the level before it: the with-noise rows' gain there
-     *  plus, inside a tone lobe, the tone-only rows' full gain at the tone (the
-     *  peak's, which a tone reading is taken at).  0 for a bin the cascade never
-     *  reached and for one outside the sampled grid. */
-    public double gainDbAt(InverseCascade inv, int bin) {
+    /** The cascade's gain for a line, {@code 20*log10|G|} - how many dB the
+     *  correction takes off the line, so a level measured after the
+     *  correction plus this value is the level before it: the with-noise
+     *  rows' gain at the line's bin plus the tone-only rows' full gain at the
+     *  line's own tone.  0 without a correction and for a bin the cascade
+     *  never reached.
+     *
+     * @param inv  the correction; {@code null} for none
+     * @param slot the line's slot of {@link #toneFrequencies}; -1 for a bin
+     *             no tone stands on
+     * @param bin  the line's bin
+     * @return the gain, dB */
+    public double gainDbAt(InverseCascade inv, int slot, int bin) {
         if (inv == null || bin < 1) return 0.0;
-        double gainDb = 0.0;
-        if (inv.hasNoiseRows() && bin < inv.invRe().length) {
-            double vRe = inv.invRe()[bin];
-            double vIm = inv.invIm()[bin];
-            double vMagSq = vRe * vRe + vIm * vIm;
-            if (vMagSq > 0.0) gainDb -= POWER_DB_FACTOR * Math.log10(vMagSq);
-        }
-        for (LobeCorrection lc : inv.lobes()) {
-            if (lc == null || bin < lc.lobe().lo() || bin > lc.lobe().hi()) continue;
-            double full = lc.magnitude();
-            if (full > 0.0) gainDb -= AMPLITUDE_DB_FACTOR * Math.log10(full);
-            break;
+        double gainDb = -noiseRowGainDb(inv, bin);
+        LobeCorrection[] lobes = inv.lobes();
+        if (slot >= 0 && slot < lobes.length && lobes[slot] != null && lobes[slot].magnitude() > 0.0) {
+            gainDb -= AMPLITUDE_DB_FACTOR * Math.log10(lobes[slot].magnitude());
         }
         return gainDb;
     }
 
-    /**
-     * Snapshots the pre-correction fundamental + harmonic peak levels so the
-     * chart can draw blue "before-cal" dots alongside the red "after-cal" dots.
-     */
-    public double[][] capturePreCorrectionPeaks(FftResult result) {
-        int count = 1 + result.harmonicCount;
-        double[] freqs = new double[count];
-        double[] dbFs  = new double[count];
-        freqs[0] = result.fundamentalHz;
-        dbFs[0]  = result.fundamentalDbFs;
-        for (int h = 0; h < result.harmonicCount; h++) {
-            if (result.harmonicBins[h] > 0) {
-                freqs[1 + h] = result.harmonicHz[h];
-                dbFs[1 + h]  = result.harmonicDbFs[h];
+    /** {@link #gainDbAt(InverseCascade, int, int)} for a bin, the tone that
+     *  owns it found among {@code lines}: the first whose lobe holds the bin.
+     *
+     * @param lines the lines, in the slot order of {@link #toneFrequencies}
+     * @param inv   the correction; {@code null} for none
+     * @param bin   the bin
+     * @return the gain, dB */
+    public double gainDbAt(SpectralLine[] lines, InverseCascade inv, int bin) {
+        for (int t = 0; t < lines.length; t++) {
+            SpectralLine line = lines[t];
+            if (line != null && line.measurable()
+                    && Math.abs(bin - line.bin()) <= line.skirtHalfWidthBins()) {
+                return gainDbAt(inv, t, bin);
             }
         }
-        return new double[][]{ freqs, dbFs };
+        return gainDbAt(inv, -1, bin);
     }
 
     /**

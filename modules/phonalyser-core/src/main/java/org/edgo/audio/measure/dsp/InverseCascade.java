@@ -25,7 +25,8 @@ package org.edgo.audio.measure.dsp;
  * such row is loaded, so the applying pass skips the spectrum walk.  The
  * tone-only rows give one {@link LobeCorrection} per tone slot of
  * {@link FreqRespCalHelper#toneFrequencies}, {@code null} where the frame
- * carries no such tone or no row spans it.
+ * carries no such tone or no row spans it; the lobe each is applied to is the
+ * spectrum's own ({@code FftResult#toneLobes}).
  *
  * @param invRe real part of the with-noise reciprocal per bin
  *              {@code 0 .. fftSize/2}, or {@code null}; {@code (0, 0)} marks a
@@ -35,19 +36,20 @@ package org.edgo.audio.measure.dsp;
  */
 public record InverseCascade(double[] invRe, double[] invIm, LobeCorrection[] lobes) {
 
-    /** Whether any with-noise row reached the spectrum. */
+    /** Whether any with-noise row reached the spectrum.
+     *
+     * @return {@code true} when the per-bin reciprocal is present */
     public boolean hasNoiseRows() {
         return invRe != null;
     }
 
     /**
-     * The cascade that takes this one off again: every factor's complex
-     * reciprocal, {@code conj(v)/|v|^2}, per bin and per lobe, the lobes and
-     * their anchors kept.  Applied by {@link FreqRespCalHelper#applyInverseInPlace}
-     * to a spectrum this cascade corrected, with the lobes measured on that
-     * corrected spectrum, it gives the spectrum back: the stretch exponent of a
-     * lobe bin is the same before and after the correction.  A bin marked
-     * {@code (0, 0)} stays marked.
+     * The cascade of every factor's complex reciprocal, {@code conj(v)/|v|^2},
+     * per bin and per tone - what {@link FreqRespCalHelper#removeInverseInPlace}
+     * divides a corrected spectrum by.  A bin marked {@code (0, 0)} stays
+     * marked.
+     *
+     * @return the reciprocal cascade
      */
     public InverseCascade reciprocal() {
         double[] re = null;
@@ -68,7 +70,7 @@ public record InverseCascade(double[] invRe, double[] invIm, LobeCorrection[] lo
             if (lc == null) continue;
             double magSq = lc.invRe() * lc.invRe() + lc.invIm() * lc.invIm();
             if (!(magSq > 0.0)) continue;
-            back[t] = new LobeCorrection(lc.lobe(), lc.invRe() / magSq, -lc.invIm() / magSq);
+            back[t] = new LobeCorrection(lc.invRe() / magSq, -lc.invIm() / magSq);
         }
         return new InverseCascade(re, im, back);
     }

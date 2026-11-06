@@ -33,6 +33,7 @@ import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.WindowType;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
+import org.edgo.audio.measure.fft.ReadoutSettings;
 import org.jfree.chart.ChartFactory;
 import org.jfree.chart.ChartUtils;
 import org.jfree.chart.JFreeChart;
@@ -126,8 +127,9 @@ public class RegressionCalibrator {
 
         // --- Step 1: rough frequency from FFT --------------------------------
         int fftSize = Integer.highestOneBit(Math.min(samples.length, 1 << 20));
-        FftResult fftResult = new FftAnalyzer().analyze(samples, sampleRate, fftSize, 1, 1,
-                WindowType.HANN, FftOverlap.PCT_0, 0.0, 0.0, true, Double.NaN, true, Double.NaN,
+        FftResult fftResult = new FftAnalyzer().analyze(samples, sampleRate, fftSize,
+                new ReadoutSettings(1, 1, 0.0, 0.0, Double.NaN),
+                WindowType.HANN, FftOverlap.PCT_0, true, Double.NaN,
                 new FftResult(), FftOverlap.PCT_0.hopSamples(fftSize));
         double roughFreqHz = fftResult.fundamentalHz;
         log.info("Rough frequency from FFT: {} Hz", String.format(Locale.US, "%.4f", roughFreqHz));

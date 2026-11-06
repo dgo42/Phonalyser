@@ -20,11 +20,13 @@ package org.edgo.audio.measure.gui.fft;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.edgo.audio.measure.common.SpectrumStatistics;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.WindowType;
-import org.edgo.audio.measure.fft.CoherentAccumulator;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
+import org.edgo.audio.measure.fft.ReadoutSettings;
+import org.edgo.audio.measure.fft.SpectrumAccumulator;
 import org.edgo.audio.measure.test.AbstractReflectiveTest;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -49,7 +51,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p>The average is collected the way the live FFT collects it: every frame one
  * analysis cycle, analysed with the worker's own settings and added by the
  * worker's private accumulate step (reached by reflection), then written back
- * through the worker's accumulator and the statistics recomputed.
+ * through the worker's accumulator and the statistics calculated.
  *
  * <p><b>Scope note:</b> the frames of one buffer carry NO inter-frame clock
  * drift (they sit at exact sample offsets), so this isolates the MEASUREMENT +
@@ -68,6 +70,10 @@ class FftHarmonicStabilityTest extends AbstractReflectiveTest {
     private static final WindowType WINDOW         = WindowType.BH7;
     private static final FftOverlap OVERLAP        = FftOverlap.PCT_75;
     private static final int        HARMONIC_COUNT = 8;                // H2..H9
+    /** The readout settings: H2..H9, no distortion band, no manual
+     *  fundamental. */
+    private static final ReadoutSettings SETTINGS  =
+            new ReadoutSettings(HARMONIC_COUNT, HARMONIC_COUNT, 0.0, 0.0, Double.NaN);
     private static final boolean    COHERENT       = true;
     private static final int        FRAMES         = 400;              // "averages" per collection
     private static final int        COLLECTIONS    = 20;
@@ -109,7 +115,11 @@ class FftHarmonicStabilityTest extends AbstractReflectiveTest {
      *  analysis cycle - analysed with the worker's own settings and added by
      *  the worker's accumulate step at its sample offset - then the
      *  accumulator written back onto the last cycle's result and the
-     *  statistics recomputed. */
+     *  statistics calculated.
+     *
+     * @param sig     the capture
+     * @param overlap the frame spacing
+     * @return the average */
     private FftResult average(double[] sig, FftOverlap overlap) {
         FftAnalyzer       analyzer = new FftAnalyzer();
         FftAnalyzerWorker worker   = new FftAnalyzerWorker(null);   // headless
@@ -120,20 +130,31 @@ class FftHarmonicStabilityTest extends AbstractReflectiveTest {
         for (int f = 0; f < frames; f++) {
             long base = (long) f * hop;
             System.arraycopy(sig, (int) base, win, 0, FFT_SIZE);
-            analyzer.setSpectrumOnly(true);
             analyzer.setMultiTone(false);
             analyzer.setSecondToneHintHz(Double.NaN);
-            r = analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, HARMONIC_COUNT, HARMONIC_COUNT,
-                    WINDOW, overlap, 0.0, 0.0, COHERENT, Double.NaN, false, Double.NaN,
+            r = analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, SETTINGS,
+                    WINDOW, overlap, COHERENT, Double.NaN,
                     new FftResult(), hop);
             call(worker, ACCUMULATE, r, base, COHERENT, Integer.MAX_VALUE);
         }
-        this.<CoherentAccumulator>field(worker, ACCUMULATOR).overlayOnto(r);
+        this.<SpectrumAccumulator>field(worker, ACCUMULATOR).overlayOnto(r);
         r.captureRawPeaks();
-        analyzer.recomputeStats(r);
+        new SpectrumStatistics().calculateStat(r, SETTINGS, null);
         return r;
     }
 
+    /** The level harmonic {@code i + 2} is displayed at.
+     *
+     * @param r the average
+     * @param i the harmonic's index, 0 for H2
+     * @return the level, dBFS; NaN where the result carries no such harmonic */
+    private double harmonicDbFs(FftResult r, int i) {
+        return (r.harmonics != null && i < r.harmonics.length)
+                ? r.harmonics[i].deembeddedAmplitudeDbFs() : Double.NaN;
+    }
+
+    /** The run-to-run spread of every harmonic over independent noise seeds,
+     *  read three ways: the displayed level, the single bin, the lock-in. */
     @Test
     void harmonicStabilityAcrossCollections() {
         double[][] hDbFs    = new double[HARMONIC_COUNT][COLLECTIONS];  // existing peak-pick (window search)
@@ -155,8 +176,7 @@ class FftHarmonicStabilityTest extends AbstractReflectiveTest {
             snr[c] = r.snrDb;
             StringBuilder sb = new StringBuilder();
             for (int i = 0; i < HARMONIC_COUNT; i++) {
-                hDbFs[i][c] = (r.harmonicDbFs != null && i < r.harmonicDbFs.length)
-                        ? r.harmonicDbFs[i] : Double.NaN;
+                hDbFs[i][c] = harmonicDbFs(r, i);
                 sb.append(String.format("  H%d=%.2f", i + 2, hDbFs[i][c]));
             }
             LOG.info(String.format(
@@ -228,8 +248,7 @@ class FftHarmonicStabilityTest extends AbstractReflectiveTest {
                     double[] sig = synthesize(SEED + c, frames, ov);
                     FftResult r = average(sig, ov);
                     for (int i = 0; i < HARMONIC_COUNT; i++) {
-                        h[i][c] = (r.harmonicDbFs != null && i < r.harmonicDbFs.length)
-                                ? r.harmonicDbFs[i] : Double.NaN;
+                        h[i][c] = harmonicDbFs(r, i);
                     }
                 }
                 StringBuilder sb = new StringBuilder();
@@ -260,8 +279,7 @@ class FftHarmonicStabilityTest extends AbstractReflectiveTest {
                 double[] sig = synthesize(SEED + c, frames, PLATEAU_OVERLAP);
                 FftResult r = average(sig, PLATEAU_OVERLAP);
                 for (int i = 0; i < HARMONIC_COUNT; i++) {
-                    h[i][c] = (r.harmonicDbFs != null && i < r.harmonicDbFs.length)
-                            ? r.harmonicDbFs[i] : Double.NaN;
+                    h[i][c] = harmonicDbFs(r, i);
                 }
             }
             StringBuilder sb = new StringBuilder();
@@ -272,8 +290,13 @@ class FftHarmonicStabilityTest extends AbstractReflectiveTest {
 
     /** One collection's buffer: tone + H2..H9 + Gaussian floor, TPDF-dithered to
      *  {@link #DITHER_BITS}.  Length = exactly {@link #FRAMES} frames at the chosen
-     *  overlap, so {@code analyze()} averages that many. */
-    private static double[] synthesize(long seed, int frames, FftOverlap overlap) {
+     *  overlap, so {@code analyze()} averages that many.
+     *
+     * @param seed    the noise seed
+     * @param frames  the frames the buffer holds
+     * @param overlap the frame spacing
+     * @return the buffer */
+    private double[] synthesize(long seed, int frames, FftOverlap overlap) {
         int     hop = Math.max(1, (int) Math.round(FFT_SIZE * (1.0 - overlap.fraction)));
         int     n   = FFT_SIZE + (frames - 1) * hop;
         double[] s   = new double[n];
@@ -317,13 +340,21 @@ class FftHarmonicStabilityTest extends AbstractReflectiveTest {
         return s;
     }
 
-    private static double spread(double[] a) {
+    /** The spread of a series: its largest value less its smallest.
+     *
+     * @param a the series
+     * @return the spread */
+    private double spread(double[] a) {
         double min = Double.POSITIVE_INFINITY, max = Double.NEGATIVE_INFINITY;
         for (double x : a) { min = Math.min(min, x); max = Math.max(max, x); }
         return max - min;
     }
 
-    private static double std(double[] a) {
+    /** The standard deviation of a series.
+     *
+     * @param a the series
+     * @return the standard deviation */
+    private double std(double[] a) {
         double mean = 0.0;
         for (double x : a) mean += x;
         mean /= a.length;

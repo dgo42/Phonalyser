@@ -26,6 +26,7 @@ import org.edgo.audio.measure.enums.FundamentalPhaseAlignment;
 import org.edgo.audio.measure.enums.WindowType;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
+import org.edgo.audio.measure.fft.ReadoutSettings;
 import org.edgo.audio.measure.test.AbstractReflectiveTest;
 import org.junit.jupiter.api.Test;
 
@@ -85,6 +86,10 @@ class FftPilotToneAnalyserTest extends AbstractReflectiveTest {
     /** Harmonics the analysis evaluates, as the analysis-cycle loop
      *  states them. */
     private static final int        HARMONICS   = 8;
+    /** The readout settings the analysis-cycle loop stamps: H2..H9, no
+     *  distortion band, no manual fundamental. */
+    private static final ReadoutSettings SETTINGS =
+            new ReadoutSettings(HARMONICS, HARMONICS, 0.0, 0.0, Double.NaN);
     private static final int        CYCLES      = 20;
 
     /** The fundamental's bin: the frequency lock's target, so the line sits on
@@ -158,6 +163,8 @@ class FftPilotToneAnalyserTest extends AbstractReflectiveTest {
      * advance that accounts for all of it, and the excess must stay at zero.
      * Nothing here is written into a bin by hand: the phases come out of the
      * analyser.
+     *
+     * @throws Exception when a worker member cannot be reached
      */
     @Test
     void aSharedTimeBaseDriftCancelsThroughTheRealAnalyser() throws Exception {
@@ -171,6 +178,8 @@ class FftPilotToneAnalyserTest extends AbstractReflectiveTest {
      * with temperature, where its phase response is steep - on top of the
      * shared time-base drift: the excess must report that rotation and
      * nothing else, averaged over the worker's window.
+     *
+     * @throws Exception when a worker member cannot be reached
      */
     @Test
     void aNotchOnlyDriftBecomesTheExcessThroughTheRealAnalyser() throws Exception {
@@ -181,7 +190,9 @@ class FftPilotToneAnalyserTest extends AbstractReflectiveTest {
 
     /** The shared drift again with a hop drawn per analysis cycle, as the
      *  random overlap draws it: no per-cycle advance the recipe removes can be
-     *  a nominal one. */
+     *  a nominal one.
+     *
+     * @throws Exception when a worker member cannot be reached */
     @Test
     void aSharedTimeBaseDriftCancelsWithADrawnHop() throws Exception {
         Run run = drive(false, true, "shared drift, drawn hop");
@@ -189,7 +200,9 @@ class FftPilotToneAnalyserTest extends AbstractReflectiveTest {
         assertDeviationZero(run, "shared drift, drawn hop");
     }
 
-    /** The notch drift again with a hop drawn per analysis cycle. */
+    /** The notch drift again with a hop drawn per analysis cycle.
+     *
+     * @throws Exception when a worker member cannot be reached */
     @Test
     void aNotchOnlyDriftBecomesTheExcessWithADrawnHop() throws Exception {
         Run run = drive(true, true, "notch drift, drawn hop");
@@ -205,6 +218,8 @@ class FftPilotToneAnalyserTest extends AbstractReflectiveTest {
      * its seed candidate (two cycles), the advance must continue the time
      * base's slip from the collection's first cycle, not from the new zero:
      * that continuity is what keeps the accumulator's frames valid.
+     *
+     * @throws Exception when a worker member cannot be reached
      */
     @Test
     void aPilotRezeroCarriesExcessAndAdvance() throws Exception {
@@ -228,6 +243,10 @@ class FftPilotToneAnalyserTest extends AbstractReflectiveTest {
 
     // ── Assertions ─────────────────────────────────────────────────────────
 
+    /** The excess stays at zero on every analysis cycle.
+     *
+     * @param run the run checked
+     * @param why the failure message's reason */
     private void assertZeroExcess(Run run, String why) {
         for (int t = 0; t < run.excessRad().length; t++) {
             assertEquals(0.0, Math.toDegrees(run.excessRad()[t]), TOL_DEG, why + ", analysis cycle " + t);
@@ -237,11 +256,18 @@ class FftPilotToneAnalyserTest extends AbstractReflectiveTest {
     /** The excess the worker applies at analysis cycle {@code t} under the
      *  notch drift: the notch's rotation since the first cycle, which the
      *  per-frame changes sum to exactly - the pilot path
-     *  holds the sum itself. */
+     *  holds the sum itself.
+     *
+     * @param t the analysis cycle
+     * @return the excess, radians */
     private double expectedNotchExcessRad(int t) {
         return NOTCH_STEP_RAD * t;
     }
 
+    /** The excess follows the notch's rotation on every analysis cycle.
+     *
+     * @param run the run checked
+     * @param why the failure message's reason */
     private void assertNotchExcess(Run run, String why) {
         for (int t = 0; t < run.excessRad().length; t++) {
             assertEquals(Math.toDegrees(expectedNotchExcessRad(t)),
@@ -254,7 +280,10 @@ class FftPilotToneAnalyserTest extends AbstractReflectiveTest {
      *  shared time-base drift and under a notch drift alike the deviation
      *  is nothing at all.  A remainder is something rotating the
      *  pilot that the clean fundamental does not see, and the run's log
-     *  carries the per-cycle geometry to say where. */
+     *  carries the per-cycle geometry to say where.
+     *
+     * @param run   the run checked
+     * @param label the run's name in the failure message */
     private void assertDeviationZero(Run run, String label) {
         for (int t = 0; t < run.deviationRad().length; t++) {
             assertEquals(0.0, Math.toDegrees(run.deviationRad()[t]), TOL_DEG,
@@ -275,6 +304,12 @@ class FftPilotToneAnalyserTest extends AbstractReflectiveTest {
      * analysis-cycle loop sets: the two elected pilots with the pair
      * arithmetic their election admitted, the window's absolute start, the
      * drawn hop, the analysed window, the reference mirror and its valid flag.
+     *
+     * @param notchDrift whether the fundamental turns on its own as well
+     * @param randomHop  whether the hop is drawn per analysis cycle
+     * @param label      the run's name in the log
+     * @return what the run produced
+     * @throws Exception when a worker member cannot be reached
      */
     private Run drive(boolean notchDrift, boolean randomHop, String label) throws Exception {
         return drive(notchDrift, randomHop, -1, label);
@@ -283,7 +318,15 @@ class FftPilotToneAnalyserTest extends AbstractReflectiveTest {
     /** The same run with the pilot re-zero armed before analysis cycle
      *  {@code retrackAtCycle} ({@code -1} for never): that cycle executes it
      *  at its end, the way the analysis-cycle loop arms it once the frequency
-     *  lock is tracking. */
+     *  lock is tracking.
+     *
+     * @param notchDrift     whether the fundamental turns on its own as well
+     * @param randomHop      whether the hop is drawn per analysis cycle
+     * @param retrackAtCycle the analysis cycle the re-zero is armed before; -1
+     *                       for never
+     * @param label          the run's name in the log
+     * @return what the run produced
+     * @throws Exception when a worker member cannot be reached */
     private Run drive(boolean notchDrift, boolean randomHop, int retrackAtCycle,
                       String label) throws Exception {
         FftAnalyzer       analyzer = new FftAnalyzer();
@@ -338,16 +381,20 @@ class FftPilotToneAnalyserTest extends AbstractReflectiveTest {
     }
 
     /** One cycle's analysis with the analysis-cycle loop's own arguments: the
-     *  spectrum only (the stats are re-derived from the accumulator), single
-     *  tone, no second-tone hint, the pilot pinned on its bin, coherent
-     *  averaging on, and the frame spacing stated - the drawn hop. */
+     *  raw frame (the statistics are the view's), single tone, no second-tone
+     *  hint, the pilot pinned on its bin, coherent averaging on, and the frame
+     *  spacing stated - the drawn hop.
+     *
+     * @param analyzer the analyser
+     * @param win      the analysis cycle's window
+     * @param hop      the drawn hop, samples
+     * @return the raw frame */
     private FftResult analyse(FftAnalyzer analyzer, double[] win, int hop) {
-        analyzer.setSpectrumOnly(true);
         analyzer.setMultiTone(false);
         analyzer.setSecondToneHintHz(Double.NaN);
         analyzer.setPilotBins(PILOT1_BIN, PILOT2_BIN);
-        return analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, HARMONICS, HARMONICS,
-                WINDOW, FftOverlap.PCT_50, 0.0, 0.0, true, Double.NaN, false, FUND_HINT_HZ,
+        return analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, SETTINGS,
+                WINDOW, FftOverlap.PCT_50, true, FUND_HINT_HZ,
                 new FftResult(), hop);
     }
 
@@ -355,14 +402,22 @@ class FftPilotToneAnalyserTest extends AbstractReflectiveTest {
      *  "pilot vs ref chan": the reference channel's reading of the
      *  fundamental's drift less the excess, both taken from the worker rather
      *  than recomputed, so the case tests the production formula and not a
-     *  copy of it. */
+     *  copy of it.
+     *
+     * @param worker the worker
+     * @param r      the analysis cycle's frame
+     * @return the deviation, radians */
     private double pilotAgainstReference(FftAnalyzerWorker worker, FftResult r) {
         double againstReference = call(worker, "fundamentalAgainstReferenceRad");
         return call(worker, "pilotAgainstReferenceRad", againstReference);
     }
 
     /** The worker's own excess for this analysis cycle in mode PILOT_TONE - the
-     *  private method the analysis-cycle loop calls, reached by reflection. */
+     *  private method the analysis-cycle loop calls, reached by reflection.
+     *
+     * @param worker the worker
+     * @param r      the analysis cycle's frame
+     * @return the excess, radians */
     private double cyclePhiF(FftAnalyzerWorker worker, FftResult r) {
         return call(worker, "cyclePhiF", FundamentalPhaseAlignment.PILOT_TONE, r, true);
     }
@@ -380,7 +435,12 @@ class FftPilotToneAnalyserTest extends AbstractReflectiveTest {
      * drifting notch does.  Each line's phase argument is reduced to one turn
      * before the sine, so the arithmetic stays exact however far the stream
      * has run.
-     */
+     *
+     * @param pos      the window's absolute start, samples
+     * @param hop      the hop, samples
+     * @param slip     the time base's slip, samples
+     * @param notchRad the fundamental's own rotation, radians
+     * @return the window */
     private double[] capture(long pos, int hop, double slip, double notchRad) {
         double[] s = new double[FFT_SIZE + hop];
         for (int n = 0; n < s.length; n++) {
@@ -393,7 +453,11 @@ class FftPilotToneAnalyserTest extends AbstractReflectiveTest {
     }
 
     /** The phase of a line at {@code kappa} bins {@code samples} samples into
-     *  the stream, reduced to one turn. */
+     *  the stream, reduced to one turn.
+     *
+     * @param kappa   the line's position, bins
+     * @param samples the position in the stream, samples
+     * @return the phase, radians */
     private double binPhase(double kappa, double samples) {
         return 2.0 * Math.PI * Math.IEEEremainder(kappa * samples, FFT_SIZE) / FFT_SIZE;
     }

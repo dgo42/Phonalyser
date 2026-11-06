@@ -26,17 +26,22 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.Arrays;
 
+import org.edgo.audio.measure.common.SpectrumStatistics;
 import org.edgo.audio.measure.enums.WindowType;
 import org.junit.jupiter.api.Test;
 
 /**
- * The intermodulation readout travels in the result: {@link FftAnalyzer}
- * fills {@link FftResult#imd} wherever it derives the statistics - for a
- * spectrum that carries a second tone - and clears it for one that does not.
- * A stored spectrum finds its second tone itself and gets the same readout
- * through {@link FftAnalyzer#applyDistortionSettings}.
+ * The intermodulation readout travels in the result:
+ * {@link SpectrumStatistics} fills {@link FftResult#imd} with the statistics
+ * - for a spectrum that carries a second tone - and clears it for one that
+ * does not.  A stored spectrum finds its second tone itself
+ * ({@link FftAnalyzer#findSecondTone}) and gets the same readout.
  */
 class FftAnalyzerImdTest {
+
+    /** The readout settings: no harmonic ladder, no distortion band, no
+     *  manual fundamental. */
+    private static final ReadoutSettings SETTINGS = new ReadoutSettings(0, 0, 0.0, 0.0, Double.NaN);
 
     private static final int    FFT_SIZE  = 8192;
     private static final double BIN_BW_HZ = 10.0;
@@ -56,7 +61,11 @@ class FftAnalyzerImdTest {
     private static final double FREQ_TOLERANCE_HZ = 1.0;
 
     /** Synthetic single-sided spectrum, bins 0 ... FFT_SIZE / 2: a flat floor
-     *  with a line at each given frequency (a NaN frequency places none). */
+     *  with a line at each given frequency.
+     *
+     * @param f1Hz the fundamental's frequency, Hz
+     * @param f2Hz the second line's frequency, Hz; NaN places none
+     * @return the spectrum */
     private FftResult spectrum(double f1Hz, double f2Hz) {
         FftResult r = new FftResult();
         r.fftSize        = FFT_SIZE;
@@ -78,34 +87,34 @@ class FftAnalyzerImdTest {
     }
 
     /**
-     * recomputeStats fills {@code imd} for a two-tone spectrum - with F1 the
+     * The statistics fill {@code imd} for a two-tone spectrum - with F1 the
      * LOWER tone even when the analyser's fundamental is the upper one - and
-     * sets it to null for a single tone, also on a result that carried a
+     * set it to null for a single tone, also on a result that carried a
      * dual-tone readout before.
      */
     @Test
-    void recomputeStatsFillsImdForTwoTonesAndClearsItForOne() {
-        FftAnalyzer analyzer = new FftAnalyzer();
+    void statisticsFillImdForTwoTonesAndClearItForOne() {
+        SpectrumStatistics statistics = new SpectrumStatistics();
 
         FftResult dual = spectrum(F1_HZ, F2_HZ);
         dual.fundamental2HzRefined = F2_HZ;
-        analyzer.recomputeStats(dual);
+        statistics.calculateStat(dual, SETTINGS, null);
         assertNotNull(dual.imd, "a two-tone spectrum carries an IMD readout");
-        assertEquals(F1_HZ, dual.imd.f1Hz, FREQ_TOLERANCE_HZ);
-        assertEquals(F2_HZ, dual.imd.f2Hz, FREQ_TOLERANCE_HZ);
+        assertEquals(F1_HZ, dual.imd.f1.frequencyHz(), FREQ_TOLERANCE_HZ);
+        assertEquals(F2_HZ, dual.imd.f2.frequencyHz(), FREQ_TOLERANCE_HZ);
         assertTrue(Double.isFinite(dual.imd.dfd2Pct), "f2 - f1 is measurable");
 
         // The fundamental is the upper tone, its partner below it.
         FftResult swapped = spectrum(F2_HZ, F1_HZ);
         swapped.fundamental2HzRefined = F1_HZ;
-        analyzer.recomputeStats(swapped);
+        statistics.calculateStat(swapped, SETTINGS, null);
         assertNotNull(swapped.imd);
-        assertEquals(F1_HZ, swapped.imd.f1Hz, FREQ_TOLERANCE_HZ, "F1 is the lower tone");
+        assertEquals(F1_HZ, swapped.imd.f1.frequencyHz(), FREQ_TOLERANCE_HZ, "F1 is the lower tone");
         assertTrue(swapped.imd.diffHz > 0.0, "difference frequency is positive");
 
         FftResult single = spectrum(F1_HZ, Double.NaN);
         single.imd = dual.imd;   // a recycled slot's stale readout
-        analyzer.recomputeStats(single);
+        statistics.calculateStat(single, SETTINGS, null);
         assertNull(single.imd, "a single tone carries no IMD readout");
 
         FftResult copy = dual.deepCopy();
@@ -114,7 +123,7 @@ class FftAnalyzerImdTest {
     }
 
     /** A stored spectrum finds its second tone and gets the IMD readout
-     *  through applyDistortionSettings. */
+     *  from the statistics. */
     @Test
     void storedSpectrumFindsItsSecondTone() {
         FftResult stored = spectrum(F1_HZ, F2_HZ);
@@ -124,8 +133,8 @@ class FftAnalyzerImdTest {
         analyzer.findSecondTone();
         assertEquals(F2_HZ, stored.fundamental2HzRefined, FREQ_TOLERANCE_HZ);
 
-        analyzer.applyDistortionSettings(0, 0, Double.NaN, 0.0, 0.0);
+        new SpectrumStatistics().calculateStat(stored, SETTINGS, null);
         assertNotNull(stored.imd, "the stored dual tone carries an IMD readout");
-        assertEquals(F2_HZ, stored.imd.f2Hz, FREQ_TOLERANCE_HZ);
+        assertEquals(F2_HZ, stored.imd.f2.frequencyHz(), FREQ_TOLERANCE_HZ);
     }
 }

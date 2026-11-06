@@ -38,6 +38,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class FftAnalyzerSmokeTest {
 
+    /** The readout settings both analyses run with: H2..H9 evaluated and
+     *  summed, no distortion band, no manual fundamental. */
+    private static final ReadoutSettings SETTINGS = new ReadoutSettings(8, 8, 0.0, 0.0, Double.NaN);
+
+    /** A sine on a whole bin lands exactly on that bin, and its refined
+     *  frequency stays within half a bin of it. */
     @Test
     void pureSine_returnsPeakAtCorrectBin() {
         int    sampleRate = 48_000;
@@ -58,9 +64,8 @@ class FftAnalyzerSmokeTest {
 
         FftAnalyzer analyzer = new FftAnalyzer();
         FftResult r = analyzer.analyze(
-                signal, sampleRate, fftSize, 8, 8,         // harmonics, THD harmonics
-                WindowType.HANN, FftOverlap.PCT_0,
-                0.0, 0.0, true, Double.NaN, false,         // logSummary=false
+                signal, sampleRate, fftSize, SETTINGS,
+                WindowType.HANN, FftOverlap.PCT_0, true,
                 Double.NaN, new FftResult(), FftOverlap.PCT_0.hopSamples(fftSize));
 
         assertEquals(expectedBin, r.fundamentalBin,
@@ -77,6 +82,8 @@ class FftAnalyzerSmokeTest {
         assertTrue(r.frameCount >= 1, "at least one frame analysed");
     }
 
+    /** A sine 30 % into a bin: the refined frequency tracks it to a tenth of
+     *  a bin. */
     @Test
     void offBinSine_refinedFrequencyTracks() {
         // Non-integer bin frequency - the integer bin will pick up the
@@ -95,9 +102,8 @@ class FftAnalyzerSmokeTest {
 
         FftAnalyzer analyzer = new FftAnalyzer();
         FftResult r = analyzer.analyze(
-                signal, sampleRate, fftSize, 8, 8,
-                WindowType.HANN, FftOverlap.PCT_0,
-                0.0, 0.0, true, Double.NaN, false, Double.NaN,
+                signal, sampleRate, fftSize, SETTINGS,
+                WindowType.HANN, FftOverlap.PCT_0, true, Double.NaN,
                 new FftResult(), FftOverlap.PCT_0.hopSamples(fftSize));
 
         // Integer-bin pick can be one bin off due to window leakage; we

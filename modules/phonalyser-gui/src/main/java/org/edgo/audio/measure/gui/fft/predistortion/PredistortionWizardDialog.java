@@ -127,7 +127,7 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
      *  local band top, one decimal, in dB, then after a comma its limit,
      *  three decimals, in degrees. */
     private static final String CLEARANCE_FORMAT = "%.1f dB";
-    /** The clearance shown for a line held at its band top. */
+    /** The clearance shown for a line clamped at its band top. */
     private static final String CLAMPED_CLEARANCE = "0 dB";
     private static final String LIMIT_FORMAT     = ", %.3f°";
     /** The limit shown for a line no phase error can push over its share. */
@@ -544,7 +544,7 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
                 ? 20.0 * Math.log10(Math.hypot(imd.f1Mag, imd.f2Mag))
                 : live != null ? live.fundamentalDbFs : Double.NaN;
         fundLbl .setText(metric("fund",     live != null ? fmtDbv(fundDbFs + dbvOffsetDb) : "-"));
-        floorLbl.setText(metric("floor",    live != null ? fmtDbv(live.noisePeakFloorDbFs() + dbvOffsetDb) : "-"));
+        floorLbl.setText(metric("floor",    live != null ? fmtDbv(live.avgNoiseFloorDbFs + dbvOffsetDb) : "-"));
     }
 
     private String metric(String key, String value) {
@@ -683,7 +683,7 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
      * place.  A cell shows its line's wobble while the line is gated and the
      * wobble is a number, otherwise {@link #NO_VALUE}; then one bracket pair
      * with the line's clearance over its local band top, 0 dB for a line
-     * held at that band top (no positive clearance), and, while the line is
+     * clamped at that band top (no positive clearance), and, while the line is
      * gated and the limit is a number, a comma and the limit.  A shown
      * wobble with a limit is green within it and red over it.
      */

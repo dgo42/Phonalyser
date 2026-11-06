@@ -110,7 +110,7 @@ public final class FftTabControl extends AbstractCalibrationTabControl<FftPane> 
      *  64-bit {@code -Xmx}. */
     private static final long SMALL_HEAP_BYTES = 1_610_612_736L;
     /** Largest FFT length offered on a small heap: the 4M analysis working
-     *  set (analyzer scratch, result slots, frame cache, window buffers -
+     *  set (analyzer working buffers, result slots, frame cache, window buffers -
      *  ~1.3 GB at high rates) cannot fit a 32-bit JVM, while 2M (~600 MB)
      *  does. */
     private static final int SMALL_HEAP_MAX_FFT_LENGTH = 2_097_152;
@@ -1009,8 +1009,8 @@ public final class FftTabControl extends AbstractCalibrationTabControl<FftPane> 
             if (imd) {
                 ImdResult lastImd = r.imd;
                 if (lastImd != null) {
-                    tone1 = lastImd.f1Hz;
-                    tone2 = lastImd.f2Hz;
+                    tone1 = lastImd.f1.frequencyHz();
+                    tone2 = lastImd.f2.frequencyHz();
                 } else {
                     Preferences gp = Preferences.instance();
                     tone1 = gp.getGenDualToneFreq1Hz();
@@ -1122,8 +1122,10 @@ public final class FftTabControl extends AbstractCalibrationTabControl<FftPane> 
             showError(I18n.t("fft.load.notImplemented.title"), I18n.t("fft.load.error.format"));
             return;
         }
-        // Stop live capture so the loaded spectrum isn't overwritten - the pane
-        // owns the Record button and shared capture.
+        // Stop live capture only once the file has parsed, right before it is
+        // drawn, so the loaded spectrum isn't overwritten and a file that fails
+        // to load leaves a running capture alone - the pane owns the Record
+        // button and shared capture.
         getOwner().stopRecordingForLoad();
         view.displayLoadedResult(loaded.result());
         view.setSourceFilePath(path);

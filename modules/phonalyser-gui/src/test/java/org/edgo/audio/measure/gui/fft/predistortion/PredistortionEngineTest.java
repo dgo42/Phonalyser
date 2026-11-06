@@ -666,7 +666,6 @@ class PredistortionEngineTest extends AbstractReflectiveTest {
             double hz = (h + 2) * F0_HZ;
             r.harmonicHz[h]   = hz;
             r.harmonicBins[h] = bin(hz);
-            r.harmonicDbFs[h] = FLOOR_DBFS + clearanceDb[h];
             line(r, h, bin(hz), phaseDeg[h], clearanceDb[h]);
         }
         return r;

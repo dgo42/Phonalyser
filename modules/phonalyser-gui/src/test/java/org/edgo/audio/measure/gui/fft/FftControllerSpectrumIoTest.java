@@ -35,7 +35,10 @@ import java.util.stream.Collectors;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import org.edgo.audio.measure.common.SpectrumStatistics;
+import org.edgo.audio.measure.enums.WindowType;
 import org.edgo.audio.measure.fft.FftResult;
+import org.edgo.audio.measure.fft.ReadoutSettings;
 
 /**
  * Pins the {@code .fft} spectrum file format via
@@ -46,6 +49,11 @@ import org.edgo.audio.measure.fft.FftResult;
  * <p>The writer emits dBV ({@code dBFS + dbvOffsetDb}); the loader
  * subtracts the same offset, so amplitudes must round-trip to the
  * writer's 1e-6 print precision regardless of the calibration value.
+ * The writer works the phase out of each bin's phasor; the loader keeps
+ * it as read.
+ *
+ * <p>The loader parses only; which table a loaded spectrum shows is decided
+ * by the statistics the view calculates on it, so the mode checks run them.
  */
 class FftControllerSpectrumIoTest {
 
@@ -60,10 +68,16 @@ class FftControllerSpectrumIoTest {
     /** How far the synthetic power average stands above the magnitude - any
      *  offset that tells the two columns apart. */
     private static final double POWER_ABOVE_MEAN_DB = 12.0;
+    /** The readout settings the mode checks calculate the statistics with:
+     *  no harmonic ladder, no distortion band, no manual fundamental. */
+    private static final ReadoutSettings SETTINGS = new ReadoutSettings(0, 0, 0.0, 0.0, Double.NaN);
 
     @TempDir
     Path tmp;
 
+    /** A controller for the file round-trip.
+     *
+     * @return the controller */
     private FftController io() {
         // saveSpectrum/loadSpectrum use neither the pane, nor the worker
         // (built, never started), nor (with no calibration entries to list)
@@ -72,7 +86,11 @@ class FftControllerSpectrumIoTest {
     }
 
     /** Synthetic half-spectrum: −150 dBFS floor, one −10 dBFS peak at
-     *  {@code peakBin}, deterministic phase ramp. */
+     *  {@code peakBin}, deterministic phase ramp on the phasors, analysed
+     *  with Hann.
+     *
+     * @param peakBin the peak's bin
+     * @return the spectrum */
     private FftResult syntheticResult(int peakBin) {
         FftResult r = new FftResult();
         r.ensureArrays(BINS, 9);
@@ -83,15 +101,31 @@ class FftControllerSpectrumIoTest {
         r.frameCount        = 4;
         r.coherentAveraging = true;
         r.binBwSqrt         = Math.sqrt(0.5);
+        r.windowType        = WindowType.HANN;
         r.fundamentalTrueDbFs = Double.NaN;
         for (int k = 0; k < BINS; k++) {
+            double phaseRad = Math.toRadians((k % 360) - 180.0);
             r.amplitudeDbFs[k] = -150.0;
-            r.phaseDeg[k]      = (k % 360) - 180.0;
+            r.re[k]            = Math.cos(phaseRad);
+            r.im[k]            = Math.sin(phaseRad);
         }
         r.amplitudeDbFs[peakBin] = -10.0;
         return r;
     }
 
+    /** The view's statistics on a loaded spectrum - what decides its table.
+     *
+     * @param r the loaded spectrum
+     * @return {@code r}, its statistics calculated */
+    private FftResult withStatistics(FftResult r) {
+        new SpectrumStatistics().calculateStat(r, SETTINGS, null);
+        return r;
+    }
+
+    /** A THD capture round-trips its spectrum, phase and geometry, and
+     *  stands on its rediscovered peak.
+     *
+     * @throws IOException when the file cannot be written or read */
     @Test
     void thdRoundTrip_preservesSpectrumAndGeometry() throws IOException {
         FftResult original = syntheticResult(100);
@@ -100,7 +134,7 @@ class FftControllerSpectrumIoTest {
 
         FftController.LoadedSpectrum loaded = io().loadSpectrum(file.toString());
         FftResult r = loaded.result();
-        assertNull(loaded.result().imd, "THD capture must not switch the view to IMD");
+        assertNull(withStatistics(r).imd, "THD capture must not switch the view to IMD");
         assertEquals(original.fftSize,       r.fftSize);
         assertEquals(original.sampleRate,    r.sampleRate);
         assertEquals(FREQ_RES_HZ,            r.freqResolution, PRINT_EPS);
@@ -109,13 +143,17 @@ class FftControllerSpectrumIoTest {
         for (int k = 0; k < BINS; k++) {
             assertEquals(original.amplitudeDbFs[k], r.amplitudeDbFs[k], PRINT_EPS,
                     "amplitude round-trip at bin " + k);
-            assertEquals(original.phaseDeg[k], r.phaseDeg[k], PRINT_EPS,
-                    "phase round-trip at bin " + k);
+            assertEquals(Math.toDegrees(Math.atan2(original.im[k], original.re[k])), r.phaseDeg[k],
+                    PRINT_EPS, "phase round-trip at bin " + k);
         }
         assertEquals(100, r.fundamentalBin, "peak rediscovered as the fundamental");
         assertEquals(100 * FREQ_RES_HZ, r.fundamentalHz, PRINT_EPS);
     }
 
+    /** An IMD capture comes back as a tone pair the statistics read in IMD
+     *  mode, F1 the lower tone and F2 the upper.
+     *
+     * @throws IOException when the file cannot be written or read */
     @Test
     void imdRoundTrip_restoresModeAndToneFrequencies() throws IOException {
         FftResult original = syntheticResult(100);
@@ -127,13 +165,17 @@ class FftControllerSpectrumIoTest {
         io().saveSpectrum(file, original, true, tone1, tone2);
 
         FftController.LoadedSpectrum loaded = io().loadSpectrum(file.toString());
-        assertNotNull(loaded.result().imd, "IMD capture must restore the IMD table mode");
+        assertNotNull(withStatistics(loaded.result()).imd, "IMD capture must restore the IMD table mode");
         assertEquals(tone1, loaded.result().fundamentalHzRefined,  PRINT_EPS,
                 "lower tone pinned as F1");
         assertEquals(tone2, loaded.result().fundamental2HzRefined, PRINT_EPS,
                 "upper tone pinned as F2");
     }
 
+    /** A file without the bandwidth header reads its row spacing as the
+     *  captured bandwidth.
+     *
+     * @throws IOException when the file cannot be written or read */
     @Test
     void load_oldFileWithoutBandwidthHeader_fallsBackToRowSpacing() throws IOException {
         FftResult original = syntheticResult(100);
@@ -150,6 +192,10 @@ class FftControllerSpectrumIoTest {
                 "old files: the row spacing IS the captured bandwidth");
     }
 
+    /** A file with no usable rows, a missing file and an unparseable number
+     *  are refused.
+     *
+     * @throws IOException when a fixture file cannot be written */
     @Test
     void load_rejectsGarbageAndMissingFiles() throws IOException {
         Path garbage = tmp.resolve("garbage.fft");
@@ -169,6 +215,9 @@ class FftControllerSpectrumIoTest {
                 "unparseable number -> IO error");
     }
 
+    /** A coherent average's power average round-trips in a fourth column.
+     *
+     * @throws IOException when the file cannot be written or read */
     @Test
     void aCoherentAveragesPowerAverageRoundTripsInItsOwnColumn() throws IOException {
         FftResult original = syntheticResult(100);
@@ -191,6 +240,9 @@ class FftControllerSpectrumIoTest {
         }
     }
 
+    /** A single frame's file keeps three columns and reads no power average.
+     *
+     * @throws IOException when the file cannot be written or read */
     @Test
     void aResultWithoutPowerAverageWritesAndReadsNone() throws IOException {
         Path file = tmp.resolve("single.fft");
@@ -202,6 +254,10 @@ class FftControllerSpectrumIoTest {
                 "its power is read off the magnitude");
     }
 
+    /** The save writes the format version, the capture mode and the column
+     *  header.
+     *
+     * @throws IOException when the file cannot be written or read */
     @Test
     void save_writesModeAndVersionHeaders() throws IOException {
         Path file = tmp.resolve("headers.fft");
