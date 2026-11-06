@@ -150,20 +150,19 @@ public final class TimeDiscontinuityDetector {
         return anchorStart ? glitchStart - 1 : glitchEnd - 1;
     }
 
-    /** Rejection-gate convenience: whether {@code data[0 .. n)} contains any
-     *  discontinuity.  Burst merging is irrelevant for a yes/no verdict;
-     *  {@code omega} as in {@link #findDiscontinuity}. */
-    public boolean detect(float[] data, int n, double omega) {
-        return findDiscontinuity(data, 2, n, true, 0, omega) >= 0;
-    }
-
     /**
-     * {@code double[]} twin of {@link #detect(float[], int, double)} for the FFT
-     * worker, whose capture window stays in double precision to preserve the
-     * measurement floor (converting a multi-million-sample window to float per
-     * analysis cycle would cost an allocation + copy for nothing).  Same
+     * Whether {@code data[0 .. n)} contains any discontinuity - the yes/no
+     * verdict of {@link #findDiscontinuity} on {@code double[]} data for the
+     * FFT worker, whose capture window stays in double precision to preserve
+     * the measurement floor (converting a multi-million-sample window to float
+     * per analysis cycle would cost an allocation + copy for nothing).  Same
      * model: sinusoid-recurrence prediction error vs the linear threshold
      * {@code REL_FACTOR·mean|error| + EVENT_FRACTION·amplitude}.
+     *
+     * @param data  the samples
+     * @param n     how many leading samples are tested
+     * @param omega the tone's angular frequency per sample; NaN to fit it from the data
+     * @return {@code true} when a sample breaks the prediction by more than the threshold
      */
     public boolean detect(double[] data, int n, double omega) {
         int start = 2;
