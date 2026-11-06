@@ -293,8 +293,8 @@ public final class NvgMeasurementPainter implements MeasurementPainter {
     }
 
     @Override public void drawAlphaImage(byte[] alpha, int imgW, int imgH, int destX, int destY,
-                                         int drawW, int drawH, Color tint, AlphaImageScratch scratch) {
-        // scratch is the GC backend's reuse buffer; NanoVG stages into its own native
+                                         int drawW, int drawH, Color tint, AlphaImageBuffers buffers) {
+        // buffers are the GC backend's reuse arrays; NanoVG stages into its own native
         // phosphorBuf, so it is ignored here.
         if (imgW <= 0 || imgH <= 0) return;
         int pixels = imgW * imgH;

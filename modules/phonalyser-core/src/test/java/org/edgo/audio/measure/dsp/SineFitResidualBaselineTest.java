@@ -111,7 +111,7 @@ class SineFitResidualBaselineTest {
         double[] fixVisMean = new double[FRAMES];
         double[] oldFitMean = new double[FRAMES];
         double[] fixFitMean = new double[FRAMES];
-        float[]  scratch    = new float[visible + 2 * PAD];
+        float[]  residual   = new float[visible + 2 * PAD];
 
         for (int frame = 0; frame < FRAMES; frame++) {
             // Window walk: a coprime-ish stride sweeps the boundary across all
@@ -135,17 +135,17 @@ class SineFitResidualBaselineTest {
             // OLD pipeline: subtract sinusoid only (fit DC c left in the trace).
             // Over the fit window the residual mean IS c-hat (LS orthogonality),
             // and c-hat is the wandering DC re-split - the H1 artefact.
-            fit.subtractSineInto(buf, fitFrom, fitLen, 0.0, scratch, 0);
-            oldVisMean[frame] = visibleMean(scratch, PAD, visible);
-            oldFitMean[frame] = visibleMean(scratch, 0, fitLen);
+            fit.subtractSineInto(buf, fitFrom, fitLen, 0.0, residual, 0);
+            oldVisMean[frame] = visibleMean(residual, PAD, visible);
+            oldFitMean[frame] = visibleMean(residual, 0, fitLen);
 
             // FIXED pipeline: subtract the whole model, add back the STABLE DC
             // (long-averaged Vmean - here the known true DC constant).  Over the
             // fit window this is pinned to dcStable by construction, independent
             // of f-hat, because the LS residual is orthogonal to the constant.
-            fit.subtractFullInto(buf, fitFrom, fitLen, 0.0, DC, scratch, 0);
-            fixVisMean[frame] = visibleMean(scratch, PAD, visible);
-            fixFitMean[frame] = visibleMean(scratch, 0, fitLen);
+            fit.subtractFullInto(buf, fitFrom, fitLen, 0.0, DC, residual, 0);
+            fixVisMean[frame] = visibleMean(residual, PAD, visible);
+            fixFitMean[frame] = visibleMean(residual, 0, fitLen);
         }
 
         double oldVisSpread = peakToPeak(oldVisMean);

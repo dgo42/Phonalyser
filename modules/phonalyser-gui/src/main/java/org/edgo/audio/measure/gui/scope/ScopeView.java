@@ -145,29 +145,29 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     /** Grow-only staging buffers behind {@link #lastFrame} - overwritten
      *  every paint; see {@link #captureFrame}. */
     private float[] capStageL, capStageR;
-    /** Grow-only scratch for {@link #reconstructBeatSignal} (output + the
+    /** Grow-only buffers for {@link #reconstructBeatSignal} (output + the
      *  two boxcar cascade stages) - rebuilt every paint while DUAL_TONE. */
     private float[] beatOut, beatTmp, beatAbsLp;
-    /** Per-channel grow-only scratch for {@link #computeResidual} - holds the
+    /** Per-channel grow-only buffer for {@link #computeResidual} - holds the
      *  fit-window slice with the best-fit single tone subtracted, reused across
      *  paints (paint is single-threaded).  Lazily sized to the slice length. */
-    private float[] residualScratchL, residualScratchR;
-    /** Grow-only FIT-WINDOW-sized scratch for the dual-tone residual (the two
+    private float[] residualBufferL, residualBufferR;
+    /** Grow-only FIT-WINDOW-sized buffer for the dual-tone residual (the two
      *  per-tone fits need the tone-subtracted data over the whole fit window,
      *  not just the display slice).  Channels are computed sequentially within
      *  one paint, so a single buffer serves both. */
-    private float[] residualFitScratch;
+    private float[] residualFitBuffer;
     /** Residual Vpp (volts) over the VISIBLE window, recorded at the last paint
      *  for each channel when its residual pref is on; {@link Double#NaN} when the
      *  residual is off or unavailable.  Read by {@link #autoSetupVpp}. */
     private double lastResidualVppL = Double.NaN;
     private double lastResidualVppR = Double.NaN;
-    /** Index in the returned residual scratch that corresponds to the caller's
-     *  {@code dispStart} - the scratch is indexed from the fit-window start, so
+    /** Index in the returned residual buffer that corresponds to the caller's
+     *  {@code dispStart} - the buffer is indexed from the fit-window start, so
      *  this is {@code dispStart − sliceFrom}.  Set by {@link #computeResidual}
      *  each call, read by the caller immediately after (single-threaded paint). */
     private int    residualDispStart;
-    /** Number of VALID samples in the returned residual scratch (the scratch is
+    /** Number of VALID samples in the returned residual buffer (the buffer is
      *  grow-only, so its {@code .length} may exceed this).  Set by
      *  {@link #computeResidual} alongside {@link #residualDispStart}. */
     private int    residualSliceLen;
@@ -3440,7 +3440,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      *  envelope.  Renders only when the generator is in DUAL_TONE mode AND
      *  the user has the "Reconstructed beat" checkbox enabled in the Trigger
      *  tab.  Channels are reconstructed-then-drawn sequentially because
-     *  {@link #reconstructBeatSignal} reuses one scratch buffer. */
+     *  {@link #reconstructBeatSignal} reuses one set of buffers. */
     private void drawBeatOverlays(MeasurementPainter gc, int w, int h,
                                   float[] dataLeft, float[] dataRight,
                                   int dispStart, double subSampleOffset, double dispCount,
@@ -3537,7 +3537,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     private float[] reconstructBeatSignal(float[] data, int available,
                                           int sampleRate,
                                           double f1Hz, double f2Hz) {
-        // Grow-only scratch: this runs EVERY paint while the form is
+        // Grow-only buffers: this runs EVERY paint while the form is
         // DUAL_TONE (it feeds the trigger), and three fresh ~100k+ float[]
         // per paint were ~60-180 MB/s of churn.  The result is consumed
         // within the same paint pass (debugBeatSignal is rebuilt per pass).
@@ -3671,13 +3671,13 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      * 3-parameter least-squares fit ({@link SineFit}) over the fit window - so
      * the synthesized tone is inherently phase-aligned to the triggered display.
      *
-     * <p>The result is written into the per-channel grow-only scratch, indexed
+     * <p>The result is written into the per-channel grow-only buffer, indexed
      * from the fit-window start; {@link #residualDispStart} is set to the index
      * that corresponds to the caller's {@code dispStart}.  Also records
      * {@link #lastResidualVppL}/{@link #lastResidualVppR} from the min/max over
      * the VISIBLE window so auto-setup can scale the vertical off the residual.
      *
-     * @return the residual scratch, or {@code null} when the residual can't be
+     * @return the residual buffer, or {@code null} when the residual can't be
      *         computed (no valid frequency, fit window too short, degenerate
      *         fit) - the caller then paints the captured trace.
      */
@@ -3810,7 +3810,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         }
 
         // 5. Subtract the WHOLE fitted model - tone AND the fit's own DC c -
-        //    over the display slice into the scratch, indexed from sliceFrom
+        //    over the display slice into the residual buffer, indexed from sliceFrom
         //    (kOffset = sliceFrom − fitFrom), and add back the stable, long-
         //    averaged DC. Over a non-integer-cycle window {1,sin,cos} are not
         //    orthogonal, so each per-capture fit re-splits the true DC between c
@@ -3824,10 +3824,10 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         //    then subtracts the same dcStable, so the trace sits at ~0. AC off:
         //    dcOffset is 0, so the DC-coupled trace sits at its true, stable DC.
         int sliceLen = sliceTo - sliceFrom;
-        float[] scratch = leftChannel ? residualScratchL : residualScratchR;
-        if (scratch == null || scratch.length < sliceLen) {
-            scratch = new float[sliceLen];
-            if (leftChannel) residualScratchL = scratch; else residualScratchR = scratch;
+        float[] residual = leftChannel ? residualBufferL : residualBufferR;
+        if (residual == null || residual.length < sliceLen) {
+            residual = new float[sliceLen];
+            if (leftChannel) residualBufferL = residual; else residualBufferR = residual;
         }
         double dcStable = acDcMean(leftChannel);
         if (dual) {
@@ -3839,10 +3839,10 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
             // holds (i.e. independent of time/div).  The last subtraction
             // removes the whole model + pins the baseline to dcStable exactly
             // like the single-tone path.
-            if (residualFitScratch == null || residualFitScratch.length < fitLen) {
-                residualFitScratch = new float[fitLen];
+            if (residualFitBuffer == null || residualFitBuffer.length < fitLen) {
+                residualFitBuffer = new float[fitLen];
             }
-            float[] fs = residualFitScratch;
+            float[] fs = residualFitBuffer;
             SineFit fitA = SineFit.of(data, fitFrom, fitLen, sampleRate, f1);
             fitA.subtractSineInto(data, fitFrom, fitLen, 0, fs, 0);   // fs = data − A₀
             SineFit fitB = SineFit.of(fs, 0, fitLen, sampleRate, f2);
@@ -3859,16 +3859,16 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
             }
             // Final subtraction over the DISPLAY SLICE, evaluated analytically
             // from data exactly like the single-tone path - NOT copied out of
-            // the fit scratch: the fit window is capped at
+            // the fit buffer: the fit window is capped at
             // RESIDUAL_FIT_MAX_SAMPLES, so at large time/div the slice extends
             // beyond it (bench: 67 200-sample slice vs a 65 536 fit window ->
             // arraycopy out of bounds).  The fitted sines extrapolate exactly
             // at any k, so the slice tail beyond the fit window subtracts just
             // as cleanly.
-            fitA.subtractSineInto(data, sliceFrom, sliceLen, sliceFrom - fitFrom, scratch, 0);
-            fitB.subtractFullInto(scratch, 0, sliceLen, sliceFrom - fitFrom, dcStable, scratch, 0);
+            fitA.subtractSineInto(data, sliceFrom, sliceLen, sliceFrom - fitFrom, residual, 0);
+            fitB.subtractFullInto(residual, 0, sliceLen, sliceFrom - fitFrom, dcStable, residual, 0);
         } else {
-            fit.subtractFullInto(data, sliceFrom, sliceLen, sliceFrom - fitFrom, dcStable, scratch, 0);
+            fit.subtractFullInto(data, sliceFrom, sliceLen, sliceFrom - fitFrom, dcStable, residual, 0);
         }
 
         // 6. Vpp over the VISIBLE part only (dispStart .. dispStart+dispCount),
@@ -3877,9 +3877,9 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         int visTo   = Math.min(sliceLen, dispStart - sliceFrom + dispCount);
         double vpp = Double.NaN;
         if (visTo > visFrom) {
-            float min = scratch[visFrom], max = scratch[visFrom];
+            float min = residual[visFrom], max = residual[visFrom];
             for (int i = visFrom + 1; i < visTo; i++) {
-                float v = scratch[i];
+                float v = residual[i];
                 if (v < min) min = v;
                 if (v > max) max = v;
             }
@@ -3887,11 +3887,11 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         }
         recordResidualVpp(leftChannel, vpp);
 
-        // 7. Report where dispStart landed inside the scratch + the valid length,
-        //    and return the scratch (whose .length may exceed sliceLen).
+        // 7. Report where dispStart landed inside the residual buffer + the valid
+        //    length, and return the buffer (whose .length may exceed sliceLen).
         residualDispStart = dispStart - sliceFrom;
         residualSliceLen  = sliceLen;
-        return scratch;
+        return residual;
     }
 
     /** Stores the residual Vpp for the given channel (see {@link #computeResidual}). */
@@ -3900,23 +3900,23 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     }
 
     /** Copies {@code data[sliceFrom .. sliceFrom+sliceLen)} into the given
-     *  channel's residual scratch (grown as needed) so a shown-but-non-residual
+     *  channel's residual buffer (grown as needed) so a shown-but-non-residual
      *  channel renders off the SAME slice geometry as the residual channel - see
      *  {@link #renderTraces}.  Out-of-range samples are left as zeros (drawTrace
      *  blanks columns the buffer can't fill regardless). */
     private float[] copyResidualSlice(float[] data, int sliceFrom, int sliceLen, boolean leftChannel) {
-        float[] scratch = leftChannel ? residualScratchL : residualScratchR;
-        if (scratch == null || scratch.length < sliceLen) {
-            scratch = new float[sliceLen];
-            if (leftChannel) residualScratchL = scratch; else residualScratchR = scratch;
+        float[] slice = leftChannel ? residualBufferL : residualBufferR;
+        if (slice == null || slice.length < sliceLen) {
+            slice = new float[sliceLen];
+            if (leftChannel) residualBufferL = slice; else residualBufferR = slice;
         }
         int from = Math.max(0, sliceFrom);
         int to   = Math.min(data.length, sliceFrom + sliceLen);
         int off  = from - sliceFrom;
-        if (off > 0) Arrays.fill(scratch, 0, Math.min(off, sliceLen), 0f);
-        if (to > from) System.arraycopy(data, from, scratch, off, to - from);
-        if (off + (to - from) < sliceLen) Arrays.fill(scratch, off + Math.max(0, to - from), sliceLen, 0f);
-        return scratch;
+        if (off > 0) Arrays.fill(slice, 0, Math.min(off, sliceLen), 0f);
+        if (to > from) System.arraycopy(data, from, slice, off, to - from);
+        if (off + (to - from) < sliceLen) Arrays.fill(slice, off + Math.max(0, to - from), sliceLen, 0f);
+        return slice;
     }
 
     /** Wraps a radian angle into (−π, π]. */
@@ -4070,7 +4070,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         // (it depends only on dispStart/dispCount/pad/dataLen, equal for L and R),
         // so a residual channel and a re-based raw copy of the other channel fit a
         // single (dataLen, dispStart) tuple - which the snapshot (captureFrame /
-        // RenderedFrame) can only carry once.  Substituting the scratch for BOTH
+        // RenderedFrame) can only carry once.  Substituting the residual buffer for BOTH
         // captureFrame and drawTrace bakes the residual into the snapshot; the
         // frozen-replay path then paints it verbatim (captureFrame skipped,
         // residual NOT re-run there), so it is subtracted exactly once.
@@ -4097,7 +4097,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
             int     dispR = residualDispStart;
             int     lenR  = residualSliceLen;
             // At least one residual succeeded -> both channels render off the shared
-            // slice: the residual channel from its scratch, the other (shown, raw)
+            // slice: the residual channel from its buffer, the other (shown, raw)
             // channel from a plain copy of the same slice so the single (drawLen,
             // drawDisp) tuple is valid for both traces AND the snapshot.  (The slice
             // geometry depends only on dispStart/dispCount/pad/dataLen, so dispL==dispR

@@ -100,7 +100,7 @@ public final class Qa40xDuplexEngine implements Qa40xTransport.TransferListener 
     private final BooleanSupplier i2sEnabled;
     /** The session's frame width in bits, written to reg 0x0B when the port is on. */
     private final IntSupplier i2sBits;
-    private final int[] scratch = new int[STEADY_FRAMES * CHANNELS];
+    private final int[] sourceFrames = new int[STEADY_FRAMES * CHANNELS];
     private final Deque<byte[]> freeReadBuffers  = new ArrayDeque<>();
     private final Deque<byte[]> freeWriteBuffers = new ArrayDeque<>();
 
@@ -452,10 +452,10 @@ public final class Qa40xDuplexEngine implements Qa40xTransport.TransferListener 
     }
 
     private void fillWriteChunk(byte[] chunk) {
-        source.nextFrames(scratch, STEADY_FRAMES);
+        source.nextFrames(sourceFrames, STEADY_FRAMES);
         for (int f = 0; f < STEADY_FRAMES; f++) {
-            int left  = scratch[CHANNELS * f];
-            int right = scratch[CHANNELS * f + 1];
+            int left  = sourceFrames[CHANNELS * f];
+            int right = sourceFrames[CHANNELS * f + 1];
             int offset = f * FRAME_BYTES;
             // DAC L/R swapped before sending (§5): device slot 0 = R, slot 1 = L.
             putLittleEndianInt(chunk, offset, right);

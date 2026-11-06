@@ -22,7 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 
 import java.util.Arrays;
 
-import org.edgo.audio.measure.gui.common.AlphaImageScratch;
+import org.edgo.audio.measure.gui.common.AlphaImageBuffers;
 import org.edgo.audio.measure.gui.common.MeasurementPainter;
 
 import org.eclipse.swt.graphics.Color;
@@ -110,7 +110,7 @@ class PhosphorRendererDirtyRegionTest {
         @Override public float getPixelScale() { return 1f; }
 
         @Override public void drawAlphaImage(byte[] a, int imgW, int imgH, int destX, int destY,
-                                             int drawW, int drawH, Color tint, AlphaImageScratch scratch) {
+                                             int drawW, int drawH, Color tint, AlphaImageBuffers buffers) {
             this.alpha = Arrays.copyOf(a, imgW * imgH);
         }
 

@@ -85,7 +85,7 @@ public class WasapiRecorder extends AbstractPcmCapture {
      *  and the capture loop narrows per sample on the way in. */
     private int containerSampleBytes;
     /** Reusable narrowing stage for the container != lane case. */
-    private byte[] containerScratch;
+    private byte[] containerBuffer;
     /** Frames dropped on a full queue since the last consumer-side log. */
     private final AtomicLong droppedFramesSinceLog  = new AtomicLong();
     /** WASAPI packet-flag counters since the last consumer-side log. */
@@ -442,14 +442,14 @@ public class WasapiRecorder extends AbstractPcmCapture {
                     Pointer data = ppData.getValue();
                     int samples = frames * captureChannels;
                     int deviceBytes = samples * containerSampleBytes;
-                    if (containerScratch == null || containerScratch.length < deviceBytes) {
-                        containerScratch = new byte[deviceBytes];
+                    if (containerBuffer == null || containerBuffer.length < deviceBytes) {
+                        containerBuffer = new byte[deviceBytes];
                     }
-                    if (data != null) data.read(0, containerScratch, 0, deviceBytes);
+                    if (data != null) data.read(0, containerBuffer, 0, deviceBytes);
                     for (int i = 0; i < samples; i++) {
-                        buf[3 * i]     = containerScratch[4 * i + 1];
-                        buf[3 * i + 1] = containerScratch[4 * i + 2];
-                        buf[3 * i + 2] = containerScratch[4 * i + 3];
+                        buf[3 * i]     = containerBuffer[4 * i + 1];
+                        buf[3 * i + 1] = containerBuffer[4 * i + 2];
+                        buf[3 * i + 2] = containerBuffer[4 * i + 3];
                     }
                 }
                 if ((flagValue & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY) != 0) {

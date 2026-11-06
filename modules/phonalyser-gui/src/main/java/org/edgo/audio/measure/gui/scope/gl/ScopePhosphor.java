@@ -47,12 +47,12 @@ import static org.lwjgl.nanovg.NanoVG.*;
  * <p>The waveform ({@link GlScopeRenderer.Phase#TRACE}) is routed through two
  * off-screen RGBA16F framebuffers instead of straight to the screen:
  * <ul>
- *   <li>the <b>scratch</b> buffer holds just the current frame's trace.  It carries a
+ *   <li>the <b>trace</b> buffer holds just the current frame's trace.  It carries a
  *       depth/stencil attachment because NanoVG is created with {@code NVG_STENCIL_STROKES}
  *       and the anti-aliased stroke path needs a stencil buffer to suppress self-overlap;</li>
  *   <li>the <b>phosphor</b> buffer is the decayed accumulation.  On each genuinely new
  *       captured frame it is multiplied down by {@code exp(-dt/tau)} (frame-rate-independent
- *       decay) and the scratch trace is composited in; a held frame leaves it; a UI gesture
+ *       decay) and the current trace is composited in; a held frame leaves it; a UI gesture
  *       ({@link Kind#RESET}) resets it; an expose ({@link Kind#COMPOSITE}) just re-composites
  *       it.  An empty buffer (first frame / just resized) is seeded from the current trace so
  *       the persisted layer is never blank.</li>
@@ -97,10 +97,10 @@ final class ScopePhosphor {
     private final NvgMeasurementPainter painter;
     private final NvgImageFactory imageFactory;
 
-    private int  scratchFbo;
-    private int  scratchTex;
-    private int  scratchRbo;        // packed depth-stencil - NanoVG stencil-stroke path
-    private int  scratchImg;        // scratchTex wrapped as a NanoVG image
+    private int  traceFbo;
+    private int  traceTex;
+    private int  traceRbo;          // packed depth-stencil - NanoVG stencil-stroke path
+    private int  traceImg;          // traceTex wrapped as a NanoVG image
     private int  phosphorFbo;
     private int  phosphorTex;
     private int  phosphorImg;       // phosphorTex wrapped as a NanoVG image
@@ -202,12 +202,12 @@ final class ScopePhosphor {
         boolean traced = false;
         switch (kind) {
             case REALTIME -> {
-                renderTraceToScratch(renderer);             // also sets renderer.isLastFrameNew()
+                renderTraceBuffer(renderer);             // also sets renderer.isLastFrameNew()
                 traced = true;
                 if (renderer.isLastFrameNew()) accumulate(persistSeconds);
             }
             case RESET -> {
-                renderTraceToScratch(renderer);
+                renderTraceBuffer(renderer);
                 traced = true;
                 resetPhosphor();
             }
@@ -218,7 +218,7 @@ final class ScopePhosphor {
         // the current trace, so the persisted layer is never blank - vital for a STOPPED scope,
         // whose only repaint is a COMPOSITE expose / resize and which the realtime loop won't refill.
         if (!haveLastAccum) {
-            if (!traced) renderTraceToScratch(renderer);
+            if (!traced) renderTraceBuffer(renderer);
             resetPhosphor();
         }
         compositeToScreen(renderer);
@@ -273,22 +273,22 @@ final class ScopePhosphor {
 
     /** Frees the framebuffers / textures / images.  Call with the GL context current. */
     void release() {
-        if (scratchImg  != 0) { nvgDeleteImage(vg, scratchImg);  scratchImg  = 0; }
+        if (traceImg    != 0) { nvgDeleteImage(vg, traceImg);    traceImg    = 0; }
         if (phosphorImg != 0) { nvgDeleteImage(vg, phosphorImg); phosphorImg = 0; }
-        if (scratchFbo  != 0) { GL30.glDeleteFramebuffers(scratchFbo);   scratchFbo  = 0; }
+        if (traceFbo    != 0) { GL30.glDeleteFramebuffers(traceFbo);     traceFbo    = 0; }
         if (phosphorFbo != 0) { GL30.glDeleteFramebuffers(phosphorFbo);  phosphorFbo = 0; }
-        if (scratchRbo  != 0) { GL30.glDeleteRenderbuffers(scratchRbo);  scratchRbo  = 0; }
-        if (scratchTex  != 0) { GL11.glDeleteTextures(scratchTex);   scratchTex  = 0; }
+        if (traceRbo    != 0) { GL30.glDeleteRenderbuffers(traceRbo);    traceRbo    = 0; }
+        if (traceTex    != 0) { GL11.glDeleteTextures(traceTex);     traceTex    = 0; }
         if (phosphorTex != 0) { GL11.glDeleteTextures(phosphorTex);  phosphorTex = 0; }
         fboW = 0;
         fboH = 0;
         haveLastAccum = false;
     }
 
-    /** Renders just the current trace into the (cleared) scratch buffer.  Runs
+    /** Renders just the current trace into the (cleared) trace buffer.  Runs
      *  {@code drawWaveforms}, so afterwards {@link GlScopeRenderer#isLastFrameNew()} is current. */
-    private void renderTraceToScratch(GlScopeRenderer renderer) {
-        GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, scratchFbo);
+    private void renderTraceBuffer(GlScopeRenderer renderer) {
+        GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, traceFbo);
         GL11.glViewport(0, 0, pixelW, pixelH);
         GL11.glClearColor(0f, 0f, 0f, 0f);
         GL11.glClear(GL11.GL_COLOR_BUFFER_BIT | GL11.GL_STENCIL_BUFFER_BIT);
@@ -300,7 +300,7 @@ final class ScopePhosphor {
     }
 
     /** New captured frame: decay the phosphor by {@code exp(-dt/tau)} (skipped for the
-     *  first frame and for infinite persistence) then merge the scratch trace into it
+     *  first frame and for infinite persistence) then merge the current trace into it
      *  <b>brightest-wins</b> (per-component max).  Source-over would re-composite the
      *  trace's anti-aliased fringe pixels over themselves on every new frame, converging
      *  them to full opacity - the persisted trace turned solid-edged and fat.  Under max,
@@ -326,7 +326,7 @@ final class ScopePhosphor {
         GL14.glBlendEquation(GL14.GL_MAX);
         nvgBeginFrame(vg, logicalW, logicalH, pixelRatio);
         painter.reset(logicalW, logicalH, pixelRatio);
-        blitImage(scratchImg);
+        blitImage(traceImg);
         nvgEndFrame(vg);
         GL14.glBlendEquation(GL14.GL_FUNC_ADD);
         GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, 0);
@@ -365,7 +365,7 @@ final class ScopePhosphor {
         GL11.glClear(GL11.GL_COLOR_BUFFER_BIT);
         nvgBeginFrame(vg, logicalW, logicalH, pixelRatio);
         painter.reset(logicalW, logicalH, pixelRatio);
-        blitImage(scratchImg);
+        blitImage(traceImg);
         nvgEndFrame(vg);
         GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, 0);
         // The reset is itself a phosphor update: the buffer now holds valid content and the
@@ -415,24 +415,24 @@ final class ScopePhosphor {
         }
     }
 
-    /** Ensures the scratch + phosphor framebuffers exist at the physical frame size,
+    /** Ensures the trace + phosphor framebuffers exist at the physical frame size,
      *  (re)allocating on resize.  Returns {@code false} (and releases) if either is incomplete. */
     private boolean ensureBuffers() {
-        if (scratchFbo != 0 && fboW == pixelW && fboH == pixelH) return true;
+        if (traceFbo != 0 && fboW == pixelW && fboH == pixelH) return true;
         release();
 
-        // Scratch: float colour + a packed depth-stencil renderbuffer for stencil strokes.
-        scratchTex = newFloatTexture();
-        scratchFbo = GL30.glGenFramebuffers();
-        GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, scratchFbo);
+        // Trace: float colour + a packed depth-stencil renderbuffer for stencil strokes.
+        traceTex = newFloatTexture();
+        traceFbo = GL30.glGenFramebuffers();
+        GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, traceFbo);
         GL30.glFramebufferTexture2D(GL30.GL_FRAMEBUFFER, GL30.GL_COLOR_ATTACHMENT0,
-                                    GL11.GL_TEXTURE_2D, scratchTex, 0);
-        scratchRbo = GL30.glGenRenderbuffers();
-        GL30.glBindRenderbuffer(GL30.GL_RENDERBUFFER, scratchRbo);
+                                    GL11.GL_TEXTURE_2D, traceTex, 0);
+        traceRbo = GL30.glGenRenderbuffers();
+        GL30.glBindRenderbuffer(GL30.GL_RENDERBUFFER, traceRbo);
         GL30.glRenderbufferStorage(GL30.GL_RENDERBUFFER, GL30.GL_DEPTH24_STENCIL8, pixelW, pixelH);
         GL30.glFramebufferRenderbuffer(GL30.GL_FRAMEBUFFER, GL30.GL_DEPTH_STENCIL_ATTACHMENT,
-                                       GL30.GL_RENDERBUFFER, scratchRbo);
-        boolean scratchOk = GL30.glCheckFramebufferStatus(GL30.GL_FRAMEBUFFER) == GL30.GL_FRAMEBUFFER_COMPLETE;
+                                       GL30.GL_RENDERBUFFER, traceRbo);
+        boolean traceOk = GL30.glCheckFramebufferStatus(GL30.GL_FRAMEBUFFER) == GL30.GL_FRAMEBUFFER_COMPLETE;
 
         // Phosphor: float colour only (it only ever takes convex fills + blits - no stencil).
         phosphorTex = newFloatTexture();
@@ -445,12 +445,12 @@ final class ScopePhosphor {
         GL11.glClear(GL11.GL_COLOR_BUFFER_BIT);   // start the accumulation transparent
         GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, 0);
 
-        if (!scratchOk || !phosphorOk) {
+        if (!traceOk || !phosphorOk) {
             release();
             return false;
         }
 
-        scratchImg  = imageFactory.create(vg, scratchTex,  pixelW, pixelH);
+        traceImg    = imageFactory.create(vg, traceTex,    pixelW, pixelH);
         phosphorImg = imageFactory.create(vg, phosphorTex, pixelW, pixelH);
         fboW = pixelW;
         fboH = pixelH;

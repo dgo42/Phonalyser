@@ -90,7 +90,7 @@ public abstract class AbstractPcmCapture implements AudioCapture {
      *  thread runs the check. */
     private volatile long lastDeliveryNanos;
 
-    /** Consume-thread-only scratch for the mono->stereo upmix; null when stereo. */
+    /** Consume-thread-only reused buffer for the mono->stereo upmix; null when stereo. */
     private byte[] monoUpmix;
     /** Logged once when a consumer listener faults, so a per-block failure logs
      *  a single stack trace instead of flooding the log. */

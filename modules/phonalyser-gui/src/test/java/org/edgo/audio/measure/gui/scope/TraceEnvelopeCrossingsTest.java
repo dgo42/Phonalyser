@@ -571,8 +571,8 @@ class TraceEnvelopeCrossingsTest {
         int w = 8, h = 6;
         byte[] grid = new byte[w * h];
         for (int y = 0; y < h; y++) { grid[y * w + 4] = (byte) 255; grid[y * w + 5] = (byte) 255; }
-        byte[] scratch = new byte[w * h];
-        TraceEnvelope.fringeDilate(grid, w, h, 2, scratch, 0, w - 1, 0, h - 1);
+        byte[] horizontal = new byte[w * h];
+        TraceEnvelope.fringeDilate(grid, w, h, 2, horizontal, 0, w - 1, 0, h - 1);
         assertEquals(255, grid[2 * w + 4] & 0xFF);   // interior untouched
         assertEquals(255, grid[2 * w + 5] & 0xFF);
         assertEquals(170, grid[2 * w + 3] & 0xFF);   // one cell out: 2/3

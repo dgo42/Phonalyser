@@ -21,7 +21,7 @@ package org.edgo.audio.measure.gui.common;
 import org.eclipse.swt.graphics.PaletteData;
 
 /**
- * Caller-owned scratch for {@link GcMeasurementPainter#drawAlphaImage}: the reusable
+ * Caller-owned buffers for {@link GcMeasurementPainter#drawAlphaImage}: the reusable
  * byte arrays that back the per-frame {@code ImageData} of the CPU digital-phosphor
  * blit, so a steady-state frame churns ZERO arrays.
  *
@@ -37,7 +37,7 @@ import org.eclipse.swt.graphics.PaletteData;
  * reallocates once and every subsequent same-size frame reuses them) - exact length so
  * the {@code rgb} array can back an {@code ImageData} with no length ambiguity.
  */
-public final class AlphaImageScratch {
+public final class AlphaImageBuffers {
 
     /** 24-bit direct-RGB palette (red high byte) matching the packed {@link #rgb}
      *  layout - created once so the blit allocates no palette per frame. */

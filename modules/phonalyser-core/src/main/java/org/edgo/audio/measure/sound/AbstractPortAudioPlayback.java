@@ -59,7 +59,7 @@ public abstract class AbstractPortAudioPlayback implements AudioPlayback {
 
     private volatile SignalGenerator currentGenerator;
     private volatile AtomicBoolean   currentStopFlag;
-    private          byte[]          scratch;       // touched only from callback thread
+    private          byte[]          blockBuffer;   // touched only from callback thread
     /** PortAudio paOutputUnderflow / Overflow counters since the last supervisor drain. */
     private final    AtomicLong      paOutputUnderflowCount = new AtomicLong();
     private final    AtomicLong      paOutputOverflowCount  = new AtomicLong();
@@ -84,15 +84,15 @@ public abstract class AbstractPortAudioPlayback implements AudioPlayback {
             if ((flags & PortAudio.paOutputOverflow)  != 0) paOutputOverflowCount.incrementAndGet();
             int frames = frameCount.intValue();
             int bytes  = frames * bytesPerFrame;
-            if (scratch == null || scratch.length < bytes) scratch = new byte[bytes];
+            if (blockBuffer == null || blockBuffer.length < bytes) blockBuffer = new byte[bytes];
             SignalGenerator gen = currentGenerator;
             if (gen == null) {
-                Arrays.fill(scratch, 0, bytes, (byte) 0);
-                output.write(0, scratch, 0, bytes);
+                Arrays.fill(blockBuffer, 0, bytes, (byte) 0);
+                output.write(0, blockBuffer, 0, bytes);
                 return PortAudio.paComplete;
             }
             try {
-                fillBuffer(gen, scratch, frames);
+                fillBuffer(gen, blockBuffer, frames);
             } catch (Throwable th) {
                 // A throw here would otherwise be swallowed by JNA (stderr +
                 // return 0), muting output while the stream still reports
@@ -102,9 +102,9 @@ public abstract class AbstractPortAudioPlayback implements AudioPlayback {
                 if (callbackFaultLogged.compareAndSet(false, true)) {
                     log.error("{} generator callback failed - muting output: {}", backendLabel, th.toString(), th);
                 }
-                Arrays.fill(scratch, 0, bytes, (byte) 0);
+                Arrays.fill(blockBuffer, 0, bytes, (byte) 0);
             }
-            output.write(0, scratch, 0, bytes);
+            output.write(0, blockBuffer, 0, bytes);
             AtomicBoolean sf2 = currentStopFlag;
             if (sf2 != null && sf2.get())                   return PortAudio.paComplete;
             return PortAudio.paContinue;

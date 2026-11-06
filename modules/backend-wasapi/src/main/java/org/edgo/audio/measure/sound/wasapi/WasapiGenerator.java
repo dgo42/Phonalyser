@@ -63,7 +63,7 @@ public class WasapiGenerator implements AudioPlayback {
      *  {@link #fillNextBlock} widens per sample on the way out. */
     private int containerBytesPerFrame;
     /** Reusable widening stage for the container != lane case. */
-    private byte[] containerScratch;
+    private byte[] containerBuffer;
     private final PcmQuantizer quantizer;
 
     private Pointer immDevice;
@@ -254,16 +254,16 @@ public class WasapiGenerator implements AudioPlayback {
         }
         ensureComInit();
 
-        // Reusable scratch - one allocation outside the hot path so the
+        // Reusable encode buffer - one allocation outside the hot path so the
         // audio thread doesn't churn the young generation every tick.
-        byte[] scratch = new byte[bufferFrames * bytesPerFrame];
+        byte[] encoded = new byte[bufferFrames * bytesPerFrame];
 
         // JIT warmup: exercise the encode hot path before the device
         // starts pulling real audio.  See CsjsoundGenerator#warmupJit
-        // for the rationale; here we drive encodeIntoScratch directly
+        // for the rationale; here we drive encodeBlock directly
         // (no GetBuffer/ReleaseBuffer COM call, no SDR side-effect).
         if (generator.needsJitWarmup()) {
-            warmupJit(generator, scratch);
+            warmupJit(generator, encoded);
             // Warmup consumed frames that advance sweep playback
             // state; reset so the real stream sees the sweep from sample 0
             // (otherwise a freq-response measurement captures a mid-sweep
@@ -274,7 +274,7 @@ public class WasapiGenerator implements AudioPlayback {
         // Pre-fill the entire hardware buffer once so the device has
         // something to play the instant Start() is called.  Without
         // this, exclusive mode glitches on the very first event tick.
-        fillNextBlock(generator, scratch, bufferFrames);
+        fillNextBlock(generator, encoded, bufferFrames);
         int hr = callHR(audioClient, VT_AC_START);
         if (hr != S_OK) {
             throw new IllegalStateException(
@@ -354,7 +354,7 @@ public class WasapiGenerator implements AudioPlayback {
                 if (avail <= 0) continue;
 
                 long fillStart = System.nanoTime();
-                fillNextBlock(generator, scratch, avail);
+                fillNextBlock(generator, encoded, avail);
                 long fillNanos = System.nanoTime() - fillStart;
                 if (fillNanos > fillBudgetNanos) {
                     slowFillCount++;
@@ -390,17 +390,17 @@ public class WasapiGenerator implements AudioPlayback {
     }
 
     /**
-     * Pre-runs {@link #encodeIntoScratch} for ~500 ms so C2 finishes
+     * Pre-runs {@link #encodeBlock} for ~500 ms so C2 finishes
      * compiling (and any speculation-driven deopts settle) before the
-     * device starts pulling real audio.  Uses the same scratch buffer
+     * device starts pulling real audio.  Uses the same encode buffer
      * the render loop will use, so the JIT sees an identical call site
      * to the steady-state one.
      */
-    private void warmupJit(SignalGenerator gen, byte[] scratch) {
+    private void warmupJit(SignalGenerator gen, byte[] encoded) {
         long deadline = System.nanoTime() + 500_000_000L;
         int  iterations = 0;
         while (System.nanoTime() < deadline) {
-            encodeIntoScratch(gen, scratch, bufferFrames);
+            encodeBlock(gen, encoded, bufferFrames);
             iterations++;
         }
         log.info("WASAPI JIT warmup: {} iterations ({} samples)",
@@ -410,11 +410,11 @@ public class WasapiGenerator implements AudioPlayback {
     /**
      * Fills {@code frames} of audio into a WASAPI render-side buffer
      * (acquired with {@code GetBuffer}, released with
-     * {@code ReleaseBuffer}): encoded into the reusable {@code scratch}
+     * {@code ReleaseBuffer}): encoded into the reusable {@code encoded}
      * array, then copied into the mapped buffer - widened per sample when
      * the device container is wider than the encode.
      */
-    private void fillNextBlock(SignalGenerator gen, byte[] scratch, int frames) {
+    private void fillNextBlock(SignalGenerator gen, byte[] encoded, int frames) {
         PointerByReference ppBuf = new PointerByReference();
         int hr = callHR(renderClient, VT_RC_GET_BUFFER, frames, ppBuf);
         if (hr != S_OK || ppBuf.getValue() == null) {
@@ -422,36 +422,36 @@ public class WasapiGenerator implements AudioPlayback {
             return;
         }
         Pointer dst = ppBuf.getValue();
-        encodeIntoScratch(gen, scratch, frames);
+        encodeBlock(gen, encoded, frames);
         if (containerBytesPerFrame == bytesPerFrame) {
             // Single Java->native copy directly into WASAPI's mapped buffer.
-            dst.write(0, scratch, 0, frames * bytesPerFrame);
+            dst.write(0, encoded, 0, frames * bytesPerFrame);
         } else {
             // 24 valid bits into 32-bit little-endian container words: the
             // significant bytes ride on top, the padding byte below them.
             int samples = frames * CHANNELS;
-            if (containerScratch == null || containerScratch.length < samples * 4) {
-                containerScratch = new byte[samples * 4];
+            if (containerBuffer == null || containerBuffer.length < samples * 4) {
+                containerBuffer = new byte[samples * 4];
             }
             for (int i = 0; i < samples; i++) {
-                containerScratch[4 * i]     = 0;
-                containerScratch[4 * i + 1] = scratch[3 * i];
-                containerScratch[4 * i + 2] = scratch[3 * i + 1];
-                containerScratch[4 * i + 3] = scratch[3 * i + 2];
+                containerBuffer[4 * i]     = 0;
+                containerBuffer[4 * i + 1] = encoded[3 * i];
+                containerBuffer[4 * i + 2] = encoded[3 * i + 1];
+                containerBuffer[4 * i + 3] = encoded[3 * i + 2];
             }
-            dst.write(0, containerScratch, 0, frames * containerBytesPerFrame);
+            dst.write(0, containerBuffer, 0, frames * containerBytesPerFrame);
         }
         callHR(renderClient, VT_RC_RELEASE_BUFFER, frames, 0);
     }
 
     /**
      * Generates {@code frames} stereo PCM samples (same signal both
-     * channels) directly into the reusable {@code scratch} byte array,
+     * channels) directly into the reusable {@code encoded} byte array,
      * encoded as little-endian signed PCM matching {@link #bitDepth}.
      * No allocation on the audio hot path.
      */
-    private void encodeIntoScratch(SignalGenerator gen, byte[] scratch, int frames) {
-        quantizer.encode(gen, scratch, frames);
+    private void encodeBlock(SignalGenerator gen, byte[] encoded, int frames) {
+        quantizer.encode(gen, encoded, frames);
     }
 
     @Override

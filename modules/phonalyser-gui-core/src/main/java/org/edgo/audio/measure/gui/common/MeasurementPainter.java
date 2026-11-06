@@ -115,10 +115,10 @@ public interface MeasurementPainter {
      *  read.  Used by the oscilloscope's digital-phosphor rasteriser to stamp its
      *  intensity buffer as one tinted image instead of stroking a polyline; the GPU
      *  backend uploads it as a NanoVG image, the GC backend builds an {@code ImageData}
-     *  around {@code scratch}'s pooled arrays.  {@code scratch} is the caller-owned
-     *  reuse buffer for the GC backend (the GPU backend ignores it). */
+     *  around {@code buffers}' pooled arrays.  {@code buffers} are the caller-owned
+     *  reuse arrays for the GC backend (the GPU backend ignores them). */
     void drawAlphaImage(byte[] alpha, int imgW, int imgH, int destX, int destY,
-                        int drawW, int drawH, Color tint, AlphaImageScratch scratch);
+                        int drawW, int drawH, Color tint, AlphaImageBuffers buffers);
 
     /** Draws {@code s} at ({@code x}, {@code y}); {@code transparent} leaves the
      *  glyph background unfilled (the GC {@code isTransparent} flag). */

@@ -63,7 +63,7 @@ public interface MainsTimeFilter {
     void reset();
 
     /** Drops the frequency lock and any cached tuning so the next {@link #track}
-     *  re-detects from scratch. */
+     *  re-detects without a prior lock. */
     void resetTracking();
 
     /** True once the filter has been tuned to a mains frequency. */

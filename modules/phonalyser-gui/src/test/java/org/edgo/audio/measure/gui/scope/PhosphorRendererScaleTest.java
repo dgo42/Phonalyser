@@ -20,7 +20,7 @@ package org.edgo.audio.measure.gui.scope;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-import org.edgo.audio.measure.gui.common.AlphaImageScratch;
+import org.edgo.audio.measure.gui.common.AlphaImageBuffers;
 import org.edgo.audio.measure.gui.common.MeasurementPainter;
 
 import org.eclipse.swt.graphics.Color;
@@ -99,7 +99,7 @@ class PhosphorRendererScaleTest {
         @Override public float getPixelScale() { return scale; }
 
         @Override public void drawAlphaImage(byte[] alpha, int imgW, int imgH, int destX, int destY,
-                                             int drawW, int drawH, Color tint, AlphaImageScratch scratch) {
+                                             int drawW, int drawH, Color tint, AlphaImageBuffers buffers) {
             this.imgW = imgW; this.imgH = imgH; this.drawW = drawW; this.drawH = drawH;
             calls++;
         }

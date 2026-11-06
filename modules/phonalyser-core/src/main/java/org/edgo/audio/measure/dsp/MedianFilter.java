@@ -37,7 +37,7 @@ public final class MedianFilter {
 
     private final int window;          // odd, ≥ 3
     private float[] in  = new float[0];   // copy of the block's input
-    private final float[] sortBuf;        // tiny scratch for one window
+    private final float[] sortBuf;        // reused sort buffer for one window
 
     /** @param window median window size; forced odd and clamped to ≥ 3. */
     public MedianFilter(int window) {

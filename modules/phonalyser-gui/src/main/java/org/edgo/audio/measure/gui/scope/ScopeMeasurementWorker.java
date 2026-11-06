@@ -686,7 +686,7 @@ public final class ScopeMeasurementWorker {
      * frequency measurement), comb-settle tail trim, whole-period measurement,
      * weak-signal async frequency fallback, raw-band frequency re-pin, dual-tone
      * time-field clearing.  Channels are processed sequentially, so the raw/tail
-     * scratch buffers are shared.
+     * working buffers are shared.
      *
      * <p>The buffer arrives exactly as captured - the operator's HF cleanup is a
      * property of the TRACE and is applied by the view, not here.  That also makes

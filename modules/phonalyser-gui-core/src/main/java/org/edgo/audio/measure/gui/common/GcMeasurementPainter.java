@@ -146,16 +146,16 @@ public final class GcMeasurementPainter implements MeasurementPainter {
      *  so the blit is 1:1 and pixel-identical to the plain {@code drawImage(img, x, y)}.
      *
      *  <p>Zero per-frame array churn: the packed-RGB and alpha bytes ride the
-     *  caller-owned {@code scratch} arrays (the {@code ImageData} is built AROUND them),
+     *  caller-owned {@code buffers} arrays (the {@code ImageData} is built AROUND them),
      *  so only the {@code ImageData}/{@code Image} object headers allocate.  The SWT
      *  {@code Image} handle itself MUST still be created and disposed per call - an SWT
      *  {@code Image} cannot be pixel-updated in place. */
     @Override public void drawAlphaImage(byte[] alpha, int imgW, int imgH, int destX, int destY,
-                                         int drawW, int drawH, Color tint, AlphaImageScratch scratch) {
+                                         int drawW, int drawH, Color tint, AlphaImageBuffers buffers) {
         if (imgW <= 0 || imgH <= 0) return;
         int pixels = imgW * imgH;
-        byte[] rgb       = scratch.rgb(pixels);      // packed R,G,B - grown, reused across frames
-        byte[] alphaData = scratch.alpha(pixels);
+        byte[] rgb       = buffers.rgb(pixels);      // packed R,G,B - grown, reused across frames
+        byte[] alphaData = buffers.alpha(pixels);
         byte r = (byte) tint.getRed();
         byte g = (byte) tint.getGreen();
         byte b = (byte) tint.getBlue();
@@ -166,8 +166,8 @@ public final class GcMeasurementPainter implements MeasurementPainter {
             alphaData[i] = alpha[i];
         }
         // ImageData wraps the pooled RGB array directly (scanlinePad 1 => bytesPerLine =
-        // imgW·3; scratch sizes it exactly imgW·imgH·3 = bytesPerLine·imgH).
-        ImageData data = new ImageData(imgW, imgH, 24, scratch.palette(), 1, rgb);
+        // imgW·3; buffers sizes it exactly imgW·imgH·3 = bytesPerLine·imgH).
+        ImageData data = new ImageData(imgW, imgH, 24, buffers.palette(), 1, rgb);
         data.alphaData = alphaData;
         Image img = new Image(gc.getDevice(), data);
         gc.drawImage(img, 0, 0, imgW, imgH, destX, destY, drawW, drawH);

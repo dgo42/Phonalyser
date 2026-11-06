@@ -22,7 +22,7 @@ import java.util.Arrays;
 
 import org.eclipse.swt.graphics.Color;
 
-import org.edgo.audio.measure.gui.common.AlphaImageScratch;
+import org.edgo.audio.measure.gui.common.AlphaImageBuffers;
 import org.edgo.audio.measure.gui.common.MeasurementPainter;
 
 /**
@@ -34,10 +34,10 @@ import org.edgo.audio.measure.gui.common.MeasurementPainter;
  * instance so their pools don't collide.
  *
  * <p>The pure signal math lives in {@link TraceEnvelope} (accumulate -> pen -> fringe ->
- * downsample); this class OWNS the pooled scratch that math streams through - the
+ * downsample); this class OWNS the pooled buffers that math streams through - the
  * per-column span accumulator, the coverage buffers (pixel-res + supersampled), the
  * exported band arrays, the count->alpha LUT, and the CPU-blit reuse arrays
- * ({@link AlphaImageScratch}) - so the hot path allocates nothing.  Pure pools: nothing
+ * ({@link AlphaImageBuffers}) - so the hot path allocates nothing.  Pure pools: nothing
  * is injected, the renderer just grows its buffers on demand.
  *
  * <p><b>Adaptive device resolution.</b>  {@link #render} reads
@@ -83,13 +83,13 @@ public final class PhosphorRenderer {
      *  histogram/pen rasterise into this {@code (ss·devW)×(ss·devH)} grid of sub-pixel cells,
      *  box-averaged down into {@code phosphorAlpha} for the blit. */
     private byte[]    phosphorAlphaSs;
-    /** Scratch for {@link TraceEnvelope#fringeDilate}'s horizontal pass, pooled beside
+    /** Buffer for {@link TraceEnvelope#fringeDilate}'s horizontal pass, pooled beside
      *  {@code phosphorAlphaSs} (same sub-cell dimensions). */
     private byte[]    phosphorFringe;
     /** Per-column band ends exported by {@link TraceEnvelope#columnCrossings} in UNROUNDED row
      *  space (the refined crest/trough), consumed by {@link TraceEnvelope#penRasterize} as the
      *  round coverage pen's centreline.  Pooled {@code float[gridWidth]}, grown in lockstep with
-     *  the other phosphor scratch; a blank column is {@link Float#NaN}. */
+     *  the other phosphor buffers; a blank column is {@link Float#NaN}. */
     private float[]   phosphorBandTop;
     private float[]   phosphorBandBot;
     /** The path's true fractional x-extent within each column ({@code ⊂ [col, col+1]}), recorded
@@ -110,7 +110,7 @@ public final class PhosphorRenderer {
     private byte[]    phosphorLut;
     /** Caller-owned reuse arrays for the CPU ({@code GcMeasurementPainter}) blit, so a
      *  steady-state frame churns zero arrays; the NanoVG backend ignores it. */
-    private final AlphaImageScratch alphaScratch = new AlphaImageScratch();
+    private final AlphaImageBuffers alphaBuffers = new AlphaImageBuffers();
 
     /** Previous frame's non-zero GRID-coordinate content box (inclusive; {@code prevX1 < prevX0}
      *  when the last frame drew nothing), cleared at the next frame's start so a steady trace
@@ -162,7 +162,7 @@ public final class PhosphorRenderer {
      * box-averaged down ({@link TraceEnvelope#downsampleBox}) to {@code devW×devH} and drawn into
      * the LOGICAL {@code widthPx×heightPx} rect.  At {@code pixelScale == 1}: {@code devW == widthPx},
      * {@code sy == ss}, {@code drawW == imgW} - every value equals the logical-resolution path, so
-     * the output is byte-identical.  Pooled scratch only, grown on demand - the hot path allocates
+     * the output is byte-identical.  Pooled buffers only, grown on demand - the hot path allocates
      * nothing.
      *
      * <p><b>Dirty region.</b>  Only the trace's content bounding box is touched per frame.  After
@@ -312,7 +312,7 @@ public final class PhosphorRenderer {
         }
         prevX0 = rgX0; prevX1 = rgX1; prevY0 = rgY0; prevY1 = rgY1;
         // Device-res coverage buffer (devW×devH) blitted into the LOGICAL widthPx×heightPx rect.
-        gc.drawAlphaImage(phosphorAlpha, devW, devH, 0, 0, widthPx, heightPx, color, alphaScratch);
+        gc.drawAlphaImage(phosphorAlpha, devW, devH, 0, 0, widthPx, heightPx, color, alphaBuffers);
     }
 
     /** Zeroes the inclusive {@code [x0, x1] × [y0, y1]} box of a packed {@code stride}-wide byte

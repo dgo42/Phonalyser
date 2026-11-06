@@ -103,7 +103,7 @@ class NetHighRateStreamTest {
      *  uses, and the thing the working 128k/256k ones do not allocate.  Two of
      *  these stay live for the whole run. */
     private static final int RECORD_SAMPLES = 2_097_152;
-    /** Garbage made per batch on top of that record - the copies and scratch a
+    /** Garbage made per batch on top of that record - the copies and working arrays a
      *  measurement produces while it fills. */
     private static final int CHURN_SAMPLES = 65_536;
     /** What the bench confesses when it drops audio for a reader that stopped:

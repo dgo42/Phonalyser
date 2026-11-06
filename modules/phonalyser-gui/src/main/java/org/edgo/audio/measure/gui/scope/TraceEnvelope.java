@@ -596,7 +596,7 @@ public class TraceEnvelope {
      *  fringe SEMANTICS of the sparse vector stroke: appended OUTSIDE the geometry, not an
      *  energy-conserving blur (a tent convolution dims a 1-px stroke's core to ~75% and smears
      *  it - bench-rejected).  Runs on the sub-cell grid before the box downsample, radius {@code
-     *  ss} sub-cells = 1 px of ramp; {@code scratch} is a caller-pooled buffer at least
+     *  ss} sub-cells = 1 px of ramp; {@code horizontal} is a caller-pooled buffer at least
      *  {@code w·h} (holds the horizontal pass).  Pure.
      *
      *  <p>{@code x0,x1,y0,y1} bound the WRITTEN region (inclusive, clamped): the caller passes the
@@ -605,7 +605,7 @@ public class TraceEnvelope {
      *  {@code radius} extra rows each side (the vertical pass reads them); reads reach {@code radius}
      *  past the box into cells the caller guarantees are 0.  Passing the whole grid
      *  ({@code 0,w−1,0,h−1}) reproduces the full-grid pass byte-for-byte. */
-    void fringeDilate(byte[] grid, int w, int h, int radius, byte[] scratch,
+    void fringeDilate(byte[] grid, int w, int h, int radius, byte[] horizontal,
                       int x0, int x1, int y0, int y1) {
         int denom = radius + 1;
         int cx0 = Math.max(0, x0);
@@ -624,7 +624,7 @@ public class TraceEnvelope {
                     int v = (grid[base + sx] & 0xFF) * (denom - Math.abs(d)) / denom;
                     if (v > best) best = v;
                 }
-                scratch[base + x] = (byte) best;
+                horizontal[base + x] = (byte) best;
             }
         }
         for (int x = cx0; x <= cx1; x++) {         // vertical pass, back into the grid
@@ -633,7 +633,7 @@ public class TraceEnvelope {
                 for (int d = -radius; d <= radius; d++) {
                     int sy = y + d;
                     if (sy < 0 || sy >= h) continue;
-                    int v = (scratch[sy * w + x] & 0xFF) * (denom - Math.abs(d)) / denom;
+                    int v = (horizontal[sy * w + x] & 0xFF) * (denom - Math.abs(d)) / denom;
                     if (v > best) best = v;
                 }
                 grid[y * w + x] = (byte) best;

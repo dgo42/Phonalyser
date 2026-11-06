@@ -147,7 +147,7 @@ public final class MainsCombFilter implements MainsTimeFilter {
     }
 
     /** Drops the frequency lock and untunes the comb so the next {@link #track}
-     *  re-detects from scratch and snaps immediately (no EWMA inertia from the
+     *  re-detects without a prior lock and snaps immediately (no EWMA inertia from the
      *  old lock).  Unlike {@link #reset} (which keeps the lock), use this when
      *  the analysis context is reset and the mains estimate should start
      *  fresh. */

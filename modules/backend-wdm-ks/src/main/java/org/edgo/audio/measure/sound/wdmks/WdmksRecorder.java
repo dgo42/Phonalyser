@@ -85,7 +85,7 @@ public class WdmksRecorder extends AbstractPortAudioCapture {
     private final AtomicBoolean callbackFaultLogged = new AtomicBoolean();
 
     /**
-     * Audio-thread callback. Pulls a same-sized scratch buffer from
+     * Audio-thread callback. Pulls a same-sized reusable buffer from
      * {@link #bufferPool} (allocating only on cold start or when PortAudio
      * changes its block size mid-stream), copies the captured PCM into it
      * and hands it to the consumer thread via {@link #queue}. Reusing
